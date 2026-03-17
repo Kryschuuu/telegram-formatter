@@ -51,7 +51,7 @@ def split_message_safely(text, max_length=3500):
         parts.append(current_part.strip())
     return [p + '\n```' if p.count('```') % 2 != 0 else p for p in parts]
 
-# --- MODERNER UI CODE (GEFIXT) ---
+# --- MODERNER UI CODE ---
 HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="de">
@@ -82,6 +82,7 @@ HTML_TEMPLATE = r"""
         .nav-item {
             padding: 12px 15px; margin-bottom: 5px; border-radius: 8px; cursor: pointer;
             display: flex; align-items: center; gap: 10px; transition: 0.2s; color: #666;
+            text-decoration: none; /* Wichtig für <a> Tags */
         }
         .nav-item:hover { background: #f0f7ff; color: var(--tg-blue); }
         .nav-item.active { background: var(--tg-blue); color: white; }
@@ -140,8 +141,12 @@ HTML_TEMPLATE = r"""
 
     <div class="sidebar-footer">
         <hr>
-        <div class="nav-item" onclick="window.location.href='mailto:kris@deine-domain.de'"><i class="fa-solid fa-envelope"></i> Kontakt</div>
-        <div class="nav-item" style="color: #e67e22;" onclick="window.open('[https://buymeacoffee.com/rg4free](https://buymeacoffee.com/rg4free)', '_blank')"><i class="fa-solid fa-coffee"></i> Spenden</div>
+        <a href="mailto:kris@deine-domain.de" class="nav-item" style="color: #666;">
+            <i class="fa-solid fa-envelope"></i> Kontakt
+        </a>
+        <a href="[https://buymeacoffee.com/rg4free](https://buymeacoffee.com/rg4free)" target="_blank" class="nav-item" style="color: #e67e22;">
+            <i class="fa-solid fa-coffee"></i> Spenden
+        </a>
     </div>
 </div>
 
@@ -200,7 +205,6 @@ HTML_TEMPLATE = r"""
         }
     }
 
-    // GEFIXTE UND DEUTLICHE KOPIER-FUNKTION
     async function copyToClipboard() {
         const textToCopy = preview.innerText;
         if(textToCopy === "Warte auf Eingabe..." || textToCopy.trim() === "") {
@@ -214,11 +218,11 @@ HTML_TEMPLATE = r"""
             const originalHTML = copyBtn.innerHTML;
 
             copyBtn.innerHTML = '<i class="fa-solid fa-check"></i> Kopiert!';
-            copyBtn.style.background = "#27ae60"; // Dunkleres Grün
+            copyBtn.style.background = "#27ae60";
 
             setTimeout(() => {
                 copyBtn.innerHTML = originalHTML;
-                copyBtn.style.background = "#2ecc71"; // Wieder normales Grün
+                copyBtn.style.background = "#2ecc71";
             }, 2000);
         } catch (err) {
             alert('Fehler beim Kopieren: ' + err);
