@@ -233,10 +233,113 @@ HTML_TEMPLATE = """
     <div id="impressum" class="view">
         <div class="content-card">
             <h1>Impressum</h1>
-            <h2>Angaben gemäß § 5 TMG</h2>
-            <p>[DEIN VORNAME] [DEIN NACHNAME]<br>[DEINE STRASSE UND NR]<br>[PLZ] [DEIN ORT]</p>
-            <h2>Kontakt</h2>
-            <p>E-Mail: [DEINE E-MAIL-ADRESSE]</p>
+
+<p><strong>Angaben gemäß § 5 TMG</strong></p>
+
+<p>
+[DEIN NAME]<br>
+[DEINE STRASSE + HAUSNUMMER]<br>
+[PLZ ORT]<br>
+Deutschland
+</p>
+
+<p><strong>Kontakt:</strong><br>
+E-Mail: [DEINE E-MAIL]
+</p>
+
+<p><strong>Verantwortlich für den Inhalt nach § 18 Abs. 2 MStV:</strong><br>
+[DEIN NAME]<br>
+[DEINE ADRESSE]
+</p>
+
+<hr>
+
+<h1>Datenschutzerklärung</h1>
+
+<h2>1. Allgemeine Hinweise</h2>
+<p>
+Diese Website dient als privates Projekt zur Textformatierung für Telegram.
+Es werden keine personenbezogenen Daten aktiv gespeichert oder dauerhaft verarbeitet.
+</p>
+
+<h2>2. Verantwortlicher</h2>
+<p>
+[DEIN NAME]<br>
+[DEINE ADRESSE]<br>
+E-Mail: [DEINE E-MAIL]
+</p>
+
+<h2>3. Zugriffsdaten (Server-Logfiles)</h2>
+<p>
+Der Hosting-Provider dieser Website erhebt und speichert automatisch Informationen in sogenannten Server-Logfiles, die Ihr Browser automatisch übermittelt. Dies sind:
+</p>
+
+<ul>
+<li>Browsertyp und Browserversion</li>
+<li>verwendetes Betriebssystem</li>
+<li>Referrer URL</li>
+<li>Hostname des zugreifenden Rechners</li>
+<li>Uhrzeit der Serveranfrage</li>
+<li>IP-Adresse</li>
+</ul>
+
+<p>
+Diese Daten sind nicht bestimmten Personen zuordenbar und werden nicht mit anderen Datenquellen zusammengeführt.
+Die Verarbeitung erfolgt auf Grundlage von Art. 6 Abs. 1 lit. f DSGVO (berechtigtes Interesse an technisch fehlerfreier Darstellung).
+</p>
+
+<h2>4. Keine aktive Datenspeicherung</h2>
+<p>
+Die Nutzung dieser Website ist in der Regel ohne Angabe personenbezogener Daten möglich.
+Eingegebene Inhalte (z. B. Text im Formatter) werden nicht gespeichert, sondern ausschließlich lokal im Browser verarbeitet oder temporär zur Verarbeitung verwendet.
+</p>
+
+<h2>5. Externes Hosting</h2>
+<p>
+Diese Website wird bei einem externen Dienstleister (Render) gehostet.
+Der Anbieter verarbeitet personenbezogene Daten (z. B. IP-Adressen) zur Bereitstellung der Website.
+</p>
+
+<p>
+Die Nutzung erfolgt im Interesse einer sicheren und effizienten Bereitstellung (Art. 6 Abs. 1 lit. f DSGVO).
+</p>
+
+<h2>6. Cookies</h2>
+<p>
+Diese Website verwendet keine Cookies zur Nutzerverfolgung oder Analyse.
+</p>
+
+<h2>7. Ihre Rechte</h2>
+<p>
+Sie haben im Rahmen der geltenden gesetzlichen Bestimmungen jederzeit das Recht auf:
+</p>
+
+<ul>
+<li>Auskunft über Ihre gespeicherten Daten</li>
+<li>Berichtigung unrichtiger Daten</li>
+<li>Löschung Ihrer Daten</li>
+<li>Einschränkung der Verarbeitung</li>
+<li>Widerspruch gegen die Verarbeitung</li>
+</ul>
+
+<p>
+Hierzu können Sie sich jederzeit unter der im Impressum angegebenen Adresse an mich wenden.
+</p>
+
+<h2>8. Beschwerderecht</h2>
+<p>
+Sie haben das Recht, sich bei einer Datenschutz-Aufsichtsbehörde über die Verarbeitung Ihrer personenbezogenen Daten zu beschweren.
+</p>
+
+<h2>9. SSL- bzw. TLS-Verschlüsselung</h2>
+<p>
+Diese Seite nutzt aus Sicherheitsgründen eine SSL- bzw. TLS-Verschlüsselung.
+</p>
+
+<h2>10. Stand</h2>
+<p>
+Stand: März 2026
+</p>
         </div>
     </div>
 </div>
