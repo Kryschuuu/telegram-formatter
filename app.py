@@ -3,13 +3,12 @@ import telebot
 import telegramify_markdown
 from telebot import util
 from flask import Flask, render_template_string, request, jsonify
-import re
 
 # --- KONFIGURATION (Sicher über Umgebungsvariablen) ---
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 MY_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Falls lokal keine Variablen gesetzt sind (nur zum Testen)
+# Fallback für lokale Tests
 if not TOKEN:
     TOKEN = "DEIN_TOKEN_HIER"
 if not MY_CHAT_ID:
@@ -28,7 +27,7 @@ def safe_format(text):
 
     formatted = telegramify_markdown.markdownify(text)
 
-    # Unbalanced Backticks fixen (Wichtig für Telegram-API)
+    # Unbalanced Backticks fixen
     if formatted.count('```') % 2 != 0:
         formatted += '\n```'
     return formatted
@@ -52,7 +51,7 @@ def split_message_safely(text, max_length=3500):
         parts.append(current_part.strip())
     return [p + '\n```' if p.count('```') % 2 != 0 else p for p in parts]
 
-# --- MODERNER UI CODE MIT KOPIER-FUNKTION ---
+# --- MODERNER UI CODE (GEFIXT) ---
 HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="de">
@@ -106,31 +105,22 @@ HTML_TEMPLATE = r"""
         .preview-box {
             flex: 1; background: var(--tg-bg); border-radius: 12px;
             display: flex; justify-content: center; padding: 20px; overflow-y: auto;
-            position: relative;
         }
-        .tg-bubble-container { position: relative; max-width: 450px; width: 100%; }
         .tg-bubble {
-            background: white; padding: 15px; border-radius: 15px; width: 100%; height: fit-content;
+            background: white; padding: 15px; border-radius: 15px; max-width: 450px; width: 100%; height: fit-content;
             box-shadow: 0 4px 15px rgba(0,0,0,0.2); white-space: pre-wrap; font-size: 14.5px; line-height: 1.5;
-            position: relative;
         }
-
-        /* Kopier-Button in der Bubble */
-        .copy-badge {
-            position: absolute; top: 10px; right: 10px; background: #f0f0f0;
-            color: #888; padding: 5px 8px; border-radius: 6px; cursor: pointer;
-            font-size: 12px; transition: 0.2s; border: 1px solid #ddd;
-        }
-        .copy-badge:hover { background: var(--tg-blue); color: white; border-color: var(--tg-blue); }
 
         /* Buttons */
-        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+        .btn-group { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
         .btn {
             padding: 12px 20px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer;
-            display: flex; align-items: center; gap: 8px; transition: 0.2s;
+            display: flex; align-items: center; gap: 8px; transition: 0.2s; font-size: 14px;
         }
         .btn-primary { background: var(--tg-blue); color: white; }
         .btn-primary:hover { background: #1e87bb; transform: translateY(-1px); }
+        .btn-success { background: #2ecc71; color: white; }
+        .btn-success:hover { background: #27ae60; transform: translateY(-1px); }
         .btn-danger { background: #e74c3c; color: white; }
         .btn-danger:hover { background: #c0392b; }
 
@@ -150,7 +140,7 @@ HTML_TEMPLATE = r"""
 
     <div class="sidebar-footer">
         <hr>
-        <div class="nav-item" onclick="window.open('mailto:kris@deine-domain.de')"><i class="fa-solid fa-envelope"></i> Kontakt</div>
+        <div class="nav-item" onclick="window.location.href='mailto:kris@deine-domain.de'"><i class="fa-solid fa-envelope"></i> Kontakt</div>
         <div class="nav-item" style="color: #e67e22;" onclick="window.open('[https://buymeacoffee.com/rg4free](https://buymeacoffee.com/rg4free)', '_blank')"><i class="fa-solid fa-coffee"></i> Spenden</div>
     </div>
 </div>
@@ -159,19 +149,15 @@ HTML_TEMPLATE = r"""
     <div id="editor" class="view active">
         <div class="editor-layout">
             <div class="editor-box">
-                <textarea id="editorInput" placeholder="Füge hier deinen KI-Text oder Code ein..."></textarea>
+                <textarea id="editorInput" placeholder="Füge hier deinen KI-Text ein..."></textarea>
                 <div class="btn-group">
-                    <button class="btn btn-primary" onclick="sendToTelegram()"><i class="fa-solid fa-share"></i> An Telegram senden</button>
+                    <button class="btn btn-primary" onclick="sendToTelegram()"><i class="fa-solid fa-share"></i> Senden</button>
+                    <button class="btn btn-success" id="copyBtn" onclick="copyToClipboard()"><i class="fa-solid fa-copy"></i> Text Kopieren</button>
                     <button class="btn btn-danger" onclick="resetEditor()"><i class="fa-solid fa-trash"></i> Reset</button>
                 </div>
             </div>
             <div class="preview-box">
-                <div class="tg-bubble-container">
-                    <div class="copy-badge" onclick="copyToClipboard()" title="In Zwischenablage kopieren">
-                        <i class="fa-solid fa-copy"></i> Copy
-                    </div>
-                    <div class="tg-bubble" id="previewBubble">Warte auf Eingabe...</div>
-                </div>
+                <div class="tg-bubble" id="previewBubble">Warte auf Eingabe...</div>
             </div>
         </div>
     </div>
@@ -182,8 +168,7 @@ HTML_TEMPLATE = r"""
             <p>Dieser Formatter bändigt KI-Texte für Telegram.</p>
             <ul>
                 <li><strong>Markdown:</strong> Standard-Markdown wird in Telegram MarkdownV2 übersetzt.</li>
-                <li><strong>Automatischer Split:</strong> Texte über 4096 Zeichen werden intelligent in mehrere Nachrichten aufgeteilt.</li>
-                <li><strong>Vorschau:</strong> Rechts siehst du exakt, wie der Text in der Telegram-Bubble erscheint.</li>
+                <li><strong>Automatischer Split:</strong> Texte über 4096 Zeichen werden intelligent aufgeteilt.</li>
             </ul>
         </div>
     </div>
@@ -191,7 +176,7 @@ HTML_TEMPLATE = r"""
     <div id="impressum" class="view">
         <div class="content-card">
             <h1>Impressum</h1>
-            <p>Betreiber der Webseite:<br>Kris (Hier Deinen Nachnamen ergänzen)<br>Musterstr. 123<br>Deutschland</p>
+            <p>Betreiber der Webseite:<br>Kris<br>Musterstr. 123<br>Deutschland</p>
             <p>E-Mail: kris@deine-domain.de</p>
         </div>
     </div>
@@ -215,25 +200,28 @@ HTML_TEMPLATE = r"""
         }
     }
 
-    // Kopier-Funktion
+    // GEFIXTE UND DEUTLICHE KOPIER-FUNKTION
     async function copyToClipboard() {
         const textToCopy = preview.innerText;
-        if(textToCopy === "Warte auf Eingabe...") return;
+        if(textToCopy === "Warte auf Eingabe..." || textToCopy.trim() === "") {
+            alert("Nichts zum Kopieren da!");
+            return;
+        }
 
         try {
             await navigator.clipboard.writeText(textToCopy);
-            const badge = document.querySelector('.copy-badge');
-            badge.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
-            badge.style.background = "#2ecc71";
-            badge.style.color = "white";
+            const copyBtn = document.getElementById('copyBtn');
+            const originalHTML = copyBtn.innerHTML;
+
+            copyBtn.innerHTML = '<i class="fa-solid fa-check"></i> Kopiert!';
+            copyBtn.style.background = "#27ae60"; // Dunkleres Grün
 
             setTimeout(() => {
-                badge.innerHTML = '<i class="fa-solid fa-copy"></i> Copy';
-                badge.style.background = "#f0f0f0";
-                badge.style.color = "#888";
+                copyBtn.innerHTML = originalHTML;
+                copyBtn.style.background = "#2ecc71"; // Wieder normales Grün
             }, 2000);
         } catch (err) {
-            alert('Fehler beim Kopieren: ', err);
+            alert('Fehler beim Kopieren: ' + err);
         }
     }
 
@@ -245,7 +233,6 @@ HTML_TEMPLATE = r"""
             body: JSON.stringify({text: editor.value})
         });
         const data = await res.json();
-        // Bereinige Backslashes für die Web-Vorschau
         preview.innerText = data.raw.replace(/\\/g, '');
     }
 
