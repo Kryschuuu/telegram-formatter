@@ -3,318 +3,367 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telegram Post Master Pro</title>
+    <title>PostMaster Pro SaaS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        :root { --tg-blue: #24A1DE; --tg-bg: #547594; --sidebar-width: 290px; --bg-light: #f4f7f9; }
-        * { box-sizing: border-box; transition: 0.2s ease-in-out; }
-        body { font-family: 'Segoe UI', Tahoma, sans-serif; margin: 0; display: flex; height: 100vh; background: var(--bg-light); }
-
-        /* Sidebar */
-        .sidebar { width: var(--sidebar-width); background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; padding: 25px; overflow-y: auto; }
-        .logo { font-size: 22px; font-weight: 800; color: var(--tg-blue); margin-bottom: 30px; display: flex; align-items: center; gap: 12px; }
-
-        .chat-id-box { background: #f8f9fa; border: 1px solid #e0e6ed; padding: 15px; border-radius: 12px; margin-bottom: 25px; }
-        .chat-id-box label { font-size: 12px; font-weight: bold; color: #555; text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 8px; }
-        .chat-id-box input { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; outline: none; font-size: 14px; font-family: monospace; }
-        .chat-id-box input:focus { border-color: var(--tg-blue); box-shadow: 0 0 0 2px rgba(36, 161, 222, 0.2); }
-        .chat-id-hint { font-size: 11px; color: #64748b; margin-top: 6px; display: block; line-height: 1.4; }
-        .chat-id-hint a { color: var(--tg-blue); text-decoration: none; font-weight: bold; cursor: pointer; }
-
-        .nav-item { padding: 14px 18px; margin-bottom: 8px; border-radius: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px; color: #555; text-decoration: none; font-weight: 500; font-size: 15px; border: none; background: none; width: 100%; text-align: left; }
-        .nav-item:hover { background: #f0f7ff; color: var(--tg-blue); }
-        .nav-item.active { background: var(--tg-blue); color: white; box-shadow: 0 4px 12px rgba(36, 161, 222, 0.25); }
-
-        .sidebar-footer { margin-top: auto; padding-top: 20px; border-top: 1px solid #eee; display: flex; flex-direction: column; gap: 5px;}
-
-        /* Main Content */
-        .main-content { flex: 1; display: flex; flex-direction: column; padding: 30px; overflow: hidden; }
-        .view { display: none; height: 100%; flex-direction: column; gap: 20px; }
-        .view.active { display: flex; }
-
-        .editor-container { display: flex; gap: 25px; flex: 1; min-height: 0; }
-        .panel { flex: 1; display: flex; flex-direction: column; gap: 10px; }
-        .panel-label { font-weight: bold; font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1.2px; }
-
-        textarea { flex: 1; border: 2px solid #e0e6ed; border-radius: 16px; padding: 20px; font-family: 'Consolas', monospace; resize: none; outline: none; font-size: 15px; background: white; line-height: 1.6; }
-        textarea:focus { border-color: var(--tg-blue); }
-
-        .preview-box { flex: 1; background: var(--tg-bg); border-radius: 16px; display: flex; justify-content: center; padding: 30px; overflow-y: auto; background-image: url('https://www.transparenttextures.com/patterns/cubes.png'); }
-        .tg-bubble { background: white; padding: 18px; border-radius: 18px; border-bottom-right-radius: 4px; max-width: 440px; width: 100%; height: fit-content; box-shadow: 0 8px 20px rgba(0,0,0,0.15); font-size: 15px; line-height: 1.5; color: #222; word-wrap: break-word; }
-
-        .btn-group { display: flex; gap: 12px; }
-        .btn { padding: 14px 24px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 14px; }
-        .btn-primary { background: var(--tg-blue); color: white; }
-        .btn-success { background: #34c759; color: white; }
-        .btn-danger { background: #ff3b30; color: white; }
-        .btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
-
-        /* Content Cards */
-        .content-card { background: white; padding: 40px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 850px; overflow-y: auto; line-height: 1.7; color: #333; }
-        .content-card h1 { color: var(--tg-blue); margin-top: 0; }
-        .content-card h2 { color: #222; margin-top: 30px; border-bottom: 2px solid #f0f7ff; padding-bottom: 8px; }
-        .content-card ul { background: #f8f9fa; padding: 20px 20px 20px 40px; border-radius: 12px; }
-        .content-card li { margin-bottom: 10px; }
-        .highlight-box { background: #fff8e1; border-left: 4px solid #f39c12; padding: 15px; margin: 20px 0; border-radius: 0 8px 8px 0; }
-
-        /* Krypto Styles */
-        .crypto-list { display: flex; flex-direction: column; gap: 15px; margin-top: 25px; }
-        .crypto-item { display: flex; align-items: center; justify-content: space-between; background: #f8f9fa; padding: 15px 20px; border-radius: 12px; border: 1px solid #e0e6ed; }
-        .crypto-info { display: flex; align-items: center; gap: 18px; flex: 1; overflow: hidden; }
-        .crypto-icon { font-size: 28px; width: 40px; text-align: center; }
-        .crypto-details { flex: 1; min-width: 0; }
-        .crypto-name { font-weight: bold; font-size: 16px; color: #222; }
-        .crypto-network { font-size: 11px; color: #666; background: #e2e8f0; padding: 3px 8px; border-radius: 6px; }
-        .crypto-address { font-family: 'Consolas', monospace; color: #555; font-size: 14px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .btn-copy-sm { background: white; border: 1px solid #cbd5e1; padding: 10px 15px; border-radius: 8px; cursor: pointer; color: #333; font-weight: bold; display: flex; align-items: center; gap: 8px; }
-        .btn-copy-sm:hover { background: #e2e8f0; }
-        .btn-copy-sm.success { background: #22c55e; color: white; border-color: #22c55e; }
+        .tg-bubble { background: white; padding: 15px; border-radius: 12px; border-bottom-right-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%; word-wrap: break-word; }
+        .tg-button { display: block; text-align: center; background: #e0f2fe; color: #0284c7; padding: 8px; border-radius: 8px; margin-top: 8px; text-decoration: none; font-weight: bold; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .custom-scroll::-webkit-scrollbar { width: 8px; }
+        .custom-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     </style>
 </head>
-<body>
+<body class="bg-slate-50 text-slate-800 font-sans h-screen flex overflow-hidden">
 
-<div class="sidebar">
-    <div class="logo"><i class="fa-solid fa-paper-plane"></i> Post Master</div>
+    <!-- Sidebar -->
+    <aside class="w-64 bg-white border-r border-slate-200 flex flex-col z-10 shrink-0">
+        <div class="p-6 border-b border-slate-100">
+            <h1 class="text-2xl font-black text-sky-600 flex items-center gap-2"><i class="fa-solid fa-rocket"></i> PostMaster</h1>
+            <p class="text-xs text-slate-400 mt-1 uppercase font-bold tracking-wider">Pro Edition</p>
+        </div>
 
-    <!-- User Settings -->
-    <div class="chat-id-box">
-        <label><i class="fa-solid fa-user-gear"></i> Deine Chat-ID</label>
-        <input type="text" id="chatIdInput" placeholder="z.B. 123456789">
-        <span class="chat-id-hint">Ohne ID kein Versand. <a onclick="showView('anleitung', document.getElementById('navAnleitung'))">Wo finde ich die?</a></span>
-    </div>
-
-    <!-- Navigation -->
-    <button class="nav-item active" id="navEditor" onclick="showView('editor', this)"><i class="fa-solid fa-pen-nib"></i> Editor</button>
-    <button class="nav-item" id="navAnleitung" onclick="showView('anleitung', this)"><i class="fa-solid fa-book-open"></i> Anleitung & Hilfe</button>
-    <button class="nav-item" onclick="showView('crypto', this)"><i class="fa-brands fa-bitcoin" style="color: #f7931a;"></i> Krypto Spenden</button>
-    <button class="nav-item" onclick="showView('impressum', this)"><i class="fa-solid fa-shield-halved"></i> Impressum</button>
-
-    <div class="sidebar-footer">
-        <a href="mailto:deine-email@beispiel.de" class="nav-item"><i class="fa-solid fa-envelope"></i> Support</a>
-        <a href="{{ coffee_link }}" target="_blank" class="nav-item" style="color: #f39c12; font-weight: bold; background: #fff8e1;"><i class="fa-solid fa-mug-hot"></i> Buy Me a Coffee</a>
-    </div>
-</div>
-
-<div class="main-content">
-
-    <!-- Editor Ansicht -->
-    <div id="editor" class="view active">
-        <div class="editor-container">
-            <div class="panel">
-                <div class="panel-label">Markdown Eingabe</div>
-                <textarea id="editorInput" placeholder="# Deine Überschrift...&#10;&#10;Schreibe hier deinen Text. Nutze **Fett** oder Listen."></textarea>
+        {% if logged_in %}
+        <div class="p-4 border-b border-slate-100 flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center text-sky-600 font-bold">
+                {{ user.first_name[0] }}
             </div>
-            <div class="panel">
-                <div class="panel-label">Vorschau (Telegram Stil)</div>
-                <div class="preview-box">
-                    <div class="tg-bubble" id="previewBubble">Bereit für deinen Text...</div>
+            <div class="overflow-hidden">
+                <p class="font-bold text-sm truncate">{{ user.first_name }}</p>
+                <button onclick="logout()" class="text-xs text-red-500 hover:underline">Abmelden</button>
+            </div>
+        </div>
+
+        <nav class="flex-1 p-4 space-y-2 overflow-y-auto custom-scroll">
+            <button onclick="switchTab('editor')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium hover:bg-sky-50 text-slate-600 hover:text-sky-600 transition-colors" id="nav-editor"><i class="fa-solid fa-pen-nib w-5"></i> Post erstellen</button>
+            <button onclick="switchTab('channels')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium hover:bg-sky-50 text-slate-600 hover:text-sky-600 transition-colors" id="nav-channels"><i class="fa-solid fa-tower-broadcast w-5"></i> Meine Kanäle</button>
+            <button onclick="switchTab('history')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium hover:bg-sky-50 text-slate-600 hover:text-sky-600 transition-colors" id="nav-history"><i class="fa-solid fa-calendar-check w-5"></i> Geplant & Historie</button>
+            <button onclick="switchTab('dsgvo')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium hover:bg-sky-50 text-slate-600 hover:text-sky-600 transition-colors" id="nav-dsgvo"><i class="fa-solid fa-book-open w-5"></i> Handbuch & Info</button>
+        </nav>
+        {% else %}
+        <div class="flex-1 flex items-center justify-center p-6 text-center">
+            <div>
+                <i class="fa-brands fa-telegram text-5xl text-sky-500 mb-4"></i>
+                <h2 class="font-bold text-lg mb-2">Bitte anmelden</h2>
+                <p class="text-sm text-slate-500 mb-6">Logge dich via Telegram ein, um dein Dashboard zu öffnen.</p>
+                <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{{ bot_username }}" data-size="large" data-onauth="onTelegramAuth(user)" data-request-access="write"></script>
+            </div>
+        </div>
+        {% endif %}
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 overflow-y-auto bg-slate-50 relative custom-scroll">
+        {% if logged_in %}
+
+        <!-- EDITOR TAB -->
+        <div id="tab-editor" class="tab-content active max-w-6xl mx-auto p-8">
+            <h2 class="text-2xl font-bold mb-6">Neuen Post erstellen</h2>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div class="space-y-6">
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Ziel-Kanal</label>
+                        <select id="postChannel" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 bg-slate-50">
+                            <option value="">Lade Kanäle...</option>
+                        </select>
+                    </div>
+
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col h-64">
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Inhalt (Markdown unterstützt)</label>
+                        <textarea id="postContent" oninput="updatePreview()" class="flex-1 w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 resize-none font-mono text-sm" placeholder="# Mega Angebot\n\nHier kommt der Text..."></textarea>
+                    </div>
+
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <div class="flex justify-between items-center mb-3">
+                            <label class="block text-sm font-bold text-slate-700">Inline Buttons (optional)</label>
+                            <button onclick="addButtonField()" class="text-sky-600 text-sm font-bold hover:underline"><i class="fa-solid fa-plus"></i> Button anlegen</button>
+                        </div>
+                        <div id="buttonsContainer" class="space-y-3"></div>
+                    </div>
+
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Wann posten?</label>
+                        <input type="datetime-local" id="postSchedule" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                        <p class="text-xs text-slate-500 mt-2">Leer lassen für sofortigen Versand.</p>
+                    </div>
+
+                    <button onclick="submitPost()" id="submitBtn" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all flex justify-center items-center gap-2">
+                        <i class="fa-solid fa-paper-plane"></i> Post einplanen / senden
+                    </button>
                 </div>
-            </div>
-        </div>
-        <div class="btn-group">
-            <button class="btn btn-primary" onclick="sendToTelegram()"><i class="fa-solid fa-share-from-square"></i> Direkt Senden</button>
-            <button class="btn btn-success" id="copyBtn" onclick="copyToClipboard()"><i class="fa-solid fa-copy"></i> Text Kopieren</button>
-            <button class="btn btn-danger" onclick="resetAll()"><i class="fa-solid fa-trash-can"></i> Reset</button>
-        </div>
-    </div>
 
-    <!-- Anleitung Ansicht (NEU) -->
-    <div id="anleitung" class="view">
-        <div class="content-card">
-            <h1>📖 Anleitung: So funktioniert's!</h1>
-            <p>Willkommen beim Telegram Post Master! Damit das Tool deine Texte formatiert an dich senden kann, sind zwei kleine, einmalige Schritte nötig.</p>
-
-            <div class="highlight-box">
-                <strong>Wichtig:</strong> Aus Datenschutzgründen sendet das Tool Nachrichten immer nur an die Chat-ID, die links in der Seitenleiste eingetragen ist. So ist sichergestellt, dass deine Entwürfe privat bleiben!
-            </div>
-
-            <h2>Schritt 1: Den Bot aktivieren</h2>
-            <p>Telegram erlaubt es Bots nicht, Nutzer von sich aus anzuschreiben. Du musst den Bot zuerst aktivieren.</p>
-            <ul>
-                <li>Öffne deine Telegram App.</li>
-                <li>Suche nach unserem Bot <em>(Tipp: Füge hier deinen @BotNamen ein)</em>.</li>
-                <li>Klicke unten auf den Button <strong>START</strong>.</li>
-            </ul>
-
-            <h2>Schritt 2: Deine Chat-ID herausfinden</h2>
-            <p>Der Bot benötigt deine eindeutige Nutzer-Nummer (Chat-ID), um dich zu adressieren.</p>
-            <ul>
-                <li>Suche in Telegram nach dem offiziellen Bot <strong>@userinfobot</strong> (oder <strong>@getmyid_bot</strong>).</li>
-                <li>Klicke bei diesem Bot auf Start.</li>
-                <li>Er antwortet dir sofort mit deiner ID (z.B. <code>Id: 123456789</code>).</li>
-                <li>Kopiere diese lange Zahl.</li>
-            </ul>
-
-            <h2>Schritt 3: Chat-ID eintragen & Senden</h2>
-            <p>Füge die kopierte Zahl auf dieser Webseite links im Menü in das Feld <strong>"Deine Chat-ID"</strong> ein. Dein Browser speichert diese Nummer automatisch für deinen nächsten Besuch ab.</p>
-            <p>Gehe nun in den Editor, schreibe deinen Text und klicke auf "Direkt Senden"!</p>
-
-            <h2>Tipps zur Formatierung</h2>
-            <ul>
-                <li><code># Haupt-Überschrift</code> &rarr; Wird groß, fett und bekommt eine 🚀</li>
-                <li><code>## Untertitel</code> &rarr; Wird fett und bekommt einen 📍</li>
-                <li><code>**Wichtig**</code> &rarr; Wird fett dargestellt</li>
-                <li><code>- Punkt 1</code> &rarr; Wird in Aufzählungspunkte • umgewandelt</li>
-            </ul>
-        </div>
-    </div>
-
-    <!-- Krypto Ansicht -->
-    <div id="crypto" class="view">
-        <div class="content-card">
-            <h1>Unterstütze das Projekt mit Krypto 🚀</h1>
-            <p>Wenn dir das Tool gefällt, freue ich mich riesig über eine kleine Spende. Klicke einfach auf "Kopieren", um die Adresse zu übernehmen.</p>
-            <div class="crypto-list">
-                <div class="crypto-item">
-                    <div class="crypto-info">
-                        <div class="crypto-icon"><i class="fa-brands fa-bitcoin" style="color: #f7931a;"></i></div>
-                        <div class="crypto-details">
-                            <div class="crypto-name">Bitcoin <span class="crypto-network">BTC Netzwerk</span></div>
-                            <div class="crypto-address" id="wallet-btc">bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh</div>
+                <div>
+                    <div class="sticky top-8 bg-[#8ab4f8]/20 p-8 rounded-3xl h-[600px] flex justify-center items-center overflow-y-auto shadow-inner" style="background-image: url('https://www.transparenttextures.com/patterns/cubes.png');">
+                        <div class="max-w-sm w-full">
+                            <div class="tg-bubble shadow-xl" id="previewBox">
+                                <div id="previewText" class="text-sm">Vorschau deines Textes...</div>
+                                <div id="previewButtons" class="mt-3 space-y-2 border-t pt-3 border-slate-100 empty:hidden"></div>
+                            </div>
                         </div>
                     </div>
-                    <button class="btn-copy-sm" onclick="copyWallet('wallet-btc', this)"><i class="fa-regular fa-copy"></i> Kopieren</button>
-                </div>
-                <div class="crypto-item">
-                    <div class="crypto-info">
-                        <div class="crypto-icon"><i class="fa-brands fa-ethereum" style="color: #627eea;"></i></div>
-                        <div class="crypto-details">
-                            <div class="crypto-name">Ethereum <span class="crypto-network">ERC-20</span></div>
-                            <div class="crypto-address" id="wallet-eth">0x71C7656EC7ab88b098defB751B7401B5f6d8976F</div>
-                        </div>
-                    </div>
-                    <button class="btn-copy-sm" onclick="copyWallet('wallet-eth', this)"><i class="fa-regular fa-copy"></i> Kopieren</button>
-                </div>
-                <div class="crypto-item">
-                    <div class="crypto-info">
-                        <div class="crypto-icon"><img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=025" width="28" style="vertical-align: middle;"></div>
-                        <div class="crypto-details">
-                            <div class="crypto-name">Solana <span class="crypto-network">SOL Netzwerk</span></div>
-                            <div class="crypto-address" id="wallet-sol">HN7cABqLq46Es1jh92dQQisAq662SmxELLLsHHe4YWrH</div>
-                        </div>
-                    </div>
-                    <button class="btn-copy-sm" onclick="copyWallet('wallet-sol', this)"><i class="fa-regular fa-copy"></i> Kopieren</button>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Impressum Ansicht -->
-    <div id="impressum" class="view">
-        <div class="content-card">
-            <h1>Impressum</h1>
-            <h2>Angaben gemäß § 5 TMG</h2>
-            <p>[DEIN VORNAME] [DEIN NACHNAME]<br>[DEINE STRASSE UND NR]<br>[PLZ] [DEIN ORT]</p>
-            <h2>Kontakt</h2>
-            <p>E-Mail: [DEINE E-MAIL-ADRESSE]</p>
+        <!-- CHANNELS TAB -->
+        <div id="tab-channels" class="tab-content max-w-4xl mx-auto p-8">
+            <h2 class="text-2xl font-bold mb-6">Deine Kanäle verwalten</h2>
+
+            <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mb-8 relative overflow-hidden">
+                <div class="absolute top-0 right-0 bg-yellow-100 text-yellow-800 text-xs font-bold px-3 py-1 rounded-bl-lg">Schritt 1: Bot als Admin einladen</div>
+
+                <h3 class="font-bold text-lg mb-2 mt-2">Neuen Kanal verknüpfen</h3>
+                <p class="text-sm text-slate-600 mb-4">
+                    <b>WICHTIG:</b> Füge <code>@{{ bot_username }}</code> <b>zuerst</b> als Administrator in deinen Kanal ein.
+                </p>
+
+                <div class="flex flex-col md:flex-row gap-3">
+                    <input type="text" id="newChannelId" placeholder="Kanal-ID (z.B. @name oder -100123...)" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                    <input type="text" id="newChannelName" placeholder="Anzeigename (z.B. Main Channel)" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                    <button onclick="addChannel()" id="addChannelBtn" class="bg-slate-800 hover:bg-slate-900 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 whitespace-nowrap">Hinzufügen</button>
+                </div>
+
+                <div class="mt-4 bg-sky-50 border border-sky-100 rounded-xl p-4 flex gap-3 items-start">
+                    <i class="fa-solid fa-circle-info text-sky-500 mt-0.5"></i>
+                    <div class="text-sm text-slate-600">
+                        <strong class="text-sky-800 block mb-1">Privater Kanal ohne @Namen?</strong>
+                        Öffne Telegram Web (<a href="https://web.telegram.org" target="_blank" class="text-sky-600 underline">web.telegram.org</a>), klicke auf deinen Kanal und kopiere die ID nach dem <code>#</code> in der URL. (z.B. <code>-1001234567890</code>).
+                    </div>
+                </div>
+            </div>
+
+            <h3 class="font-bold text-lg mb-4">Verknüpfte Kanäle</h3>
+            <div id="channelsList" class="space-y-3"></div>
         </div>
-    </div>
-</div>
 
-<script>
-    const inputArea = document.getElementById('editorInput');
-    const previewBubble = document.getElementById('previewBubble');
-    const chatIdInput = document.getElementById('chatIdInput');
+        <!-- HISTORY TAB -->
+        <div id="tab-history" class="tab-content max-w-5xl mx-auto p-8">
+            <h2 class="text-2xl font-bold mb-6">Geplant & Historie</h2>
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-slate-50 border-b border-slate-200">
+                            <th class="p-4 font-bold text-slate-600">Datum / Zeit</th>
+                            <th class="p-4 font-bold text-slate-600">Kanal</th>
+                            <th class="p-4 font-bold text-slate-600">Vorschau</th>
+                            <th class="p-4 font-bold text-slate-600">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody" class="divide-y divide-slate-100"></tbody>
+                </table>
+            </div>
+        </div>
 
-    // Chat-ID laden
-    window.onload = () => {
-        const savedId = localStorage.getItem('tg_chat_id');
-        if (savedId) chatIdInput.value = savedId;
-    };
+        <!-- DSGVO & MANUAL TAB -->
+        <div id="tab-dsgvo" class="tab-content max-w-4xl mx-auto p-8">
+            <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm prose max-w-none text-slate-600">
+                <h1 class="text-3xl font-black text-slate-800 mb-2 border-b pb-4">📖 Handbuch & Datenschutz</h1>
+                <p>Verknüpfe deine Kanäle, füge Inline-Buttons hinzu und plane deine Posts im Voraus.</p>
+                <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r-lg my-6">
+                    <h3 class="text-yellow-800 mt-0 mb-2">Tipp: Private Kanäle hinzufügen</h3>
+                    <p class="m-0 text-yellow-900">Da private Kanäle keinen @Namen haben, gehe zu Telegram Web, öffne deinen Kanal und kopiere die Nummer (beginnt meist mit -100) aus der Adresszeile.</p>
+                </div>
 
-    // Chat-ID speichern
-    chatIdInput.addEventListener('input', () => {
-        localStorage.setItem('tg_chat_id', chatIdInput.value.trim());
-    });
+                <div class="mt-8 p-6 bg-red-50 border border-red-200 rounded-xl">
+                    <h3 class="text-red-700 m-0">Gefahrzone: Recht auf Vergessenwerden</h3>
+                    <button onclick="deleteAccountData()" class="mt-4 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg transition-colors shadow-sm">Alle meine Daten endgültig löschen</button>
+                </div>
+            </div>
+        </div>
 
-    function showView(viewId, navEl) {
-        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-        document.getElementById(viewId).classList.add('active');
-        if(navEl) navEl.classList.add('active');
-    }
+        {% endif %}
+    </main>
 
-    function resetAll() {
-        if(confirm("Alles löschen?")) {
-            inputArea.value = "";
-            previewBubble.innerHTML = "Bereit für deinen Text...";
-        }
-    }
-
-    async function copyToClipboard() {
-        const text = previewBubble.innerText;
-        if(!text || text === "Bereit für deinen Text...") return;
-        try {
-            await navigator.clipboard.writeText(text);
-            const btn = document.getElementById('copyBtn');
-            const old = btn.innerHTML;
-            btn.innerHTML = '<i class="fa-solid fa-check"></i> Kopiert!';
-            setTimeout(() => btn.innerHTML = old, 2000);
-        } catch (e) { alert("Fehler beim Kopieren."); }
-    }
-
-    async function copyWallet(elementId, btnElement) {
-        const address = document.getElementById(elementId).innerText;
-        try {
-            await navigator.clipboard.writeText(address);
-            const originalHTML = btnElement.innerHTML;
-            btnElement.innerHTML = '<i class="fa-solid fa-check"></i> Kopiert!';
-            btnElement.classList.add('success');
-            setTimeout(() => {
-                btnElement.innerHTML = originalHTML;
-                btnElement.classList.remove('success');
-            }, 2000);
-        } catch (e) { alert("Kopieren fehlgeschlagen."); }
-    }
-
-    // Neuer Sende-Prozess inkl. Chat-ID
-    async function sendToTelegram() {
-        const content = inputArea.value;
-        const chatId = chatIdInput.value.trim();
-
-        if(!content) {
-            alert("Bitte gib einen Text ein.");
-            return;
-        }
-        if(!chatId) {
-            alert("Bitte trage links deine Telegram Chat-ID ein. Klicke auf 'Anleitung', falls du nicht weißt wie.");
-            document.getElementById('chatIdInput').focus();
-            return;
-        }
-
-        try {
-            const res = await fetch('/api/send', {
+    <script>
+        function onTelegramAuth(user) {
+            fetch('/api/auth', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ content: content, chat_id: chatId })
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(user)
+            }).then(res => res.json()).then(data => {
+                if (data.success) window.location.reload();
+                else alert('Login fehlgeschlagen: Hash ungültig.');
             });
-            const data = await res.json();
+        }
 
-            if(data.status === "success") {
-                alert("🚀 " + data.message);
-            } else {
-                alert("Fehler: " + data.message);
+        function logout() {
+            fetch('/api/logout', {method: 'POST'}).then(() => window.location.reload());
+        }
+
+        {% if logged_in %}
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('[id^="nav-"]').forEach(el => {
+                el.classList.remove('bg-sky-50', 'text-sky-600');
+                el.classList.add('text-slate-600');
+            });
+            document.getElementById('tab-' + tabId).classList.add('active');
+            document.getElementById('nav-' + tabId).classList.add('bg-sky-50', 'text-sky-600');
+            document.getElementById('nav-' + tabId).classList.remove('text-slate-600');
+
+            if(tabId === 'channels') loadChannels();
+            if(tabId === 'editor') populateEditorChannels();
+            if(tabId === 'history') loadHistory();
+        }
+
+        async function loadChannels() {
+            const res = await fetch('/api/channels');
+            const channels = await res.json();
+            const list = document.getElementById('channelsList');
+            list.innerHTML = channels.length === 0 ? '<p class="text-slate-500 italic p-4 bg-white rounded-xl border border-slate-200">Noch keine Kanäle verknüpft.</p>' : '';
+            channels.forEach(ch => {
+                list.innerHTML += `
+                    <div class="flex justify-between items-center p-4 bg-white border border-slate-200 shadow-sm rounded-xl">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 rounded-lg bg-sky-100 text-sky-600 flex items-center justify-center"><i class="fa-solid fa-bullhorn"></i></div>
+                            <div>
+                                <p class="font-bold text-slate-800">${ch.channel_name}</p>
+                                <p class="text-xs text-slate-500 font-mono">${ch.channel_id}</p>
+                            </div>
+                        </div>
+                        <button onclick="deleteChannel(${ch.id})" class="text-slate-400 hover:text-red-500 hover:bg-red-50 p-3 rounded-xl" title="Entfernen"><i class="fa-solid fa-trash"></i></button>
+                    </div>`;
+            });
+        }
+
+        async function addChannel() {
+            const cId = document.getElementById('newChannelId').value.trim();
+            const cName = document.getElementById('newChannelName').value.trim();
+            const btn = document.getElementById('addChannelBtn');
+            if(!cId || !cName) return alert('Bitte ausfüllen.');
+
+            btn.innerHTML = 'Prüfe...'; btn.disabled = true;
+            try {
+                const res = await fetch('/api/channels', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel_id: cId, channel_name: cName })
+                });
+                const data = await res.json();
+                if(data.success) {
+                    document.getElementById('newChannelId').value = '';
+                    document.getElementById('newChannelName').value = '';
+                    loadChannels();
+                } else alert('FEHLER: ' + data.error);
+            } catch (err) { alert('Netzwerkfehler.'); } finally {
+                btn.innerHTML = 'Hinzufügen'; btn.disabled = false;
             }
-        } catch(e) {
-            alert("Netzwerkfehler. Bitte prüfe deine Verbindung.");
         }
-    }
 
-    // Live Vorschau API Call
-    let delayTimer;
-    inputArea.addEventListener('input', () => {
-        clearTimeout(delayTimer);
-        delayTimer = setTimeout(async () => {
-            if(!inputArea.value) { previewBubble.innerHTML = "Bereit..."; return; }
+        async function deleteChannel(id) {
+            if(!confirm('Kanal entfernen?')) return;
+            await fetch('/api/channels/' + id, {method: 'DELETE'});
+            loadChannels();
+        }
+
+        async function populateEditorChannels() {
+            const sel = document.getElementById('postChannel');
+            const submitBtn = document.getElementById('submitBtn');
+            try {
+                const res = await fetch('/api/channels');
+                const channels = await res.json();
+                if (channels.length === 0) {
+                    sel.innerHTML = '<option value="">⚠️ Bitte erst Kanal hinzufügen!</option>';
+                    sel.disabled = true; submitBtn.disabled = true;
+                } else {
+                    sel.disabled = false; submitBtn.disabled = false;
+                    sel.innerHTML = channels.map(ch => `<option value="${ch.channel_id}">${ch.channel_name}</option>`).join('');
+                }
+            } catch (e) { sel.innerHTML = '<option value="">Fehler</option>'; }
+        }
+
+        function addButtonField() {
+            const container = document.getElementById('buttonsContainer');
+            const div = document.createElement('div');
+            div.className = 'flex gap-2 items-center button-row';
+            div.innerHTML = `
+                <input type="text" placeholder="Text" class="btn-text flex-1 p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-sky-500">
+                <input type="url" placeholder="URL" class="btn-url flex-1 p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-sky-500">
+                <button onclick="this.parentElement.remove(); updatePreview();" class="text-red-500 bg-red-50 p-3 rounded-xl"><i class="fa-solid fa-xmark"></i></button>
+            `;
+            container.appendChild(div);
+            div.querySelectorAll('input').forEach(inp => inp.addEventListener('input', updatePreview));
+        }
+
+        function getButtonsData() {
+            let btns = [];
+            document.querySelectorAll('.button-row').forEach(row => {
+                const text = row.querySelector('.btn-text').value.trim();
+                const url = row.querySelector('.btn-url').value.trim();
+                if(text && url) btns.push({text, url});
+            });
+            return btns;
+        }
+
+        async function updatePreview() {
+            const text = document.getElementById('postContent').value;
             const res = await fetch('/api/preview', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: inputArea.value})
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text})
             });
             const data = await res.json();
-            previewBubble.innerHTML = data.html.replace(/\\n/g, '<br>');
-        }, 350);
-    });
-</script>
+            document.getElementById('previewText').innerHTML = data.html.replace(/\\n/g, '<br>') || 'Vorschau...';
+
+            const btnContainer = document.getElementById('previewButtons');
+            btnContainer.innerHTML = '';
+            getButtonsData().forEach(btn => {
+                btnContainer.innerHTML += `<a href="#" onclick="return false;" class="tg-button">${btn.text}</a>`;
+            });
+        }
+
+        async function submitPost() {
+            const channelId = document.getElementById('postChannel').value;
+            const content = document.getElementById('postContent').value;
+            const schedule = document.getElementById('postSchedule').value;
+
+            if(!channelId || !content) return alert('Kanal und Text sind Pflicht!');
+            let scheduleTime = schedule ? schedule.replace('T', ' ') : new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+            const res = await fetch('/api/posts', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    channel_id: channelId, content: content,
+                    buttons: JSON.stringify(getButtonsData()), schedule_time: scheduleTime
+                })
+            });
+            const data = await res.json();
+            if(data.success) {
+                alert('Erfolgreich gespeichert!');
+                document.getElementById('postContent').value = '';
+                document.getElementById('buttonsContainer').innerHTML = '';
+                updatePreview(); switchTab('history');
+            } else alert('Fehler: ' + data.error);
+        }
+
+        async function loadHistory() {
+            const res = await fetch('/api/posts');
+            const posts = await res.json();
+            const tbody = document.getElementById('historyTableBody');
+            tbody.innerHTML = posts.length === 0 ? '<tr><td colspan="4" class="p-4 text-center">Keine Posts</td></tr>' : '';
+            posts.forEach(p => {
+                let badge = p.status === 'pending' ? '⏳ Ausstehend' : (p.status === 'sent' ? '✅ Gesendet' : '❌ Fehler');
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-50">
+                        <td class="p-4 text-sm font-medium">${p.schedule_time}</td>
+                        <td class="p-4 text-sm text-sky-600">${p.channel_id}</td>
+                        <td class="p-4 text-sm truncate max-w-[200px]">${p.content}</td>
+                        <td class="p-4 text-sm font-bold">${badge}</td>
+                    </tr>`;
+            });
+        }
+
+        async function deleteAccountData() {
+            if(confirm('ACHTUNG! Daten unwiderruflich löschen?')) {
+                await fetch('/api/dsgvo_delete', { method: 'POST' });
+                window.location.reload();
+            }
+        }
+
+        switchTab('editor');
+        {% endif %}
+    </script>
 </body>
 </html>
