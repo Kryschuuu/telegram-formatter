@@ -3,7 +3,6 @@ import sqlite3
 import json
 import hashlib
 import hmac
-import time
 from datetime import datetime
 import telebot
 from flask import Flask, render_template_string, request, jsonify, session
@@ -12,8 +11,8 @@ import re
 
 # --- KONFIGURATION ---
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "DEIN_BOT_TOKEN_HIER")
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "mdtotxt_bot") # Wichtig für das Login-Widget!
-SECRET_KEY = os.environ.get("SECRET_KEY", os.urandom(24)) # Für sichere Flask-Sessions
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "mdtotxt_bot")
+SECRET_KEY = os.environ.get("SECRET_KEY", os.urandom(24))
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -23,16 +22,12 @@ bot = telebot.TeleBot(TOKEN) if TOKEN else None
 DB_FILE = 'saas_database.db'
 
 def init_db():
-    """Erstellt die SQLite-Datenbank und Tabellen, falls nicht vorhanden."""
     with sqlite3.connect(DB_FILE) as conn:
         c = conn.cursor()
-        # User-Tabelle
         c.execute('''CREATE TABLE IF NOT EXISTS users
                      (id INTEGER PRIMARY KEY, first_name TEXT, username TEXT, auth_date INTEGER)''')
-        # Kanäle-Tabelle
         c.execute('''CREATE TABLE IF NOT EXISTS channels
                      (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, channel_id TEXT, channel_name TEXT)''')
-        # Posts-Tabelle (für Scheduling und Historie)
         c.execute('''CREATE TABLE IF NOT EXISTS posts
                      (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, channel_id TEXT,
                       content TEXT, buttons TEXT, schedule_time TEXT, status TEXT)''')
@@ -42,19 +37,14 @@ init_db()
 
 # --- HILFSFUNKTIONEN ---
 def verify_telegram_auth(data):
-    """Verifiziert den Hash des Telegram-Login-Widgets zur Sicherheit."""
     if not TOKEN: return False
     secret_key = hashlib.sha256(TOKEN.encode()).digest()
-    data_check_arr = []
-    for key, value in sorted(data.items()):
-        if key != 'hash':
-            data_check_arr.append(f"{key}={value}")
+    data_check_arr = [f"{key}={value}" for key, value in sorted(data.items()) if key != 'hash']
     data_check_string = "\n".join(data_check_arr)
     expected_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
     return expected_hash == data.get('hash')
 
 def format_to_tg_html(text):
-    """Markdown zu Telegram HTML."""
     if not text: return ""
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     text = re.sub(r'^#\s+(.*)$', r'<b>🚀 \1</b>', text, flags=re.M)
@@ -65,7 +55,6 @@ def format_to_tg_html(text):
     return text
 
 def build_inline_keyboard(buttons_json):
-    """Baut das Inline Keyboard aus den gespeicherten JSON-Daten."""
     if not buttons_json or buttons_json == "[]": return None
     try:
         buttons = json.loads(buttons_json)
@@ -79,13 +68,11 @@ def build_inline_keyboard(buttons_json):
 
 # --- SCHEDULER (Hintergrund-Job) ---
 def check_scheduled_posts():
-    """Prüft jede Minute, ob Posts fällig sind und sendet diese."""
     if not bot: return
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     with sqlite3.connect(DB_FILE) as conn:
         c = conn.cursor()
-        # Hole alle ausstehenden Posts, deren Zeit gekommen ist (oder die in der Vergangenheit liegen)
         c.execute("SELECT id, channel_id, content, buttons FROM posts WHERE status='pending' AND schedule_time <= ?", (now,))
         due_posts = c.fetchall()
 
@@ -95,15 +82,12 @@ def check_scheduled_posts():
                 html_content = format_to_tg_html(content)
                 markup = build_inline_keyboard(buttons_json)
                 bot.send_message(channel_id, html_content, parse_mode='HTML', reply_markup=markup)
-                # Markiere als gesendet
                 c.execute("UPDATE posts SET status='sent' WHERE id=?", (post_id,))
             except Exception as e:
-                # Markiere als fehlgeschlagen
                 print(f"Fehler bei Post {post_id}: {e}")
                 c.execute("UPDATE posts SET status='failed' WHERE id=?", (post_id,))
         conn.commit()
 
-# Starte den Scheduler
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=check_scheduled_posts, trigger="interval", seconds=60)
 scheduler.start()
@@ -127,8 +111,7 @@ HTML_TEMPLATE = """
 </head>
 <body class="bg-slate-50 text-slate-800 font-sans h-screen flex overflow-hidden">
 
-    <!-- Sidebar -->
-    <aside class="w-64 bg-white border-r border-slate-200 flex flex-col">
+    <aside class="w-64 bg-white border-r border-slate-200 flex flex-col z-10">
         <div class="p-6 border-b border-slate-100">
             <h1 class="text-2xl font-black text-sky-600 flex items-center gap-2"><i class="fa-solid fa-rocket"></i> PostMaster</h1>
             <p class="text-xs text-slate-400 mt-1 uppercase font-bold tracking-wider">Pro Edition</p>
@@ -163,7 +146,6 @@ HTML_TEMPLATE = """
         {% endif %}
     </aside>
 
-    <!-- Main Content -->
     <main class="flex-1 overflow-y-auto bg-slate-50 relative">
         {% if logged_in %}
 
@@ -176,8 +158,9 @@ HTML_TEMPLATE = """
                     <!-- Kanal Auswahl -->
                     <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                         <label class="block text-sm font-bold text-slate-700 mb-2">Ziel-Kanal</label>
-                        <select id="postChannel" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
-                            <!-- Wird per JS befüllt -->
+                        <select id="postChannel" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 bg-slate-50">
+                            <!-- Wird per JS befüllt. Standardanzeige: Lade... -->
+                            <option value="">Lade Kanäle...</option>
                         </select>
                     </div>
 
@@ -203,7 +186,7 @@ HTML_TEMPLATE = """
                         <p class="text-xs text-slate-500 mt-2">Leer lassen für sofortigen Versand.</p>
                     </div>
 
-                    <button onclick="submitPost()" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-sky-200 transition-all flex justify-center items-center gap-2">
+                    <button onclick="submitPost()" id="submitBtn" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-sky-200 transition-all flex justify-center items-center gap-2">
                         <i class="fa-solid fa-paper-plane"></i> Post einplanen / senden
                     </button>
                 </div>
@@ -228,11 +211,11 @@ HTML_TEMPLATE = """
 
             <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mb-8">
                 <h3 class="font-bold text-lg mb-2">Neuen Kanal verknüpfen</h3>
-                <p class="text-sm text-slate-500 mb-4">Füge den Bot zuerst als Administrator (mit Post-Rechten) zu deinem Kanal hinzu. Trage dann hier die ID oder den @Benutzernamen ein.</p>
+                <p class="text-sm text-slate-500 mb-4">WICHTIG: Füge deinen Bot <b>zuerst</b> als Administrator (mit Post-Rechten) in deinen Telegram-Kanal ein. Trage dann hier die ID oder den öffentlichen @Namen ein.</p>
                 <div class="flex gap-3">
-                    <input type="text" id="newChannelId" placeholder="z.B. @mein_kanal oder -1001234567" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
-                    <input type="text" id="newChannelName" placeholder="Anzeigename (z.B. Hauptkanal)" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
-                    <button onclick="addChannel()" class="bg-slate-800 hover:bg-slate-900 text-white px-6 rounded-xl font-bold">Hinzufügen</button>
+                    <input type="text" id="newChannelId" placeholder="z.B. @mein_kanal oder -100123..." class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                    <input type="text" id="newChannelName" placeholder="Interner Anzeigename (z.B. Main Channel)" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                    <button onclick="addChannel()" id="addChannelBtn" class="bg-slate-800 hover:bg-slate-900 text-white px-6 rounded-xl font-bold flex items-center gap-2">Hinzufügen</button>
                 </div>
             </div>
 
@@ -265,25 +248,24 @@ HTML_TEMPLATE = """
         <!-- DSGVO & MANUAL TAB -->
         <div id="tab-dsgvo" class="tab-content max-w-4xl mx-auto p-8">
             <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm prose max-w-none text-slate-600">
-                <h2 class="text-sky-600">📖 Bedienungsanleitung</h2>
+                <h2 class="text-sky-600">📖 Anleitung: So verknüpfst du einen Kanal</h2>
                 <ol>
-                    <li><b>Bot als Admin hinzufügen:</b> Öffne Telegram, gehe zu deinem Kanal -> Administratoren -> Admin hinzufügen. Suche nach <code>@{{ bot_username }}</code> und gib ihm das Recht "Nachrichten posten".</li>
-                    <li><b>Kanal hinterlegen:</b> Gehe im Tool auf den Reiter "Meine Kanäle". Trage dort den Handle deines Kanals ein (z.B. <code>@mein_kanal</code>) oder die interne ID, falls er privat ist.</li>
-                    <li><b>Posten & Planen:</b> Gehe auf "Post erstellen", schreibe deinen Text, füge auf Wunsch Buttons hinzu und wähle ein Datum für die Zukunft – oder lasse es leer, um sofort zu senden.</li>
+                    <li><b>Bot einladen:</b> Öffne deinen Telegram Kanal. Gehe in die Kanal-Einstellungen &rarr; Administratoren &rarr; Administrator hinzufügen.</li>
+                    <li><b>Suchen:</b> Suche nach <code>@{{ bot_username }}</code> und füge den Bot hinzu.</li>
+                    <li><b>Rechte geben:</b> Achte darauf, dass der Schalter bei "Nachrichten senden" (Post Messages) aktiviert ist.</li>
+                    <li><b>Hier eintragen:</b> Gehe im Tool auf den Reiter "Meine Kanäle". Trage dort den Handle deines Kanals ein (z.B. <code>@mein_cooler_kanal</code>). Falls es ein privater Kanal ist, nutze die interne ID (beginnt meist mit <code>-100...</code>).</li>
                 </ol>
 
                 <h2 class="text-sky-600 mt-8">🛡️ DSGVO & Datenschutz</h2>
                 <p>Diese SaaS-Anwendung speichert nur die Daten, die für die Bereitstellung des Dienstes absolut notwendig sind:</p>
                 <ul>
-                    <li>Deine Telegram Benutzer-ID und dein öffentlicher Name (zur Identifikation bei der Anmeldung).</li>
+                    <li>Deine Telegram Benutzer-ID und dein Name.</li>
                     <li>Die IDs der verknüpften Telegram-Kanäle.</li>
-                    <li>Die Inhalte der von dir geplanten Posts in der Datenbank, bis sie versendet wurden. Gesendete Posts bleiben für deine Historie gespeichert.</li>
+                    <li>Die Inhalte der von dir geplanten Posts in der Datenbank, bis sie versendet wurden.</li>
                 </ul>
-                <p>Wir verwenden <b>keine Tracking-Cookies</b>. Es wird lediglich ein technischer Session-Cookie gesetzt, um deinen Login-Status aufrechtzuerhalten.</p>
 
                 <div class="mt-8 p-6 bg-red-50 border border-red-200 rounded-xl">
                     <h3 class="text-red-700 m-0">Gefahrzone: Account löschen</h3>
-                    <p class="text-sm text-red-600 mt-2">Hier kannst du dein Profil, alle verknüpften Kanäle und alle geplanten/gesendeten Posts unwiderruflich von unseren Servern löschen. Dies entspricht dem DSGVO "Recht auf Vergessenwerden".</p>
                     <button onclick="deleteAccountData()" class="mt-4 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg transition-colors">Alle meine Daten endgültig löschen</button>
                 </div>
             </div>
@@ -293,7 +275,6 @@ HTML_TEMPLATE = """
     </main>
 
     <script>
-        // --- AUTHENTIFIZIERUNG ---
         function onTelegramAuth(user) {
             fetch('/api/auth', {
                 method: 'POST',
@@ -306,12 +287,10 @@ HTML_TEMPLATE = """
         }
 
         function logout() {
-            fetch('/api/logout', {method: 'POST'})
-                .then(() => window.location.reload());
+            fetch('/api/logout', {method: 'POST'}).then(() => window.location.reload());
         }
 
         {% if logged_in %}
-        // --- NAVIGATION ---
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('[id^="nav-"]').forEach(el => {
@@ -327,7 +306,6 @@ HTML_TEMPLATE = """
             if(tabId === 'history') loadHistory();
         }
 
-        // --- KANÄLE ---
         async function loadChannels() {
             const res = await fetch('/api/channels');
             const channels = await res.json();
@@ -345,20 +323,33 @@ HTML_TEMPLATE = """
         async function addChannel() {
             const cId = document.getElementById('newChannelId').value.trim();
             const cName = document.getElementById('newChannelName').value.trim();
-            if(!cId || !cName) return alert('Bitte beide Felder ausfüllen.');
+            const btn = document.getElementById('addChannelBtn');
 
-            const res = await fetch('/api/channels', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel_id: cId, channel_name: cName })
-            });
-            const data = await res.json();
-            if(data.success) {
-                document.getElementById('newChannelId').value = '';
-                document.getElementById('newChannelName').value = '';
-                loadChannels();
-            } else {
-                alert(data.error);
+            if(!cId || !cName) return alert('Bitte Kanal-ID/Name und einen Anzeigenamen ausfüllen.');
+
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Prüfe...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/channels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel_id: cId, channel_name: cName })
+                });
+                const data = await res.json();
+
+                if(data.success) {
+                    document.getElementById('newChannelId').value = '';
+                    document.getElementById('newChannelName').value = '';
+                    loadChannels();
+                } else {
+                    alert('FEHLER: ' + data.error);
+                }
+            } catch (err) {
+                alert('Netzwerkfehler. Bitte versuche es nochmal.');
+            } finally {
+                btn.innerHTML = 'Hinzufügen';
+                btn.disabled = false;
             }
         }
 
@@ -369,13 +360,32 @@ HTML_TEMPLATE = """
         }
 
         async function populateEditorChannels() {
-            const res = await fetch('/api/channels');
-            const channels = await res.json();
             const sel = document.getElementById('postChannel');
-            sel.innerHTML = channels.map(ch => `<option value="${ch.channel_id}">${ch.channel_name} (${ch.channel_id})</option>`).join('');
+            const submitBtn = document.getElementById('submitBtn');
+
+            try {
+                const res = await fetch('/api/channels');
+                const channels = await res.json();
+
+                if (channels.length === 0) {
+                    // UX VERBESSERUNG HIER: Zeige an, wenn leer
+                    sel.innerHTML = '<option value="">⚠️ Bitte erst im Tab "Meine Kanäle" einen Kanal hinzufügen!</option>';
+                    sel.disabled = true;
+                    sel.classList.add('bg-red-50', 'border-red-300', 'text-red-700');
+                    submitBtn.disabled = true;
+                    submitBtn.classList.replace('bg-sky-600', 'bg-slate-400');
+                } else {
+                    sel.disabled = false;
+                    sel.classList.remove('bg-red-50', 'border-red-300', 'text-red-700');
+                    sel.innerHTML = channels.map(ch => `<option value="${ch.channel_id}">${ch.channel_name} (${ch.channel_id})</option>`).join('');
+                    submitBtn.disabled = false;
+                    submitBtn.classList.replace('bg-slate-400', 'bg-sky-600');
+                }
+            } catch (e) {
+                sel.innerHTML = '<option value="">Fehler beim Laden der Kanäle</option>';
+            }
         }
 
-        // --- EDITOR & BUTTONS ---
         function addButtonField() {
             const container = document.getElementById('buttonsContainer');
             const div = document.createElement('div');
@@ -386,7 +396,6 @@ HTML_TEMPLATE = """
                 <button onclick="this.parentElement.remove(); updatePreview();" class="text-red-500 px-2"><i class="fa-solid fa-xmark"></i></button>
             `;
             container.appendChild(div);
-            // Event Listener für Vorschau anbinden
             div.querySelectorAll('input').forEach(inp => inp.addEventListener('input', updatePreview));
         }
 
@@ -403,7 +412,6 @@ HTML_TEMPLATE = """
 
         async function updatePreview() {
             const text = document.getElementById('postContent').value;
-            // Textvorschau via API holen (um Backend-Logik zu nutzen)
             const res = await fetch('/api/preview', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -412,7 +420,6 @@ HTML_TEMPLATE = """
             const data = await res.json();
             document.getElementById('previewText').innerHTML = data.html.replace(/\\n/g, '<br>') || 'Vorschau deines Textes...';
 
-            // Buttonsvorschau bauen
             const btns = getButtonsData();
             const btnContainer = document.getElementById('previewButtons');
             btnContainer.innerHTML = '';
@@ -427,10 +434,9 @@ HTML_TEMPLATE = """
             const schedule = document.getElementById('postSchedule').value;
             const buttons = getButtonsData();
 
-            if(!channelId) return alert('Bitte zuerst einen Kanal anlegen/auswählen.');
+            if(!channelId) return alert('Bitte wähle einen Kanal aus.');
             if(!content) return alert('Bitte Text eingeben.');
 
-            // Wenn kein Datum gewählt, setze Datum in der Vergangenheit = sofort senden
             let scheduleTime = schedule ? schedule.replace('T', ' ') : new Date().toISOString().slice(0, 16).replace('T', ' ');
 
             const res = await fetch('/api/posts', {
@@ -456,7 +462,6 @@ HTML_TEMPLATE = """
             }
         }
 
-        // --- HISTORY ---
         async function loadHistory() {
             const res = await fetch('/api/posts');
             const posts = await res.json();
@@ -479,9 +484,8 @@ HTML_TEMPLATE = """
             });
         }
 
-        // --- DSGVO ---
         async function deleteAccountData() {
-            if(confirm('ACHTUNG! Willst du wirklich deinen Account und alle verknüpften Daten unwiderruflich von diesem Server löschen? Dieser Schritt kann nicht rückgängig gemacht werden.')) {
+            if(confirm('ACHTUNG! Willst du wirklich deinen Account und alle verknüpften Daten unwiderruflich löschen?')) {
                 const res = await fetch('/api/dsgvo_delete', { method: 'POST' });
                 if(res.ok) {
                     alert('Deine Daten wurden restlos gelöscht.');
@@ -509,7 +513,7 @@ def index():
             c.execute("SELECT first_name, username FROM users WHERE id=?", (user_id,))
             row = c.fetchone()
             if row: user = {'first_name': row[0], 'username': row[1]}
-            else: session.pop('user_id', None) # User gelöscht
+            else: session.pop('user_id', None)
 
     return render_template_string(HTML_TEMPLATE, logged_in=bool(user), user=user, bot_username=BOT_USERNAME)
 
@@ -547,15 +551,31 @@ def manage_channels():
         data = request.json
         c_id = data.get('channel_id')
 
-        # Validierung: Prüfen ob der Bot im Kanal posten darf
         try:
+            # 1. Prüfen, ob der Chat überhaupt existiert (und Bot reingelassen wurde)
             chat = bot.get_chat(c_id)
-            member = bot.get_chat_member(c_id, bot.get_me().id)
-            if member.status not in ['administrator', 'creator'] or not member.can_post_messages:
-                return jsonify({'success': False, 'error': 'Bot ist kein Administrator mit Post-Rechten in diesem Kanal.'})
-        except Exception as e:
-            return jsonify({'success': False, 'error': 'Kanal nicht gefunden oder Bot wurde noch nicht als Admin hinzugefügt.'})
 
+            # 2. Prüfen, ob der Bot Admin-Rechte hat
+            bot_me = bot.get_me()
+            member = bot.get_chat_member(c_id, bot_me.id)
+
+            if member.status not in ['administrator', 'creator']:
+                return jsonify({'success': False, 'error': f'Der Bot ist kein Administrator im Kanal {c_id}. Bitte in Telegram die Rechte anpassen.'})
+            if not member.can_post_messages:
+                return jsonify({'success': False, 'error': f'Der Bot hat nicht die Berechtigung "Nachrichten senden" im Kanal {c_id}.'})
+
+        except telebot.apihelper.ApiTelegramException as e:
+            error_msg = str(e)
+            if "chat not found" in error_msg.lower():
+                return jsonify({'success': False, 'error': f'Kanal {c_id} wurde nicht gefunden. Wenn es ein privater Kanal ist, nutze die ID (z.B. -100...). Sonst das @Handle.'})
+            elif "bot is not a member" in error_msg.lower():
+                return jsonify({'success': False, 'error': 'Der Bot muss zuerst als Administrator in den Kanal eingeladen werden!'})
+            else:
+                return jsonify({'success': False, 'error': f'Telegram Fehler: {error_msg}'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Unbekannter Fehler beim Verifizieren: {str(e)}'})
+
+        # Wenn wir hier sind, ist alles okay -> in Datenbank speichern
         with sqlite3.connect(DB_FILE) as conn:
             conn.cursor().execute("INSERT INTO channels (user_id, channel_id, channel_name) VALUES (?, ?, ?)",
                                   (user_id, c_id, data.get('channel_name')))
@@ -608,7 +628,6 @@ def dsgvo_delete():
     return jsonify({'success': True})
 
 if __name__ == '__main__':
-    # Scheduler beim sauberen Beenden stoppen
     import atexit
     atexit.register(lambda: scheduler.shutdown())
     app.run(host='0.0.0.0', port=5000)
