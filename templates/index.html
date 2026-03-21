@@ -1,3 +1,4 @@
+<DOCUMENT filename="index.html">
 <!DOCTYPE html>
 <html lang="de">
 <head>
@@ -32,7 +33,7 @@
                 </div>
                 <div class="truncate">
                     <p class="font-bold text-sm text-slate-800 truncate">{{ user.first_name }}</p>
-                    <p class="text-xs text-slate-500 truncate">@{{ user.username }}</p>
+                    <p class="text-xs text-slate-500 truncate">@{{ user.username | default('') }}</p>
                 </div>
             </div>
             <button onclick="logout()" class="text-slate-400 hover:text-red-500 p-2" title="Abmelden">
@@ -100,7 +101,7 @@
                     <!-- Textfeld -->
                     <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col h-64">
                         <label class="block text-sm font-bold text-slate-700 mb-2">Nachricht (Markdown)</label>
-                        <textarea id="postContent" class="flex-1 w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 resize-none font-mono text-sm" placeholder="# Titel\n\n**Fett** und *Kursiv*..."></textarea>
+                        <textarea id="postContent" class="flex-1 w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 resize-none font-mono text-sm" placeholder="# Titel&#10;&#10;**Fett** und *Kursiv*..."></textarea>
                     </div>
 
                     <!-- Buttons -->
@@ -116,7 +117,7 @@
                     <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                         <label class="block text-sm font-bold text-slate-700 mb-2">Zeitplan (Senden um)</label>
                         <input type="datetime-local" id="postSchedule" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
-                        <p class="text-xs text-slate-500 mt-2">Leer lassen, um sofort (innerhalb von 30 Sek) zu senden.</p>
+                        <p class="text-xs text-slate-500 mt-2">Leer lassen = SOFORT (innerhalb von 30 Sekunden)</p>
                     </div>
 
                     <button onclick="submitPost()" id="submitBtn" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-4 rounded-xl shadow-md transition-all flex justify-center items-center gap-2">
@@ -368,7 +369,7 @@
             return btns;
         }
 
-        // LOKALE VORSCHAU: Kein Backend-Ping mehr, stürzt nicht mehr ab!
+        // LOKALE VORSCHAU (exakt wie Backend-HTML)
         function renderLocalPreview() {
             let text = document.getElementById('postContent').value || '';
 
@@ -402,17 +403,11 @@
             if(!channelId) return alert('Bitte wähle einen Kanal aus!');
             if(!content.trim()) return alert('Der Text darf nicht leer sein!');
 
-            let scheduleFormatted;
-            if(!scheduleInput) {
-                // Korrekte LOKALE Zeit berechnen, wenn nichts eingegeben
-                const now = new Date();
-                const pad = (n) => String(n).padStart(2, '0');
-                scheduleFormatted = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-            } else {
-                scheduleFormatted = scheduleInput.replace('T', ' '); // Formatierung für SQLite
-            }
+            // Leeres Feld = SOFORT → Backend setzt Server-Zeit
+            const scheduleFormatted = scheduleInput ? scheduleInput.replace('T', ' ') : '';
 
-            btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sende...';
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sende...';
 
             try {
                 const res = await fetch('/api/posts', {
@@ -434,12 +429,13 @@
                     renderLocalPreview();
                     switchTab('history');
                 } else {
-                    alert('Fehler vom Server: ' + data.error);
+                    alert('Fehler vom Server: ' + (data.error || 'Unbekannt'));
                 }
             } catch(e) {
                 alert('Netzwerkfehler!');
             } finally {
-                btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Absenden / Planen';
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Absenden / Planen';
             }
         }
 
@@ -495,3 +491,4 @@
     </script>
 </body>
 </html>
+</DOCUMENT>

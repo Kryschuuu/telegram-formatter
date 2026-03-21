@@ -1,3 +1,4 @@
+<DOCUMENT filename="app.py">
 import os
 import sqlite3
 import json
@@ -41,7 +42,8 @@ init_db()
 
 # --- HILFSFUNKTIONEN ---
 def verify_telegram_auth(data):
-    if not TOKEN or TOKEN == "DEIN_BOT_TOKEN_HIER": return False
+    if not TOKEN or TOKEN == "DEIN_BOT_TOKEN_HIER":
+        return False
     secret_key = hashlib.sha256(TOKEN.encode()).digest()
     data_check_arr = [f"{key}={value}" for key, value in sorted(data.items()) if key != 'hash']
     data_check_string = "\n".join(data_check_arr)
@@ -49,7 +51,8 @@ def verify_telegram_auth(data):
     return expected_hash == data.get('hash')
 
 def format_to_tg_html(text):
-    if not text: return ""
+    if not text:
+        return ""
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     text = re.sub(r'^#\s+(.*)$', r'<b>🚀 \1</b>', text, flags=re.M)
     text = re.sub(r'^##\s+(.*)$', r'<b>📍 \1</b>', text, flags=re.M)
@@ -60,14 +63,15 @@ def format_to_tg_html(text):
 
 def check_bot_permissions(chat_id):
     """Prüft strikt und fehlerfrei, ob der Bot posten darf."""
-    if not bot: return False, "Bot-Token ist nicht im System konfiguriert."
+    if not bot:
+        return False, "Bot-Token ist nicht im System konfiguriert."
 
     try:
         # Telegram verlangt bei IDs (wie -100...) oft echte Integers
         try:
             chat_id_val = int(chat_id)
         except ValueError:
-            chat_id_val = chat_id # Fallback für Namen wie @mein_kanal
+            chat_id_val = chat_id  # Fallback für Namen wie @mein_kanal
 
         chat = bot.get_chat(chat_id_val)
         me = bot.get_me()
@@ -78,23 +82,25 @@ def check_bot_permissions(chat_id):
                 return True, "Kanal erfolgreich geprüft."
             return False, "Bot ist im Kanal, hat aber nicht das Recht 'Nachrichten senden'."
         else:
+            # Für Gruppen & Supergroups: Admin oder Member (je nach Gruppeneinstellung)
             if member.status in ['administrator', 'creator', 'member']:
-                return True, "Gruppe erfolgreich geprüft."
+                return True, "Gruppe/Supergroup erfolgreich geprüft."
             return False, "Bot hat keine Rechte in dieser Gruppe."
 
     except telebot.apihelper.ApiTelegramException as e:
         err = e.description.lower()
         if "chat not found" in err:
-            return False, "Kanal nicht gefunden. Stimmt die ID? Ist der Bot wirklich hinzugefügt?"
-        if "not a member" in err or "kicked" in err:
-            return False, "Der Bot wurde nicht zum Kanal hinzugefügt oder wurde blockiert."
+            return False, "Kanal/Gruppe nicht gefunden. Stimmt die ID? Ist der Bot wirklich hinzugefügt?"
+        if "not a member" in err or "kicked" in err or "forbidden" in err:
+            return False, "Der Bot wurde nicht zum Kanal/Gruppe hinzugefügt oder wurde blockiert."
         return False, f"Telegram blockiert: {e.description}"
     except Exception as e:
         return False, f"Systemfehler bei der Prüfung: {str(e)}"
 
 # --- SCHEDULER (HINTERGRUND-PROZESS) ---
 def check_scheduled_posts():
-    if not bot: return
+    if not bot:
+        return
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     with sqlite3.connect(DB_FILE) as conn:
@@ -109,8 +115,9 @@ def check_scheduled_posts():
                 cid = int(channel_id) if str(channel_id).lstrip('-').isdigit() else channel_id
 
                 html_content = format_to_tg_html(content)
-                markup = telebot.types.InlineKeyboardMarkup()
 
+                # Inline-Buttons: immer 1 pro Zeile (besser für Conversion)
+                markup = telebot.types.InlineKeyboardMarkup(row_width=1)
                 if buttons_json and buttons_json != "[]":
                     for btn in json.loads(buttons_json):
                         markup.add(telebot.types.InlineKeyboardButton(text=btn['text'], url=btn['url']))
@@ -153,7 +160,8 @@ def logout():
 @app.route('/api/channels', methods=['GET', 'POST'])
 def manage_channels():
     user = session.get('user')
-    if not user: return jsonify({"error": "Unauthorized"}), 401
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
 
     if request.method == 'GET':
         with sqlite3.connect(DB_FILE) as conn:
@@ -189,7 +197,8 @@ def manage_channels():
 @app.route('/api/channels/<int:cid>', methods=['DELETE'])
 def delete_channel(cid):
     user = session.get('user')
-    if not user: return jsonify({"error": "Unauthorized"}), 401
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
     with sqlite3.connect(DB_FILE) as conn:
         c = conn.cursor()
         c.execute("DELETE FROM channels WHERE id=? AND user_id=?", (cid, user['id']))
@@ -199,7 +208,8 @@ def delete_channel(cid):
 @app.route('/api/posts', methods=['GET', 'POST'])
 def manage_posts():
     user = session.get('user')
-    if not user: return jsonify({"error": "Unauthorized"}), 401
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
 
     if request.method == 'GET':
         with sqlite3.connect(DB_FILE) as conn:
@@ -209,17 +219,35 @@ def manage_posts():
 
     if request.method == 'POST':
         data = request.json
+        channel_id = data.get('channel_id')
+        content = data.get('content', '').strip()
+        buttons = data.get('buttons', '[]')
+        schedule_time = data.get('schedule_time', '').strip()
+
+        if not channel_id or not content:
+            return jsonify({"success": False, "error": "Kanal und Inhalt sind Pflichtfelder."}), 400
+
         with sqlite3.connect(DB_FILE) as conn:
             c = conn.cursor()
+            # SICHERHEIT: Prüfen, ob der Kanal wirklich dem User gehört
+            c.execute("SELECT 1 FROM channels WHERE user_id=? AND channel_id=?", (user['id'], channel_id))
+            if not c.fetchone():
+                return jsonify({"success": False, "error": "Dieser Kanal gehört nicht zu deinem Account."}), 403
+
+            # Sofort-Senden: leeres schedule_time = aktueller Server-Zeitstempel (kein TZ-Problem mehr!)
+            if not schedule_time:
+                schedule_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+
             c.execute("INSERT INTO posts (user_id, channel_id, content, buttons, schedule_time, status) VALUES (?,?,?,?,?, 'pending')",
-                      (user['id'], data['channel_id'], data['content'], data['buttons'], data['schedule_time']))
+                      (user['id'], channel_id, content, buttons, schedule_time))
             conn.commit()
         return jsonify({"success": True})
 
 @app.route('/api/dsgvo_delete', methods=['POST'])
 def dsgvo_delete():
     user = session.get('user')
-    if not user: return jsonify({"error": "Unauthorized"}), 401
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
     with sqlite3.connect(DB_FILE) as conn:
         c = conn.cursor()
         c.execute("DELETE FROM users WHERE id=?", (user['id'],))
@@ -230,6 +258,8 @@ def dsgvo_delete():
     return jsonify({"success": True})
 
 if __name__ == '__main__':
-    if not os.path.exists('templates'): os.makedirs('templates')
+    if not os.path.exists('templates'):
+        os.makedirs('templates')
     # Wichtig: use_reloader=False verhindert, dass der Scheduler doppelt startet
     app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+</DOCUMENT>
