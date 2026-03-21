@@ -1,4 +1,3 @@
-<DOCUMENT filename="app.py">
 import os
 import sqlite3
 import json
@@ -262,4 +261,4 @@ if __name__ == '__main__':
         os.makedirs('templates')
     # Wichtig: use_reloader=False verhindert, dass der Scheduler doppelt startet
     app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
-</DOCUMENT>
+
