@@ -10,14 +10,13 @@
         .tab-content { display: none; }
         .tab-content.active { display: block; animation: fadeIn 0.3s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
         .tg-bubble { background: white; padding: 15px; border-radius: 12px; border-bottom-right-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%; word-wrap: break-word; }
         .tg-button { display: block; text-align: center; background: #e0f2fe; color: #0284c7; padding: 8px; border-radius: 8px; margin-top: 8px; text-decoration: none; font-weight: bold; border: 1px solid #bae6fd; }
     </style>
 </head>
 <body class="bg-slate-50 font-sans h-screen flex overflow-hidden">
 
-    <!-- Sidebar Navigation -->
+    <!-- Sidebar -->
     <aside class="w-64 bg-white border-r border-slate-200 flex flex-col z-10 shrink-0">
         <div class="p-6 border-b border-slate-100">
             <h1 class="text-2xl font-black text-sky-600 flex items-center gap-2"><i class="fa-solid fa-rocket"></i> PostMaster</h1>
@@ -32,7 +31,7 @@
                 </div>
                 <div class="truncate">
                     <p class="font-bold text-sm text-slate-800 truncate">{{ user.first_name }}</p>
-                    <p class="text-xs text-slate-500 truncate">@{{ user.username | default('') }}</p>
+                    <p class="text-xs text-slate-500 truncate">@{{ user.username or '' }}</p>
                 </div>
             </div>
             <button onclick="logout()" class="text-slate-400 hover:text-red-500 p-2" title="Abmelden">
@@ -56,12 +55,10 @@
             {% else %}
             <div class="p-4 mb-4 bg-sky-50 rounded-xl border border-sky-100 text-center">
                 <i class="fa-brands fa-telegram text-4xl text-sky-500 mb-3"></i>
-                <p class="text-sm text-slate-600 mb-4">Bitte logge dich ein, um das Dashboard zu nutzen.</p>
+                <p class="text-sm text-slate-600 mb-4">Bitte logge dich ein</p>
                 <div class="flex justify-center" id="tg-login-container">
                     {% if bot_username %}
                     <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{{ bot_username }}" data-size="large" data-onauth="onTelegramAuth(user)" data-request-access="write"></script>
-                    {% else %}
-                    <p class="text-xs text-red-500 font-bold">Bot Username fehlt im Backend!</p>
                     {% endif %}
                 </div>
             </div>
@@ -80,43 +77,36 @@
         </nav>
     </aside>
 
-    <!-- Main Content Area -->
+    <!-- Main Content -->
     <main class="flex-1 overflow-y-auto bg-slate-50 p-8">
-
         {% if logged_in %}
-        <!-- TAB: EDITOR -->
+        <!-- EDITOR -->
         <div id="tab-editor" class="tab-content max-w-6xl mx-auto">
             <h2 class="text-3xl font-bold text-slate-800 mb-6">Post verfassen</h2>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div class="space-y-6">
-                    <!-- Kanal Auswahl -->
                     <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                         <label class="block text-sm font-bold text-slate-700 mb-2">Ziel-Kanal / Gruppe</label>
-                        <select id="postChannel" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 bg-slate-50">
-                            <option value="">Lade Kanäle...</option>
-                        </select>
+                        <select id="postChannel" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 bg-slate-50"></select>
                     </div>
 
-                    <!-- Textfeld -->
                     <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col h-64">
                         <label class="block text-sm font-bold text-slate-700 mb-2">Nachricht (Markdown)</label>
                         <textarea id="postContent" class="flex-1 w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 resize-none font-mono text-sm" placeholder="# Titel&#10;&#10;**Fett** und *Kursiv*..."></textarea>
                     </div>
 
-                    <!-- Buttons -->
                     <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                         <div class="flex justify-between items-center mb-3">
-                            <label class="block text-sm font-bold text-slate-700">Inline Buttons (Optional)</label>
+                            <label class="block text-sm font-bold text-slate-700">Inline Buttons</label>
                             <button onclick="addButtonField()" class="text-sky-600 text-sm font-bold hover:underline"><i class="fa-solid fa-plus"></i> Hinzufügen</button>
                         </div>
                         <div id="buttonsContainer" class="space-y-3"></div>
                     </div>
 
-                    <!-- Zeitplan -->
                     <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                         <label class="block text-sm font-bold text-slate-700 mb-2">Zeitplan (Senden um)</label>
                         <input type="datetime-local" id="postSchedule" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
-                        <p class="text-xs text-slate-500 mt-2">Leer lassen = SOFORT (innerhalb von 30 Sekunden)</p>
+                        <p class="text-xs text-slate-500 mt-2">Leer lassen = SOFORT</p>
                     </div>
 
                     <button onclick="submitPost()" id="submitBtn" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-4 rounded-xl shadow-md transition-all flex justify-center items-center gap-2">
@@ -129,8 +119,8 @@
                     <div class="sticky top-8 bg-[#8ab4f8]/20 p-8 rounded-3xl h-[600px] flex justify-center items-center overflow-y-auto shadow-inner" style="background-image: url('https://www.transparenttextures.com/patterns/cubes.png');">
                         <div class="max-w-sm w-full">
                             <div class="tg-bubble shadow-xl" id="previewBox">
-                                <div id="previewText" class="text-sm">Deine Live-Vorschau erscheint hier...</div>
-                                <div id="previewButtons" class="mt-3 space-y-2 border-t pt-3 border-slate-100 empty:hidden"></div>
+                                <div id="previewText" class="text-sm">Live-Vorschau...</div>
+                                <div id="previewButtons" class="mt-3 space-y-2 border-t pt-3 border-slate-100"></div>
                             </div>
                         </div>
                     </div>
@@ -138,34 +128,32 @@
             </div>
         </div>
 
-        <!-- TAB: CHANNELS -->
+        <!-- CHANNELS -->
         <div id="tab-channels" class="tab-content max-w-4xl mx-auto">
             <h2 class="text-3xl font-bold text-slate-800 mb-6">Meine Kanäle</h2>
-
             <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mb-8">
                 <h3 class="font-bold text-lg mb-2">Neuen Kanal verknüpfen</h3>
                 <p class="text-sm text-slate-600 mb-4">
-                    1. Füge den Bot <b>@{{ bot_username }}</b> als Administrator hinzu.<br>
-                    2. Achte darauf, dass er das Recht <b>"Nachrichten senden"</b> hat.<br>
-                    3. Gib hier die ID (z.B. <code>-100123456789</code> oder <code>@mein_kanal</code>) ein.
+                    1. Bot <b>@{{ bot_username }}</b> als Admin hinzufügen<br>
+                    2. Recht „Nachrichten senden“ aktivieren<br>
+                    3. ID eingeben (z. B. <code>-100123456789</code>)
                 </p>
                 <div class="flex flex-col md:flex-row gap-3">
-                    <input type="text" id="newChannelId" placeholder="Kanal-ID (z.B. -100...)" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
-                    <input type="text" id="newChannelName" placeholder="Anzeigename (für dich)" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                    <input type="text" id="newChannelId" placeholder="Kanal-ID" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                    <input type="text" id="newChannelName" placeholder="Anzeigename" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
                     <button onclick="addChannel()" id="addChannelBtn" class="bg-slate-800 hover:bg-slate-900 text-white px-6 py-3 rounded-xl font-bold transition-colors">Verknüpfen</button>
                 </div>
                 <div id="channelErrorBox" class="hidden mt-4 p-3 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm font-bold flex items-center gap-2">
                     <i class="fa-solid fa-circle-exclamation"></i> <span id="channelErrorText"></span>
                 </div>
             </div>
-
-            <h3 class="font-bold text-lg mb-4 text-slate-700">Bereits verknüpft</h3>
+            <h3 class="font-bold text-lg mb-4 text-slate-700">Verknüpfte Kanäle</h3>
             <div id="channelsList" class="space-y-3"></div>
         </div>
 
-        <!-- TAB: HISTORY -->
+        <!-- HISTORY -->
         <div id="tab-history" class="tab-content max-w-5xl mx-auto">
-            <h2 class="text-3xl font-bold text-slate-800 mb-6">Historie & Geplante Posts</h2>
+            <h2 class="text-3xl font-bold text-slate-800 mb-6">Historie & Geplant</h2>
             <button onclick="loadHistory()" class="mb-4 text-sky-600 text-sm font-bold hover:underline"><i class="fa-solid fa-rotate-right"></i> Aktualisieren</button>
             <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <table class="w-full text-left border-collapse">
@@ -183,105 +171,77 @@
         </div>
         {% endif %}
 
-        <!-- TAB: HELP (Public) -->
+        <!-- PUBLIC TABS -->
         <div id="tab-help" class="tab-content max-w-3xl mx-auto">
             <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm prose max-w-none">
                 <h1 class="text-3xl font-black text-slate-800 mb-6"><i class="fa-solid fa-circle-question text-sky-500"></i> Hilfe & FAQ</h1>
-                <h3>Bot hinzufügen klappt nicht?</h3>
-                <p>Oftmals liegt es an der ID. Wenn es eine private Gruppe ist, starte die Telegram Web-Version. Die URL zeigt dann oft eine ID wie <code>#123456789</code>. In unserem Tool musst du dann <code>-100123456789</code> eingeben (das <code>-100</code> Präfix ist bei Supergruppen/Kanälen Pflicht).</p>
+                <p>Bot hinzufügen nicht möglich? → In der Telegram-Web-Version die Chat-URL öffnen und die ID ablesen (z. B. #123456789 → <code>-100123456789</code> eingeben).</p>
             </div>
         </div>
-
-        <!-- TAB: LEGAL (Public) -->
         <div id="tab-legal" class="tab-content max-w-3xl mx-auto">
             <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm prose max-w-none">
                 <h1 class="text-3xl font-black text-slate-800 mb-6"><i class="fa-solid fa-scale-balanced text-sky-500"></i> Impressum</h1>
                 <p>Max Mustermann<br>Musterstraße 123<br>12345 Musterstadt</p>
             </div>
         </div>
-
-        <!-- TAB: PRIVACY (Public) -->
         <div id="tab-privacy" class="tab-content max-w-3xl mx-auto">
             <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm prose max-w-none">
                 <h1 class="text-3xl font-black text-slate-800 mb-6"><i class="fa-solid fa-shield-halved text-sky-500"></i> Datenschutz & DSGVO</h1>
                 {% if logged_in %}
                 <div class="mt-10 p-6 bg-red-50 border border-red-200 rounded-xl">
-                    <h3 class="text-red-700 mt-0 mb-2"><i class="fa-solid fa-triangle-exclamation"></i> Recht auf Vergessenwerden</h3>
-                    <p class="text-red-600 text-sm mb-4">Gemäß Art. 17 DSGVO werden mit Klick alle Daten physisch gelöscht.</p>
-                    <button onclick="deleteAccount()" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg">
-                        Alle meine Daten dauerhaft löschen
-                    </button>
+                    <h3 class="text-red-700"><i class="fa-solid fa-triangle-exclamation"></i> Recht auf Vergessenwerden</h3>
+                    <button onclick="deleteAccount()" class="mt-4 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg">Alle meine Daten dauerhaft löschen</button>
                 </div>
                 {% endif %}
             </div>
         </div>
-
     </main>
 
     <script>
-        // --- AUTH LOGIC ---
         function onTelegramAuth(user) {
-            fetch('/api/auth', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(user)
-            }).then(res => res.json()).then(data => {
-                if (data.success) window.location.reload();
-                else alert('Login fehlgeschlagen!');
-            });
+            fetch('/api/auth', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(user) })
+                .then(res => res.json())
+                .then(data => { if (data.success) window.location.reload(); else alert('Login fehlgeschlagen!'); });
         }
 
         function logout() {
-            fetch('/api/logout', {method: 'POST'}).then(() => window.location.reload());
+            fetch('/api/logout', { method: 'POST' }).then(() => window.location.reload());
         }
 
-        // --- NAVIGATION LOGIC ---
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('[id^="nav-"]').forEach(el => {
-                el.classList.remove('bg-sky-50', 'text-sky-600', 'bg-slate-100');
-            });
+            document.querySelectorAll('[id^="nav-"]').forEach(el => el.classList.remove('bg-sky-50', 'text-sky-600', 'bg-slate-100'));
 
             const tab = document.getElementById('tab-' + tabId);
             const navBtn = document.getElementById('nav-' + tabId);
-            if(tab) tab.classList.add('active');
-
-            if(navBtn) {
-                if(['editor', 'channels', 'history'].includes(tabId)) navBtn.classList.add('bg-sky-50', 'text-sky-600');
+            if (tab) tab.classList.add('active');
+            if (navBtn) {
+                if (['editor','channels','history'].includes(tabId)) navBtn.classList.add('bg-sky-50', 'text-sky-600');
                 else navBtn.classList.add('bg-slate-100');
             }
 
             {% if logged_in %}
-            if(tabId === 'channels') loadChannels();
-            if(tabId === 'editor') populateEditorChannels();
-            if(tabId === 'history') loadHistory();
+            if (tabId === 'channels') loadChannels();
+            if (tabId === 'editor') populateEditorChannels();
+            if (tabId === 'history') loadHistory();
             {% endif %}
         }
 
         {% if logged_in %}
-
-        // --- CHANNELS ---
         async function loadChannels() {
-            try {
-                const res = await fetch('/api/channels');
-                const channels = await res.json();
-                const list = document.getElementById('channelsList');
-                if(channels.length === 0) {
-                    list.innerHTML = '<p class="text-slate-500 italic p-4 bg-white rounded-xl border border-slate-200">Noch keine Kanäle verknüpft.</p>';
-                    return;
-                }
-                list.innerHTML = channels.map(ch => `
+            const res = await fetch('/api/channels');
+            const channels = await res.json();
+            const list = document.getElementById('channelsList');
+            list.innerHTML = channels.length === 0
+                ? '<p class="text-slate-500 italic p-4 bg-white rounded-xl border border-slate-200">Noch keine Kanäle verknüpft.</p>'
+                : channels.map(ch => `
                     <div class="flex justify-between items-center p-4 bg-white border border-slate-200 shadow-sm rounded-xl">
                         <div>
                             <p class="font-bold text-slate-800">${ch.channel_name}</p>
                             <p class="text-xs text-slate-500 font-mono">${ch.channel_id}</p>
                         </div>
                         <button onclick="deleteChannel(${ch.id})" class="text-slate-400 hover:text-red-500 p-2"><i class="fa-solid fa-trash"></i></button>
-                    </div>
-                `).join('');
-            } catch (e) {
-                console.error("Fehler beim Laden der Kanäle", e);
-            }
+                    </div>`).join('');
         }
 
         async function addChannel() {
@@ -291,58 +251,46 @@
             const cId = document.getElementById('newChannelId').value.trim();
             const cName = document.getElementById('newChannelName').value.trim();
 
-            if(!cId || !cName) {
-                errText.innerText = "Bitte ID und Name ausfüllen.";
+            if (!cId || !cName) {
+                errText.innerText = "ID und Name ausfüllen!";
                 errBox.classList.remove('hidden');
                 return;
             }
 
-            errBox.classList.add('hidden');
-            btn.disabled = true;
-            btn.innerText = 'Prüfe...';
-            btn.classList.add('opacity-50');
-
+            btn.disabled = true; btn.innerText = 'Prüfe...';
             try {
                 const res = await fetch('/api/channels', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ channel_id: cId, channel_name: cName })
                 });
                 const data = await res.json();
-
-                if(data.success) {
+                if (data.success) {
                     document.getElementById('newChannelId').value = '';
                     document.getElementById('newChannelName').value = '';
                     loadChannels();
                 } else {
-                    errText.innerText = data.error || "Unbekannter Fehler beim Verknüpfen.";
+                    errText.innerText = data.error || "Fehler";
                     errBox.classList.remove('hidden');
                 }
-            } catch (e) {
-                errText.innerText = "Netzwerkfehler zum Server.";
-                errBox.classList.remove('hidden');
             } finally {
-                btn.disabled = false;
-                btn.innerText = 'Verknüpfen';
-                btn.classList.remove('opacity-50');
+                btn.disabled = false; btn.innerText = 'Verknüpfen';
             }
         }
 
         async function deleteChannel(id) {
-            if(!confirm('Kanal wirklich entfernen?')) return;
-            await fetch('/api/channels/' + id, {method: 'DELETE'});
+            if (!confirm('Kanal entfernen?')) return;
+            await fetch('/api/channels/' + id, { method: 'DELETE' });
             loadChannels();
         }
 
-        // --- EDITOR & PREVIEW ---
         async function populateEditorChannels() {
-            try {
-                const sel = document.getElementById('postChannel');
-                const res = await fetch('/api/channels');
-                const channels = await res.json();
-                sel.innerHTML = channels.length === 0
-                    ? '<option value="" disabled selected>Bitte erst Kanal anlegen!</option>'
-                    : channels.map(ch => `<option value="${ch.channel_id}">${ch.channel_name}</option>`).join('');
-            } catch(e) { console.error(e); }
+            const sel = document.getElementById('postChannel');
+            const res = await fetch('/api/channels');
+            const channels = await res.json();
+            sel.innerHTML = channels.length === 0
+                ? '<option value="" disabled selected>Bitte zuerst Kanal anlegen!</option>'
+                : channels.map(ch => `<option value="${ch.channel_id}">${ch.channel_name}</option>`).join('');
         }
 
         function addButtonField() {
@@ -352,27 +300,24 @@
             div.innerHTML = `
                 <input type="text" placeholder="Button Text" class="btn-text flex-1 p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-sky-500">
                 <input type="url" placeholder="https://..." class="btn-url flex-1 p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-sky-500">
-                <button onclick="this.parentElement.remove(); renderLocalPreview();" class="text-red-500 bg-red-50 p-3 rounded-xl hover:bg-red-100"><i class="fa-solid fa-xmark"></i></button>
+                <button onclick="this.parentElement.remove(); renderLocalPreview()" class="text-red-500 bg-red-50 p-3 rounded-xl hover:bg-red-100"><i class="fa-solid fa-xmark"></i></button>
             `;
             container.appendChild(div);
-            div.querySelectorAll('input').forEach(inp => inp.addEventListener('input', renderLocalPreview));
+            div.querySelectorAll('input').forEach(i => i.addEventListener('input', renderLocalPreview));
         }
 
         function getButtonsData() {
-            let btns = [];
+            const btns = [];
             document.querySelectorAll('.button-row').forEach(row => {
                 const text = row.querySelector('.btn-text').value.trim();
                 const url = row.querySelector('.btn-url').value.trim();
-                if(text && url) btns.push({text, url});
+                if (text && url) btns.push({text, url});
             });
             return btns;
         }
 
-        // LOKALE VORSCHAU (exakt wie Backend-HTML)
         function renderLocalPreview() {
             let text = document.getElementById('postContent').value || '';
-
-            // XSS Protection & Telegram Markdown to HTML
             text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             text = text.replace(/^#\s+(.*)$/gm, '<b>🚀 $1</b>');
             text = text.replace(/^##\s+(.*)$/gm, '<b>📍 $1</b>');
@@ -381,112 +326,87 @@
             text = text.replace(/```([\s\S]*?)```/g, '<pre>$1</pre>');
             text = text.replace(/\n/g, '<br>');
 
-            document.getElementById('previewText').innerHTML = text || 'Deine Live-Vorschau erscheint hier...';
+            document.getElementById('previewText').innerHTML = text || 'Live-Vorschau...';
 
             const btnContainer = document.getElementById('previewButtons');
-            btnContainer.innerHTML = '';
-            getButtonsData().forEach(btn => {
-                btnContainer.innerHTML += `<div class="tg-button">${btn.text}</div>`;
-            });
+            btnContainer.innerHTML = getButtonsData().map(b => `<div class="tg-button">${b.text}</div>`).join('');
         }
 
-        // Event Listener für Textarea
         document.getElementById('postContent').addEventListener('input', renderLocalPreview);
 
         async function submitPost() {
             const btn = document.getElementById('submitBtn');
             const channelId = document.getElementById('postChannel').value;
-            const content = document.getElementById('postContent').value;
-            let scheduleInput = document.getElementById('postSchedule').value;
+            const content = document.getElementById('postContent').value.trim();
+            let schedule = document.getElementById('postSchedule').value;
 
-            if(!channelId) return alert('Bitte wähle einen Kanal aus!');
-            if(!content.trim()) return alert('Der Text darf nicht leer sein!');
+            if (!channelId) return alert('Kanal auswählen!');
+            if (!content) return alert('Text eingeben!');
 
-            // Leeres Feld = SOFORT → Backend setzt Server-Zeit
-            const scheduleFormatted = scheduleInput ? scheduleInput.replace('T', ' ') : '';
-
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sende...';
+            btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Speichere...';
 
             try {
                 const res = await fetch('/api/posts', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         channel_id: channelId,
                         content: content,
                         buttons: JSON.stringify(getButtonsData()),
-                        schedule_time: scheduleFormatted
+                        schedule_time: schedule ? schedule.replace('T', ' ') : ''
                     })
                 });
-
                 const data = await res.json();
-                if(data.success) {
-                    alert('Post erfolgreich gespeichert!');
+                if (data.success) {
+                    alert('✅ Post gespeichert!');
                     document.getElementById('postContent').value = '';
                     document.getElementById('buttonsContainer').innerHTML = '';
                     document.getElementById('postSchedule').value = '';
                     renderLocalPreview();
                     switchTab('history');
                 } else {
-                    alert('Fehler vom Server: ' + (data.error || 'Unbekannt'));
+                    alert('❌ ' + (data.error || 'Unbekannter Fehler'));
                 }
-            } catch(e) {
-                alert('Netzwerkfehler!');
+            } catch (e) {
+                alert('Netzwerkfehler');
             } finally {
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Absenden / Planen';
+                btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Absenden / Planen';
             }
         }
 
-        // --- HISTORY ---
         async function loadHistory() {
             const tbody = document.getElementById('historyTableBody');
-            tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center">Lade Historie...</td></tr>';
-
+            tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center">Lade...</td></tr>';
             try {
                 const res = await fetch('/api/posts');
                 const posts = await res.json();
-
-                if(posts.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-slate-500">Noch keine Posts vorhanden.</td></tr>';
+                if (posts.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-slate-500">Keine Posts vorhanden.</td></tr>';
                     return;
                 }
                 tbody.innerHTML = posts.map(p => {
-                    let statusBadge = p.status === 'pending' ? '<span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs font-bold"><i class="fa-regular fa-clock"></i> Wartet</span>' :
-                                      p.status === 'sent' ? '<span class="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-bold"><i class="fa-solid fa-check"></i> Gesendet</span>' :
-                                      '<span class="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-bold"><i class="fa-solid fa-triangle-exclamation"></i> Fehler</span>';
-
-                    let shortContent = p.content.length > 50 ? p.content.substring(0, 50) + '...' : p.content;
-
-                    return `
-                    <tr class="hover:bg-slate-50 transition-colors">
-                        <td class="p-4 text-sm font-medium text-slate-700 whitespace-nowrap">${p.schedule_time}</td>
-                        <td class="p-4 text-sm text-sky-600 font-mono">${p.channel_id}</td>
-                        <td class="p-4 text-sm text-slate-600">${shortContent}</td>
-                        <td class="p-4 whitespace-nowrap">${statusBadge}</td>
-                    </tr>`;
+                    const status = p.status === 'pending' ? '<span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs font-bold">Wartet</span>' :
+                                  p.status === 'sent' ? '<span class="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-bold">Gesendet</span>' :
+                                  '<span class="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-bold">Fehler</span>';
+                    const short = p.content.length > 60 ? p.content.substring(0, 60) + '...' : p.content;
+                    return `<tr class="hover:bg-slate-50"><td class="p-4">${p.schedule_time}</td><td class="p-4 text-sky-600 font-mono">${p.channel_id}</td><td class="p-4">${short}</td><td class="p-4">${status}</td></tr>`;
                 }).join('');
-            } catch(e) {
-                tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-red-500">Fehler beim Laden der Historie.</td></tr>';
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-red-500 text-center">Fehler beim Laden</td></tr>';
             }
         }
 
-        // --- DSGVO ---
         async function deleteAccount() {
-            if(confirm('Möchten Sie Ihren Account und ALLE Daten wirklich unwiderruflich löschen?')) {
+            if (confirm('Wirklich ALLE Daten unwiderruflich löschen?')) {
                 await fetch('/api/dsgvo_delete', { method: 'POST' });
                 window.location.reload();
             }
         }
 
-        // Initialisierung beim Seitenstart
         switchTab('editor');
-
         {% else %}
-        // Wenn nicht eingeloggt, immer Hilfe anzeigen
         switchTab('help');
         {% endif %}
-
     </script>
 </body>
 </html>

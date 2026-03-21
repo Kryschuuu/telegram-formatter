@@ -20,7 +20,7 @@ app.secret_key = SECRET_KEY
 # Bot nur initialisieren, wenn ein echtes Token da ist
 bot = telebot.TeleBot(TOKEN) if TOKEN and TOKEN != "DEIN_BOT_TOKEN_HIER" else None
 
-# Absolute Pfade für die Datenbank, um Thread-Fehler zu vermeiden
+# Absolute Pfade für die Datenbank (Thread-Sicherheit)
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_FILE = os.path.join(BASE_DIR, 'saas_database.db')
 
@@ -41,6 +41,7 @@ init_db()
 
 # --- HILFSFUNKTIONEN ---
 def verify_telegram_auth(data):
+    """Exakte Telegram-Login-Hash-Verifizierung (offiziell & DSGVO-konform)"""
     if not TOKEN or TOKEN == "DEIN_BOT_TOKEN_HIER":
         return False
     secret_key = hashlib.sha256(TOKEN.encode()).digest()
@@ -61,42 +62,36 @@ def format_to_tg_html(text):
     return text
 
 def check_bot_permissions(chat_id):
-    """Prüft strikt und fehlerfrei, ob der Bot posten darf."""
+    """Strikte & stabile Rechte-Prüfung für Kanäle & Gruppen"""
     if not bot:
-        return False, "Bot-Token ist nicht im System konfiguriert."
+        return False, "Bot-Token ist nicht konfiguriert."
 
     try:
-        # Telegram verlangt bei IDs (wie -100...) oft echte Integers
-        try:
-            chat_id_val = int(chat_id)
-        except ValueError:
-            chat_id_val = chat_id  # Fallback für Namen wie @mein_kanal
-
+        chat_id_val = int(chat_id) if str(chat_id).lstrip('-').isdigit() else chat_id
         chat = bot.get_chat(chat_id_val)
         me = bot.get_me()
         member = bot.get_chat_member(chat_id_val, me.id)
 
         if chat.type == 'channel':
             if member.status in ['administrator', 'creator'] and member.can_post_messages:
-                return True, "Kanal erfolgreich geprüft."
-            return False, "Bot ist im Kanal, hat aber nicht das Recht 'Nachrichten senden'."
+                return True, "OK"
+            return False, "Bot hat nicht das Recht 'Nachrichten senden'."
         else:
-            # Für Gruppen & Supergroups: Admin oder Member (je nach Gruppeneinstellung)
             if member.status in ['administrator', 'creator', 'member']:
-                return True, "Gruppe/Supergroup erfolgreich geprüft."
-            return False, "Bot hat keine Rechte in dieser Gruppe."
+                return True, "OK"
+            return False, "Bot hat keine ausreichenden Rechte."
 
     except telebot.apihelper.ApiTelegramException as e:
         err = e.description.lower()
         if "chat not found" in err:
-            return False, "Kanal/Gruppe nicht gefunden. Stimmt die ID? Ist der Bot wirklich hinzugefügt?"
+            return False, "Chat nicht gefunden. Bot wirklich als Admin hinzugefügt?"
         if "not a member" in err or "kicked" in err or "forbidden" in err:
-            return False, "Der Bot wurde nicht zum Kanal/Gruppe hinzugefügt oder wurde blockiert."
-        return False, f"Telegram blockiert: {e.description}"
+            return False, "Bot ist nicht im Chat oder wurde entfernt."
+        return False, f"Telegram-Fehler: {e.description}"
     except Exception as e:
-        return False, f"Systemfehler bei der Prüfung: {str(e)}"
+        return False, f"Systemfehler: {str(e)}"
 
-# --- SCHEDULER (HINTERGRUND-PROZESS) ---
+# --- SCHEDULER ---
 def check_scheduled_posts():
     if not bot:
         return
@@ -107,15 +102,11 @@ def check_scheduled_posts():
         c.execute("SELECT id, channel_id, content, buttons FROM posts WHERE status='pending' AND schedule_time <= ?", (now,))
         due_posts = c.fetchall()
 
-        for post in due_posts:
-            post_id, channel_id, content, buttons_json = post
+        for post_id, channel_id, content, buttons_json in due_posts:
             try:
-                # Telegram ID Typ anpassen
                 cid = int(channel_id) if str(channel_id).lstrip('-').isdigit() else channel_id
-
                 html_content = format_to_tg_html(content)
 
-                # Inline-Buttons: immer 1 pro Zeile (besser für Conversion)
                 markup = telebot.types.InlineKeyboardMarkup(row_width=1)
                 if buttons_json and buttons_json != "[]":
                     for btn in json.loads(buttons_json):
@@ -124,7 +115,7 @@ def check_scheduled_posts():
                 bot.send_message(chat_id=cid, text=html_content, parse_mode='HTML', reply_markup=markup)
                 c.execute("UPDATE posts SET status='sent' WHERE id=?", (post_id,))
             except Exception as e:
-                print(f"Fehler beim Senden von Post {post_id}: {e}")
+                print(f"Sendefehler Post {post_id}: {e}")
                 c.execute("UPDATE posts SET status='failed' WHERE id=?", (post_id,))
         conn.commit()
 
@@ -170,23 +161,21 @@ def manage_channels():
 
     if request.method == 'POST':
         data = request.json
-        channel_id = data.get('channel_id', '').strip()
+        channel_id = str(data.get('channel_id', '')).strip()
         channel_name = data.get('channel_name', '').strip()
 
         if not channel_id or not channel_name:
-            return jsonify({"success": False, "error": "Bitte ID und Name angeben."}), 400
+            return jsonify({"success": False, "error": "ID und Name erforderlich"}), 400
 
-        # Kanal-Prüfung bei Telegram
         success, msg = check_bot_permissions(channel_id)
         if not success:
             return jsonify({"success": False, "error": msg}), 400
 
         with sqlite3.connect(DB_FILE) as conn:
             c = conn.cursor()
-            # Prüfen ob bereits verknüpft
             c.execute("SELECT id FROM channels WHERE user_id=? AND channel_id=?", (user['id'], channel_id))
             if c.fetchone():
-                return jsonify({"success": False, "error": "Kanal ist bereits verknüpft."}), 400
+                return jsonify({"success": False, "error": "Kanal bereits verknüpft"}), 400
 
             c.execute("INSERT INTO channels (user_id, channel_id, channel_name) VALUES (?, ?, ?)",
                       (user['id'], channel_id, channel_name))
@@ -224,16 +213,16 @@ def manage_posts():
         schedule_time = data.get('schedule_time', '').strip()
 
         if not channel_id or not content:
-            return jsonify({"success": False, "error": "Kanal und Inhalt sind Pflichtfelder."}), 400
+            return jsonify({"success": False, "error": "Kanal und Inhalt erforderlich"}), 400
 
         with sqlite3.connect(DB_FILE) as conn:
             c = conn.cursor()
-            # SICHERHEIT: Prüfen, ob der Kanal wirklich dem User gehört
+            # SICHERHEIT: Nur eigener Kanal darf verwendet werden
             c.execute("SELECT 1 FROM channels WHERE user_id=? AND channel_id=?", (user['id'], channel_id))
             if not c.fetchone():
-                return jsonify({"success": False, "error": "Dieser Kanal gehört nicht zu deinem Account."}), 403
+                return jsonify({"success": False, "error": "Kanal gehört nicht zu dir"}), 403
 
-            # Sofort-Senden: leeres schedule_time = aktueller Server-Zeitstempel (kein TZ-Problem mehr!)
+            # SOFORT-SENDEN: Server-Zeit verwenden (keine Zeitzonen-Probleme)
             if not schedule_time:
                 schedule_time = datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -259,6 +248,4 @@ def dsgvo_delete():
 if __name__ == '__main__':
     if not os.path.exists('templates'):
         os.makedirs('templates')
-    # Wichtig: use_reloader=False verhindert, dass der Scheduler doppelt startet
     app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
-
