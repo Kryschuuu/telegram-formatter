@@ -2,75 +2,481 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PostMaster Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .tg-bubble { background: white; padding: 15px; border-radius: 12px; border-bottom-right-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%; word-wrap: break-word; }
+        .tg-button { display: block; text-align: center; background: #e0f2fe; color: #0284c7; padding: 8px; border-radius: 8px; margin-top: 8px; text-decoration: none; font-weight: bold; border: 1px solid #bae6fd; }
+    </style>
 </head>
-<body class="bg-slate-100 font-sans h-screen flex">
+<body class="bg-slate-50 font-sans h-screen flex overflow-hidden">
 
-    <nav class="w-64 bg-white border-r p-6 flex flex-col">
-        <h1 class="text-xl font-black text-sky-600 mb-8"><i class="fa-solid fa-rocket"></i> PostMaster</h1>
-        {% if logged_in %}
-            <button onclick="showSection('editor')" class="text-left p-3 hover:bg-sky-50 rounded-lg mb-2"><i class="fa-solid fa-pen"></i> Editor</button>
-            <button onclick="showSection('channels')" class="text-left p-3 hover:bg-sky-50 rounded-lg mb-2"><i class="fa-solid fa-tower-broadcast"></i> Kanäle</button>
-        {% else %}
-            <div id="tg-login-container">
-                <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{{ bot_username }}" data-size="large" data-onauth="onTelegramAuth(user)"></script>
-            </div>
-        {% endif %}
-    </nav>
-
-    <main class="flex-1 p-10 overflow-y-auto">
-        <div id="section-channels" class="max-w-2xl mx-auto">
-            <h2 class="text-2xl font-bold mb-6">Kanäle & Gruppen</h2>
-            <div class="bg-white p-6 rounded-2xl shadow-sm border mb-6">
-                <p class="text-sm text-slate-500 mb-4">WICHTIG: Füge @{{ bot_username }} als Admin hinzu, bevor du die ID speicherst.</p>
-                <div class="space-y-4">
-                    <input type="text" id="c_id" placeholder="ID (z.B. -100...)" class="w-full p-3 border rounded-xl">
-                    <input type="text" id="c_name" placeholder="Name (z.B. Meine Gruppe)" class="w-full p-3 border rounded-xl">
-                    <button onclick="addChannel()" id="addBtn" class="w-full bg-sky-600 text-white font-bold py-3 rounded-xl hover:bg-sky-700">Kanal hinzufügen</button>
-                </div>
-                <div id="error-box" class="hidden mt-4 p-3 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm"></div>
-            </div>
-            <div id="channel-list" class="space-y-2"></div>
+    <!-- Sidebar Navigation -->
+    <aside class="w-64 bg-white border-r border-slate-200 flex flex-col z-10 shrink-0">
+        <div class="p-6 border-b border-slate-100">
+            <h1 class="text-2xl font-black text-sky-600 flex items-center gap-2"><i class="fa-solid fa-rocket"></i> PostMaster</h1>
+            <p class="text-xs text-slate-400 mt-1 uppercase font-bold tracking-wider">Professional Edition</p>
         </div>
+
+        {% if logged_in %}
+        <div class="p-4 border-b border-slate-100 bg-sky-50 flex items-center justify-between">
+            <div class="flex items-center gap-3 overflow-hidden">
+                <div class="w-10 h-10 rounded-full bg-sky-200 flex items-center justify-center text-sky-700 font-bold shrink-0">
+                    {{ user.first_name[0] }}
+                </div>
+                <div class="truncate">
+                    <p class="font-bold text-sm text-slate-800 truncate">{{ user.first_name }}</p>
+                    <p class="text-xs text-slate-500 truncate">@{{ user.username }}</p>
+                </div>
+            </div>
+            <button onclick="logout()" class="text-slate-400 hover:text-red-500 p-2" title="Abmelden">
+                <i class="fa-solid fa-arrow-right-from-bracket"></i>
+            </button>
+        </div>
+        {% endif %}
+
+        <nav class="flex-1 p-4 space-y-1 overflow-y-auto">
+            {% if logged_in %}
+            <div class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 mt-2">Dashboard</div>
+            <button onclick="switchTab('editor')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium text-slate-600 hover:bg-sky-50 hover:text-sky-600 transition-colors" id="nav-editor">
+                <i class="fa-solid fa-pen-nib w-5 text-center"></i> Neuer Post
+            </button>
+            <button onclick="switchTab('channels')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium text-slate-600 hover:bg-sky-50 hover:text-sky-600 transition-colors" id="nav-channels">
+                <i class="fa-solid fa-tower-broadcast w-5 text-center"></i> Meine Kanäle
+            </button>
+            <button onclick="switchTab('history')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium text-slate-600 hover:bg-sky-50 hover:text-sky-600 transition-colors" id="nav-history">
+                <i class="fa-solid fa-clock-rotate-left w-5 text-center"></i> Historie & Geplant
+            </button>
+            {% else %}
+            <div class="p-4 mb-4 bg-sky-50 rounded-xl border border-sky-100 text-center">
+                <i class="fa-brands fa-telegram text-4xl text-sky-500 mb-3"></i>
+                <p class="text-sm text-slate-600 mb-4">Bitte logge dich ein, um das Dashboard zu nutzen.</p>
+                <div class="flex justify-center">
+                    <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{{ bot_username }}" data-size="large" data-onauth="onTelegramAuth(user)" data-request-access="write"></script>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 mt-6">Informationen</div>
+            <button onclick="switchTab('help')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium text-slate-600 hover:bg-slate-100 transition-colors" id="nav-help">
+                <i class="fa-solid fa-circle-question w-5 text-center"></i> Hilfe & FAQ
+            </button>
+            <button onclick="switchTab('legal')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium text-slate-600 hover:bg-slate-100 transition-colors" id="nav-legal">
+                <i class="fa-solid fa-scale-balanced w-5 text-center"></i> Impressum
+            </button>
+            <button onclick="switchTab('privacy')" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-medium text-slate-600 hover:bg-slate-100 transition-colors" id="nav-privacy">
+                <i class="fa-solid fa-shield-halved w-5 text-center"></i> Datenschutz
+            </button>
+        </nav>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 overflow-y-auto bg-slate-50 p-8">
+
+        {% if logged_in %}
+        <!-- TAB: EDITOR -->
+        <div id="tab-editor" class="tab-content active max-w-6xl mx-auto">
+            <h2 class="text-3xl font-bold text-slate-800 mb-6">Post verfassen</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div class="space-y-6">
+                    <!-- Kanal Auswahl -->
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Ziel-Kanal / Gruppe</label>
+                        <select id="postChannel" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 bg-slate-50">
+                            <option value="">Lade Kanäle...</option>
+                        </select>
+                    </div>
+
+                    <!-- Textfeld -->
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col h-64">
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Nachricht (Markdown)</label>
+                        <textarea id="postContent" oninput="updatePreview()" class="flex-1 w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500 resize-none font-mono text-sm" placeholder="# Titel\n\n**Fett** und *Kursiv*..."></textarea>
+                    </div>
+
+                    <!-- Buttons -->
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <div class="flex justify-between items-center mb-3">
+                            <label class="block text-sm font-bold text-slate-700">Inline Buttons (Optional)</label>
+                            <button onclick="addButtonField()" class="text-sky-600 text-sm font-bold hover:underline"><i class="fa-solid fa-plus"></i> Button hinzufügen</button>
+                        </div>
+                        <div id="buttonsContainer" class="space-y-3"></div>
+                    </div>
+
+                    <!-- Zeitplan -->
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Zeitplan (Senden um)</label>
+                        <input type="datetime-local" id="postSchedule" class="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                        <p class="text-xs text-slate-500 mt-2">Leer lassen, um sofort zu senden.</p>
+                    </div>
+
+                    <button onclick="submitPost()" id="submitBtn" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-4 rounded-xl shadow-md transition-all flex justify-center items-center gap-2">
+                        <i class="fa-solid fa-paper-plane"></i> Absenden / Planen
+                    </button>
+                </div>
+
+                <!-- Vorschau -->
+                <div>
+                    <div class="sticky top-8 bg-[#8ab4f8]/20 p-8 rounded-3xl h-[600px] flex justify-center items-center overflow-y-auto shadow-inner" style="background-image: url('https://www.transparenttextures.com/patterns/cubes.png');">
+                        <div class="max-w-sm w-full">
+                            <div class="tg-bubble shadow-xl" id="previewBox">
+                                <div id="previewText" class="text-sm">Deine Live-Vorschau erscheint hier...</div>
+                                <div id="previewButtons" class="mt-3 space-y-2 border-t pt-3 border-slate-100 empty:hidden"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: CHANNELS -->
+        <div id="tab-channels" class="tab-content max-w-4xl mx-auto">
+            <h2 class="text-3xl font-bold text-slate-800 mb-6">Meine Kanäle</h2>
+
+            <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mb-8">
+                <h3 class="font-bold text-lg mb-2">Neuen Kanal verknüpfen</h3>
+                <p class="text-sm text-slate-600 mb-4">
+                    1. Füge den Bot <b>@{{ bot_username }}</b> als Administrator zu deiner Gruppe/Kanal hinzu.<br>
+                    2. Gib unten die ID (z.B. <code>-100123456789</code> oder <code>@mein_kanal</code>) ein.
+                </p>
+                <div class="flex flex-col md:flex-row gap-3">
+                    <input type="text" id="newChannelId" placeholder="Kanal-ID" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                    <input type="text" id="newChannelName" placeholder="Anzeigename" class="flex-1 p-3 border border-slate-300 rounded-xl outline-none focus:border-sky-500">
+                    <button onclick="addChannel()" id="addChannelBtn" class="bg-slate-800 hover:bg-slate-900 text-white px-6 py-3 rounded-xl font-bold">Hinzufügen</button>
+                </div>
+                <div id="channelErrorBox" class="hidden mt-4 p-3 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm font-medium"></div>
+            </div>
+
+            <h3 class="font-bold text-lg mb-4 text-slate-700">Verknüpfte Kanäle</h3>
+            <div id="channelsList" class="space-y-3"></div>
+        </div>
+
+        <!-- TAB: HISTORY -->
+        <div id="tab-history" class="tab-content max-w-5xl mx-auto">
+            <h2 class="text-3xl font-bold text-slate-800 mb-6">Historie & Geplante Posts</h2>
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-slate-50 border-b border-slate-200">
+                            <th class="p-4 font-bold text-slate-600">Zeitpunkt</th>
+                            <th class="p-4 font-bold text-slate-600">Kanal</th>
+                            <th class="p-4 font-bold text-slate-600">Inhalt (Auszug)</th>
+                            <th class="p-4 font-bold text-slate-600">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody" class="divide-y divide-slate-100"></tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- TAB: HELP (Public) -->
+        <div id="tab-help" class="tab-content max-w-3xl mx-auto {% if not logged_in %}active{% endif %}">
+            <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm prose max-w-none">
+                <h1 class="text-3xl font-black text-slate-800 mb-6"><i class="fa-solid fa-circle-question text-sky-500"></i> Hilfe & FAQ</h1>
+
+                <h3>Wie verknüpfe ich einen Kanal?</h3>
+                <ol>
+                    <li>Öffne deinen Telegram Kanal oder deine Gruppe.</li>
+                    <li>Gehe in die Einstellungen -> Administratoren.</li>
+                    <li>Füge <b>@{{ bot_username }}</b> als Admin hinzu (Recht: "Nachrichten senden" ist zwingend erforderlich).</li>
+                    <li>Kopiere die ID des Kanals (z.B. aus der URL im Telegram Web Client, meist beginnend mit <code>-100</code>).</li>
+                    <li>Füge sie im Tab "Meine Kanäle" hinzu.</li>
+                </ol>
+
+                <h3>Wie formatiere ich meinen Text?</h3>
+                <p>Wir nutzen ein einfaches Markdown-System, das direkt für Telegram optimiert wird:</p>
+                <ul>
+                    <li><code># Überschrift</code> wird zu <b>🚀 Überschrift</b></li>
+                    <li><code>## Untertitel</code> wird zu <b>📍 Untertitel</b></li>
+                    <li><code>**Fetter Text**</code> wird zu <b>Fetter Text</b></li>
+                    <li><code>*Kursiver Text*</code> wird zu <i>Kursiver Text</i></li>
+                    <li>Link-Buttons können bequem über das Formular unterhalb des Textes hinzugefügt werden.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- TAB: LEGAL (Public) -->
+        <div id="tab-legal" class="tab-content max-w-3xl mx-auto">
+            <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm prose max-w-none">
+                <h1 class="text-3xl font-black text-slate-800 mb-6"><i class="fa-solid fa-scale-balanced text-sky-500"></i> Impressum & Disclaimer</h1>
+
+                <h3>Angaben gemäß § 5 TMG</h3>
+                <p>
+                    Max Mustermann<br>
+                    PostMaster Pro Software Solutions<br>
+                    Musterstraße 123<br>
+                    12345 Musterstadt<br>
+                </p>
+                <p>
+                    <b>Kontakt:</b><br>
+                    Telefon: +49 (0) 123 44 55 66<br>
+                    E-Mail: info@postmaster-pro.test
+                </p>
+
+                <h3>Haftungsausschluss (Disclaimer)</h3>
+                <p><b>Haftung für Inhalte:</b> Als Diensteanbieter sind wir gemäß § 7 Abs.1 TMG für eigene Inhalte auf diesen Seiten nach den allgemeinen Gesetzen verantwortlich. Wir übernehmen jedoch keine Gewähr für die Richtigkeit, Vollständigkeit und Aktualität der von Nutzern über unser Tool versendeten Inhalte.</p>
+                <p><b>Haftung für Links:</b> Unser Angebot enthält unter Umständen Links zu externen Websites Dritter, auf deren Inhalte wir keinen Einfluss haben. Deshalb können wir für diese fremden Inhalte auch keine Gewähr übernehmen.</p>
+            </div>
+        </div>
+
+        <!-- TAB: PRIVACY (Public) -->
+        <div id="tab-privacy" class="tab-content max-w-3xl mx-auto">
+            <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm prose max-w-none">
+                <h1 class="text-3xl font-black text-slate-800 mb-6"><i class="fa-solid fa-shield-halved text-sky-500"></i> Datenschutz & DSGVO</h1>
+
+                <h3>Datenschutzerklärung</h3>
+                <p>Wir nehmen den Schutz Ihrer persönlichen Daten sehr ernst. Wir behandeln Ihre personenbezogenen Daten vertraulich und entsprechend der gesetzlichen Datenschutzvorschriften (DSGVO) sowie dieser Datenschutzerklärung.</p>
+
+                <h4>Welche Daten wir speichern:</h4>
+                <ul>
+                    <li>Ihre Telegram-ID, Benutzername und Vorname (zur Authentifizierung).</li>
+                    <li>Die IDs und Namen der von Ihnen verknüpften Kanäle.</li>
+                    <li>Die Inhalte der Posts, die Sie über unsere Plattform planen, bis zu deren Versand und für die Historie.</li>
+                </ul>
+
+                {% if logged_in %}
+                <div class="mt-10 p-6 bg-red-50 border border-red-200 rounded-xl">
+                    <h3 class="text-red-700 mt-0 mb-2"><i class="fa-solid fa-triangle-exclamation"></i> Recht auf Vergessenwerden (Account löschen)</h3>
+                    <p class="text-red-600 text-sm mb-4">Gemäß Art. 17 DSGVO haben Sie das Recht, die unverzügliche Löschung Ihrer Daten zu verlangen. Mit einem Klick auf den Button unten werden Ihr Account, alle Kanalverknüpfungen und die Post-Historie unwiderruflich von unseren Servern gelöscht.</p>
+                    <button onclick="deleteAccount()" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg transition-colors shadow-sm">
+                        Alle meine Daten dauerhaft löschen
+                    </button>
+                </div>
+                {% else %}
+                <p class="mt-6 text-sm text-slate-500 bg-slate-100 p-4 rounded-lg">Loggen Sie sich ein, um Ihre accountbezogenen DSGVO-Rechte (wie z.B. Kontolöschung) wahrzunehmen.</p>
+                {% endif %}
+            </div>
+        </div>
+
     </main>
 
     <script>
+        // --- AUTH LOGIC ---
         function onTelegramAuth(user) {
             fetch('/api/auth', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(user)
-            }).then(() => window.location.reload());
+            }).then(res => res.json()).then(data => {
+                if (data.success) window.location.reload();
+                else alert('Login fehlgeschlagen!');
+            });
+        }
+
+        function logout() {
+            fetch('/api/logout', {method: 'POST'}).then(() => window.location.reload());
+        }
+
+        // --- NAVIGATION LOGIC ---
+        function switchTab(tabId) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            // Reset nav buttons
+            document.querySelectorAll('[id^="nav-"]').forEach(el => {
+                el.classList.remove('bg-sky-50', 'text-sky-600', 'bg-slate-100');
+            });
+
+            // Show selected tab
+            const tab = document.getElementById('tab-' + tabId);
+            const navBtn = document.getElementById('nav-' + tabId);
+            if(tab) tab.classList.add('active');
+
+            if(navBtn) {
+                if(['editor', 'channels', 'history'].includes(tabId)) {
+                    navBtn.classList.add('bg-sky-50', 'text-sky-600');
+                } else {
+                    navBtn.classList.add('bg-slate-100'); // Grauer Background für Info-Tabs
+                }
+            }
+
+            // Trigger specific loaders
+            {% if logged_in %}
+            if(tabId === 'channels') loadChannels();
+            if(tabId === 'editor') populateEditorChannels();
+            if(tabId === 'history') loadHistory();
+            {% endif %}
+        }
+
+        {% if logged_in %}
+        // --- CHANNEL MANAGEMENT ---
+        async function loadChannels() {
+            const res = await fetch('/api/channels');
+            const channels = await res.json();
+            const list = document.getElementById('channelsList');
+            if(channels.length === 0) {
+                list.innerHTML = '<p class="text-slate-500 italic p-4 bg-white rounded-xl border border-slate-200">Noch keine Kanäle verknüpft.</p>';
+                return;
+            }
+            list.innerHTML = channels.map(ch => `
+                <div class="flex justify-between items-center p-4 bg-white border border-slate-200 shadow-sm rounded-xl">
+                    <div>
+                        <p class="font-bold text-slate-800">${ch.channel_name}</p>
+                        <p class="text-xs text-slate-500 font-mono">${ch.channel_id}</p>
+                    </div>
+                    <button onclick="deleteChannel(${ch.id})" class="text-slate-400 hover:text-red-500 p-2"><i class="fa-solid fa-trash"></i></button>
+                </div>
+            `).join('');
         }
 
         async function addChannel() {
-            const errBox = document.getElementById('error-box');
-            const btn = document.getElementById('addBtn');
-            errBox.classList.add('hidden');
-            btn.disabled = true;
-            btn.innerText = "Prüfe Rechte...";
+            const errBox = document.getElementById('channelErrorBox');
+            const btn = document.getElementById('addChannelBtn');
+            const cId = document.getElementById('newChannelId').value.trim();
+            const cName = document.getElementById('newChannelName').value.trim();
 
-            const res = await fetch('/api/channels', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    channel_id: document.getElementById('c_id').value,
-                    channel_name: document.getElementById('c_name').value
-                })
-            });
-            const data = await res.json();
-
-            if(data.success) {
-                location.reload();
-            } else {
-                errBox.innerText = "FEHLER: " + data.error;
+            if(!cId || !cName) {
+                errBox.innerText = "Bitte ID und Name ausfüllen.";
                 errBox.classList.remove('hidden');
-                btn.disabled = false;
-                btn.innerText = "Kanal hinzufügen";
+                return;
+            }
+
+            errBox.classList.add('hidden');
+            btn.disabled = true; btn.innerText = 'Prüfe...';
+
+            try {
+                const res = await fetch('/api/channels', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel_id: cId, channel_name: cName })
+                });
+                const data = await res.json();
+                if(data.success) {
+                    document.getElementById('newChannelId').value = '';
+                    document.getElementById('newChannelName').value = '';
+                    loadChannels();
+                } else {
+                    errBox.innerText = "Fehler: " + data.error;
+                    errBox.classList.remove('hidden');
+                }
+            } finally {
+                btn.disabled = false; btn.innerText = 'Hinzufügen';
             }
         }
+
+        async function deleteChannel(id) {
+            if(!confirm('Kanal wirklich entfernen?')) return;
+            await fetch('/api/channels/' + id, {method: 'DELETE'});
+            loadChannels();
+        }
+
+        // --- EDITOR LOGIC ---
+        async function populateEditorChannels() {
+            const sel = document.getElementById('postChannel');
+            const res = await fetch('/api/channels');
+            const channels = await res.json();
+            sel.innerHTML = channels.length === 0
+                ? '<option value="">Bitte erst Kanal anlegen!</option>'
+                : channels.map(ch => `<option value="${ch.channel_id}">${ch.channel_name}</option>`).join('');
+        }
+
+        function addButtonField() {
+            const container = document.getElementById('buttonsContainer');
+            const div = document.createElement('div');
+            div.className = 'flex gap-2 items-center button-row';
+            div.innerHTML = `
+                <input type="text" placeholder="Button Text" class="btn-text flex-1 p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-sky-500">
+                <input type="url" placeholder="https://..." class="btn-url flex-1 p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-sky-500">
+                <button onclick="this.parentElement.remove(); updatePreview();" class="text-red-500 bg-red-50 p-3 rounded-xl hover:bg-red-100"><i class="fa-solid fa-xmark"></i></button>
+            `;
+            container.appendChild(div);
+            div.querySelectorAll('input').forEach(inp => inp.addEventListener('input', updatePreview));
+        }
+
+        function getButtonsData() {
+            let btns = [];
+            document.querySelectorAll('.button-row').forEach(row => {
+                const text = row.querySelector('.btn-text').value.trim();
+                const url = row.querySelector('.btn-url').value.trim();
+                if(text && url) btns.push({text, url});
+            });
+            return btns;
+        }
+
+        async function updatePreview() {
+            const text = document.getElementById('postContent').value;
+            const res = await fetch('/api/preview', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text})
+            });
+            const data = await res.json();
+            document.getElementById('previewText').innerHTML = data.html.replace(/\n/g, '<br>') || 'Deine Live-Vorschau erscheint hier...';
+
+            const btnContainer = document.getElementById('previewButtons');
+            btnContainer.innerHTML = '';
+            getButtonsData().forEach(btn => {
+                btnContainer.innerHTML += `<div class="tg-button">${btn.text}</div>`;
+            });
+        }
+
+        async function submitPost() {
+            const channelId = document.getElementById('postChannel').value;
+            const content = document.getElementById('postContent').value;
+            let schedule = document.getElementById('postSchedule').value;
+
+            if(!channelId || !content) return alert('Kanal und Text sind erforderlich!');
+            if(!schedule) schedule = new Date().toISOString().slice(0, 16);
+            schedule = schedule.replace('T', ' ');
+
+            const res = await fetch('/api/posts', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    channel_id: channelId, content: content,
+                    buttons: JSON.stringify(getButtonsData()), schedule_time: schedule
+                })
+            });
+
+            const data = await res.json();
+            if(data.success) {
+                alert('Post erfolgreich gespeichert!');
+                document.getElementById('postContent').value = '';
+                document.getElementById('buttonsContainer').innerHTML = '';
+                updatePreview();
+                switchTab('history');
+            } else alert('Fehler: ' + data.error);
+        }
+
+        // --- HISTORY ---
+        async function loadHistory() {
+            const res = await fetch('/api/posts');
+            const posts = await res.json();
+            const tbody = document.getElementById('historyTableBody');
+            if(posts.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-slate-500">Noch keine Posts vorhanden.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = posts.map(p => {
+                let statusBadge = p.status === 'pending' ? '<span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs font-bold">Wartet</span>' :
+                                  p.status === 'sent' ? '<span class="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-bold">Gesendet</span>' :
+                                  '<span class="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-bold">Fehler</span>';
+                return `
+                <tr class="hover:bg-slate-50">
+                    <td class="p-4 text-sm font-medium text-slate-700">${p.schedule_time}</td>
+                    <td class="p-4 text-sm text-sky-600 font-mono">${p.channel_id}</td>
+                    <td class="p-4 text-sm text-slate-600 truncate max-w-[200px]">${p.content}</td>
+                    <td class="p-4">${statusBadge}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // --- DSGVO ---
+        async function deleteAccount() {
+            if(confirm('Möchten Sie Ihren Account und alle damit verbundenen Daten (Kanäle, Posts) wirklich unwiderruflich löschen?')) {
+                await fetch('/api/dsgvo_delete', { method: 'POST' });
+                window.location.reload();
+            }
+        }
+
+        // Init Editor View
+        switchTab('editor');
+
+        {% else %}
+        // Wenn nicht eingeloggt, zeige direkt die Hilfe
+        switchTab('help');
+        {% endif %}
+
     </script>
 </body>
 </html>
