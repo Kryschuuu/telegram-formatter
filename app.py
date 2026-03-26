@@ -127,7 +127,6 @@ HTML_TEMPLATE = """
 
     <button class="nav-item active" onclick="showView('editor', this)"><i class="fa-solid fa-pen-nib"></i> Editor</button>
     <button class="nav-item" onclick="showView('help', this)"><i class="fa-solid fa-circle-info"></i> Hilfe & Tipps</button>
-    <button class="nav-item" onclick="showView('crypto', this)"><i class="fa-brands fa-bitcoin" style="color: #f7931a;"></i> Krypto Spenden</button>
     <button class="nav-item" onclick="showView('impressum', this)"><i class="fa-solid fa-shield-halved"></i> Impressum</button>
 
     <div class="sidebar-footer">
@@ -168,64 +167,6 @@ HTML_TEMPLATE = """
                 <li><code>**Fett**</code> &rarr; <b>Wird fett dargestellt</b></li>
                 <li><code>- Liste</code> &rarr; Wird in Aufzählungspunkte • umgewandelt</li>
             </ul>
-        </div>
-    </div>
-
-    <!-- Krypto Ansicht -->
-    <div id="crypto" class="view">
-        <div class="content-card">
-            <h1>Unterstütze das Projekt mit Krypto 🚀</h1>
-            <p>Wenn dir das Tool gefällt, freue ich mich riesig über eine kleine Spende. Klicke einfach auf "Kopieren", um die Adresse zu übernehmen.</p>
-
-            <div class="crypto-list">
-                <!-- Bitcoin -->
-                <div class="crypto-item">
-                    <div class="crypto-info">
-                        <div class="crypto-icon"><i class="fa-brands fa-bitcoin" style="color: #f7931a;"></i></div>
-                        <div class="crypto-details">
-                            <div class="crypto-name">Bitcoin <span class="crypto-network">BTC Netzwerk</span></div>
-                            <div class="crypto-address" id="wallet-btc">bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh</div>
-                        </div>
-                    </div>
-                    <button class="btn-copy-sm" onclick="copyWallet('wallet-btc', this)"><i class="fa-regular fa-copy"></i> Kopieren</button>
-                </div>
-
-                <!-- Ethereum -->
-                <div class="crypto-item">
-                    <div class="crypto-info">
-                        <div class="crypto-icon"><i class="fa-brands fa-ethereum" style="color: #627eea;"></i></div>
-                        <div class="crypto-details">
-                            <div class="crypto-name">Ethereum <span class="crypto-network">ERC-20</span></div>
-                            <div class="crypto-address" id="wallet-eth">0x71C7656EC7ab88b098defB751B7401B5f6d8976F</div>
-                        </div>
-                    </div>
-                    <button class="btn-copy-sm" onclick="copyWallet('wallet-eth', this)"><i class="fa-regular fa-copy"></i> Kopieren</button>
-                </div>
-
-                <!-- Solana -->
-                <div class="crypto-item">
-                    <div class="crypto-info">
-                        <div class="crypto-icon"><img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=025" width="28" style="vertical-align: middle;"></div>
-                        <div class="crypto-details">
-                            <div class="crypto-name">Solana <span class="crypto-network">SOL Netzwerk</span></div>
-                            <div class="crypto-address" id="wallet-sol">HN7cABqLq46Es1jh92dQQisAq662SmxELLLsHHe4YWrH</div>
-                        </div>
-                    </div>
-                    <button class="btn-copy-sm" onclick="copyWallet('wallet-sol', this)"><i class="fa-regular fa-copy"></i> Kopieren</button>
-                </div>
-
-                <!-- USDT -->
-                <div class="crypto-item">
-                    <div class="crypto-info">
-                        <div class="crypto-icon"><img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=025" width="28" style="vertical-align: middle;"></div>
-                        <div class="crypto-details">
-                            <div class="crypto-name">Tether (USDT) <span class="crypto-network">TRC-20 (Tron)</span></div>
-                            <div class="crypto-address" id="wallet-usdt">TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t</div>
-                        </div>
-                    </div>
-                    <button class="btn-copy-sm" onclick="copyWallet('wallet-usdt', this)"><i class="fa-regular fa-copy"></i> Kopieren</button>
-                </div>
-            </div>
         </div>
     </div>
 
