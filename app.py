@@ -14,31 +14,57 @@ app = Flask(__name__)
 BASE_COFFEE_URL = "https://buymeacoffee.com/rg4free"
 
 def format_to_tg_html(text):
-    """Konvertiert Markdown-Eingabe in sauberes Telegram-HTML."""
+    """Konvertiert Markdown-Eingabe in hochstabiles Telegram-HTML."""
     if not text:
         return ""
 
     # 1. HTML Sonderzeichen escapen (Pflicht für Telegram)
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-    # 2. Zitate (Blockquotes)
-    # Da '>' im Schritt vorher zu '&gt;' wurde, suchen wir danach am Zeilenanfang
-    text = re.sub(r'^&gt;\s?(.*)$', r'<blockquote>\1</blockquote>', text, flags=re.M)
+    # 2. Blockquotes intelligent gruppieren
+    # Fässt aufeinanderfolgende '>'-Zeilen in einen einzigen sauberen <blockquote> Block zusammen.
+    lines = text.split('\n')
+    new_lines = []
+    in_quote = False
+    
+    for line in lines:
+        # Sucht nach einem '&gt;' am Anfang der Zeile (auch mit Leerzeichen davor)
+        m = re.match(r'^\s*&gt;\s?(.*)', line)
+        if m:
+            content = m.group(1)
+            if not in_quote:
+                new_lines.append('<blockquote>' + content)
+                in_quote = True
+            else:
+                new_lines.append(content)
+        else:
+            if in_quote:
+                new_lines[-1] += '</blockquote>'
+                in_quote = False
+            new_lines.append(line)
+            
+    if in_quote:
+        new_lines[-1] += '</blockquote>'
+    
+    text = '\n'.join(new_lines)
 
-    # 3. Headlines umwandeln (Telegram kann keine Größen, wir faken die Hierarchie)
+    # 3. Headlines umwandeln (Hierarchie faken)
     text = re.sub(r'^####\s+(.*)$', r'<b>🔸 \1</b>', text, flags=re.M)
     text = re.sub(r'^###\s+(.*)$', r'<b>🔹 \1</b>', text, flags=re.M)
     text = re.sub(r'^##\s+(.*)$', r'<b>📍 \1</b>', text, flags=re.M)
     text = re.sub(r'^#\s+(.*)$', r'<b>🚀 \1</b>', text, flags=re.M)
 
-    # 4. Listen (Muss vor Kursiv gemacht werden, da '*' sonst kollidiert)
-    text = re.sub(r'^[*-]\s+', r'• ', text, flags=re.M)
+    # 4. Listenpunkte (muss vor Kursiv/Fett passieren)
+    text = re.sub(r'^\s*[*-]\s+', r'• ', text, flags=re.M)
 
-    # 5. Fett, Kursiv, Unterstrichen
-    text = re.sub(r'\*\*\*(.*?)\*\*\*', r'<b><i>\1</i></b>', text)
-    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-    text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text)
-    text = re.sub(r'__(.*?)__', r'<u>\1</u>', text)
+    # 5. Fett, Kursiv, Unterstrichen (Bulletproof-Modus)
+    # Erlaubt einfache Zeilenumbrüche zwischen den Sternchen (oft passiert das beim Kopieren aus Obsidian), 
+    # aber KEINE doppelten (Absätze), damit das HTML nicht zerschossen wird, wenn man ein Sternchen vergisst.
+    p = r'((?:(?!\n\n).)*?)'
+    text = re.sub(r'\*\*\*' + p + r'\*\*\*', r'<b><i>\1</i></b>', text, flags=re.S)
+    text = re.sub(r'\*\*' + p + r'\*\*', r'<b>\1</b>', text, flags=re.S)
+    text = re.sub(r'\*' + p + r'\*', r'<i>\1</i>', text, flags=re.S)
+    text = re.sub(r'__' + p + r'__', r'<u>\1</u>', text, flags=re.S)
 
     # 6. Code-Bloecke
     text = re.sub(r'```(.*?)```', r'<pre>\1</pre>', text, flags=re.S)
@@ -47,7 +73,7 @@ def format_to_tg_html(text):
     return text
 
 def split_html_message(text, max_length=4000):
-    """Teilt lange Texte sicher auf, ohne das Limit von 4096 Zeichen zu sprengen."""
+    """Teilt lange Texte auf, ohne Telegrams 4096 Limit zu sprengen."""
     if len(text) <= max_length:
         return [text]
 
@@ -99,10 +125,10 @@ HTML_TEMPLATE = """
 
         .preview-box { flex: 1; background: var(--tg-bg); border-radius: 16px; display: flex; justify-content: center; padding: 30px; overflow-y: auto; background-image: url('https://www.transparenttextures.com/patterns/cubes.png'); }
         
-        /* Telegram Bubble Styling - White-space pre-wrap für korrekte Zeilenumbrüche */
+        /* WICHTIG: white-space: pre-wrap; sorgt für exakte TG Zeilenumbrüche */
         .tg-bubble { background: white; padding: 18px; border-radius: 18px; border-bottom-right-radius: 4px; max-width: 440px; width: 100%; height: fit-content; box-shadow: 0 8px 20px rgba(0,0,0,0.15); font-size: 15px; line-height: 1.5; color: #222; word-wrap: break-word; white-space: pre-wrap; }
         
-        /* Telegram Zitate (Blockquotes) in der Vorschau */
+        /* Telegram Zitate Design */
         .tg-bubble blockquote { border-left: 3px solid var(--tg-blue); margin: 5px 0; padding-left: 10px; color: #555; background: #f0f7ff; border-radius: 0 8px 8px 0; padding-top: 5px; padding-bottom: 5px;}
 
         .btn-group { display: flex; gap: 12px; }
@@ -114,7 +140,6 @@ HTML_TEMPLATE = """
 
         .content-card { background: white; padding: 40px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 850px; overflow-y: auto; line-height: 1.7; color: #333; }
         .content-card h1, .content-card h2 { color: var(--tg-blue); }
-        .content-card h3 { margin-top: 30px; color: #000; border-bottom: 1px solid #eee; padding-bottom: 5px; }
     </style>
 </head>
 <body>
@@ -159,11 +184,8 @@ HTML_TEMPLATE = """
             <ul>
                 <li><code># Überschrift</code> &rarr; Wird groß, fett und bekommt eine Rakete 🚀</li>
                 <li><code>## Untertitel</code> &rarr; Wird fett und bekommt einen Pin 📍</li>
-                <li><code>### Kleinere Headline</code> &rarr; Wird fett und bekommt 🔹</li>
-                <li><code>#### Ebene 4</code> &rarr; Wird fett und bekommt 🔸</li>
                 <li><code>**Fett**</code> &rarr; <b>Wird fett dargestellt</b></li>
-                <li><code>- Liste</code> oder <code>* Liste</code> &rarr; Wird in Aufzählungspunkte • umgewandelt</li>
-                <li><code>> Zitat</code> &rarr; Erzeugt einen eleganten Zitat-Block</li>
+                <li><code>> Zitat</code> &rarr; Erzeugt einen eleganten Zitat-Block (auch über mehrere Zeilen)</li>
             </ul>
         </div>
     </div>
@@ -231,7 +253,6 @@ HTML_TEMPLATE = """
                 body: JSON.stringify({text: inputArea.value})
             });
             const data = await res.json();
-            // Die Vorschau nutzt jetzt das vom Backend gerenderte HTML
             previewBubble.innerHTML = data.html; 
         }, 350);
     });
@@ -253,6 +274,7 @@ def index():
                     bot.send_message(MY_CHAT_ID, chunk, parse_mode='HTML')
                 return "OK"
             except Exception as e:
+                # Gibt nun exakt den Telegram-Fehler aus, falls doch noch ein Formatierungs-Leak passiert
                 return f"Fehler: {str(e)}", 500
     return render_template_string(HTML_TEMPLATE, coffee_link=BASE_COFFEE_URL)
 
