@@ -1,6 +1,7 @@
 import os
 import telebot
 import re
+import uuid
 from flask import Flask, render_template_string, request, jsonify
 
 # --- KONFIGURATION ---
@@ -10,25 +11,65 @@ MY_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
 
-# Dein Buy Me a Coffee Link
 BASE_COFFEE_URL = "https://buymeacoffee.com/rg4free"
 
 def format_to_tg_html(text):
-    """Konvertiert Markdown-Eingabe in hochstabiles Telegram-HTML."""
+    """Konvertiert komplexes Markdown (inkl. Tabellen & Formeln) für Telegram."""
     if not text:
         return ""
 
     # 1. HTML Sonderzeichen escapen (Pflicht für Telegram)
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-    # 2. Blockquotes intelligent gruppieren
-    # Fässt aufeinanderfolgende '>'-Zeilen in einen einzigen sauberen <blockquote> Block zusammen.
+    # 2. Tabellen zu Smart-Lists konvertieren (Da Telegram keine HTML-Tabellen unterstützt)
+    def table_replacer(match):
+        block = match.group(1).strip()
+        lines = block.split('\n')
+        if len(lines) < 3: return match.group(0)
+
+        # Header extrahieren
+        headers = [h.strip() for h in lines[0].strip('|').split('|')]
+
+        rows = []
+        for line in lines[2:]:
+            if not line.strip(): continue
+            cols = [c.strip() for c in line.strip('|').split('|')]
+
+            row_out = []
+            for i, col in enumerate(cols):
+                header = headers[i] if i < len(headers) else "Info"
+                row_out.append(f"<b>{header}:</b> {col}")
+            # Einen schönen Listenpunkt für jede Zeile bauen
+            rows.append("🔸 " + "\n      ".join(row_out))
+
+        return "\n\n" + "\n\n".join(rows) + "\n\n"
+
+    # Sucht nach Markdown-Tabellen (mind. 3 Zeilen, die mit | beginnen und enden)
+    table_pattern = r'((?:^[ \t]*\|.*?\|[ \t]*(?:\n|$)){3,})'
+    text = re.sub(table_pattern, table_replacer, text, flags=re.M)
+
+    # 3. Platzhalter für Code und mathematische Formeln
+    # Das verhindert, dass unsere Fettschrift-Regex die Formeln zerschießt
+    placeholders = {}
+
+    def add_placeholder(val):
+        key = f"@@BLOCK_{uuid.uuid4().hex}@@"
+        placeholders[key] = val
+        return key
+
+    # Multi-Line Code & Math (werden zu <pre>)
+    text = re.sub(r'\$\$(.*?)\$\$', lambda m: add_placeholder(f"<pre>{m.group(1).strip()}</pre>"), text, flags=re.S)
+
+    # Inline Code & Math (werden zu <code>)
+    text = re.sub(r'`(.*?)`', lambda m: add_placeholder(f"<code>{m.group(1)}</code>"), text)
+    text = re.sub(r'\$(.*?)\$', lambda m: add_placeholder(f"<code>{m.group(1)}</code>"), text)
+
+    # 4. Blockquotes intelligent gruppieren
     lines = text.split('\n')
     new_lines = []
     in_quote = False
-    
+
     for line in lines:
-        # Sucht nach einem '&gt;' am Anfang der Zeile (auch mit Leerzeichen davor)
         m = re.match(r'^\s*&gt;\s?(.*)', line)
         if m:
             content = m.group(1)
@@ -42,35 +83,33 @@ def format_to_tg_html(text):
                 new_lines[-1] += '</blockquote>'
                 in_quote = False
             new_lines.append(line)
-            
+
     if in_quote:
         new_lines[-1] += '</blockquote>'
-    
+
     text = '\n'.join(new_lines)
 
-    # 3. Headlines umwandeln (Hierarchie faken)
+    # 5. Headlines umwandeln
     text = re.sub(r'^####\s+(.*)$', r'<b>🔸 \1</b>', text, flags=re.M)
     text = re.sub(r'^###\s+(.*)$', r'<b>🔹 \1</b>', text, flags=re.M)
     text = re.sub(r'^##\s+(.*)$', r'<b>📍 \1</b>', text, flags=re.M)
     text = re.sub(r'^#\s+(.*)$', r'<b>🚀 \1</b>', text, flags=re.M)
 
-    # 4. Listenpunkte (muss vor Kursiv/Fett passieren)
+    # 6. Listenpunkte
     text = re.sub(r'^\s*[*-]\s+', r'• ', text, flags=re.M)
 
-    # 5. Fett, Kursiv, Unterstrichen (Bulletproof-Modus)
-    # Erlaubt einfache Zeilenumbrüche zwischen den Sternchen (oft passiert das beim Kopieren aus Obsidian), 
-    # aber KEINE doppelten (Absätze), damit das HTML nicht zerschossen wird, wenn man ein Sternchen vergisst.
+    # 7. Fett, Kursiv, Unterstrichen (Bulletproof-Modus)
     p = r'((?:(?!\n\n).)*?)'
     text = re.sub(r'\*\*\*' + p + r'\*\*\*', r'<b><i>\1</i></b>', text, flags=re.S)
     text = re.sub(r'\*\*' + p + r'\*\*', r'<b>\1</b>', text, flags=re.S)
     text = re.sub(r'\*' + p + r'\*', r'<i>\1</i>', text, flags=re.S)
     text = re.sub(r'__' + p + r'__', r'<u>\1</u>', text, flags=re.S)
 
-    # 6. Code-Bloecke
-    text = re.sub(r'```(.*?)```', r'<pre>\1</pre>', text, flags=re.S)
-    text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
+    # 8. Platzhalter für Code und Math wieder einfügen
+    for key, val in placeholders.items():
+        text = text.replace(key, val)
 
-    return text
+    return text.strip()
 
 def split_html_message(text, max_length=4000):
     """Teilt lange Texte auf, ohne Telegrams 4096 Limit zu sprengen."""
@@ -82,16 +121,13 @@ def split_html_message(text, max_length=4000):
         if len(text) <= max_length:
             chunks.append(text)
             break
-
         split_pos = text.rfind('\n', 0, max_length)
-        if split_pos == -1:
-            split_pos = max_length
-
+        if split_pos == -1: split_pos = max_length
         chunks.append(text[:split_pos])
         text = text[split_pos:].lstrip()
     return chunks
 
-# Das komplette HTML-Frontend als String
+# --- HTML FRONTEND ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="de">
@@ -107,7 +143,7 @@ HTML_TEMPLATE = """
 
         .sidebar { width: var(--sidebar-width); background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; padding: 25px; }
         .logo { font-size: 22px; font-weight: 800; color: var(--tg-blue); margin-bottom: 40px; display: flex; align-items: center; gap: 12px; }
-        .nav-item { padding: 14px 18px; margin-bottom: 8px; border-radius: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px; color: #555; text-decoration: none; font-weight: 500; font-size: 15px; border: none; background: none; width: 100%; }
+        .nav-item { padding: 14px 18px; margin-bottom: 8px; border-radius: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px; color: #555; text-decoration: none; font-weight: 500; font-size: 15px; border: none; background: none; width: 100%; text-align: left;}
         .nav-item:hover { background: #f0f7ff; color: var(--tg-blue); }
         .nav-item.active { background: var(--tg-blue); color: white; box-shadow: 0 4px 12px rgba(36, 161, 222, 0.25); }
         .sidebar-footer { margin-top: auto; padding-top: 20px; border-top: 1px solid #eee; display: flex; flex-direction: column; gap: 5px;}
@@ -120,16 +156,16 @@ HTML_TEMPLATE = """
         .panel { flex: 1; display: flex; flex-direction: column; gap: 10px; }
         .panel-label { font-weight: bold; font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1.2px; }
 
-        textarea { flex: 1; border: 2px solid #e0e6ed; border-radius: 16px; padding: 20px; font-family: 'Consolas', monospace; resize: none; outline: none; font-size: 15px; background: white; line-height: 1.6; }
+        textarea { flex: 1; border: 2px solid #e0e6ed; border-radius: 16px; padding: 20px; font-family: 'Consolas', monospace; resize: none; outline: none; font-size: 14px; background: white; line-height: 1.6; }
         textarea:focus { border-color: var(--tg-blue); }
 
         .preview-box { flex: 1; background: var(--tg-bg); border-radius: 16px; display: flex; justify-content: center; padding: 30px; overflow-y: auto; background-image: url('https://www.transparenttextures.com/patterns/cubes.png'); }
-        
-        /* WICHTIG: white-space: pre-wrap; sorgt für exakte TG Zeilenumbrüche */
+
         .tg-bubble { background: white; padding: 18px; border-radius: 18px; border-bottom-right-radius: 4px; max-width: 440px; width: 100%; height: fit-content; box-shadow: 0 8px 20px rgba(0,0,0,0.15); font-size: 15px; line-height: 1.5; color: #222; word-wrap: break-word; white-space: pre-wrap; }
-        
-        /* Telegram Zitate Design */
+
         .tg-bubble blockquote { border-left: 3px solid var(--tg-blue); margin: 5px 0; padding-left: 10px; color: #555; background: #f0f7ff; border-radius: 0 8px 8px 0; padding-top: 5px; padding-bottom: 5px;}
+        .tg-bubble code { background: #f0f0f0; padding: 2px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 13px; color: #d63384; }
+        .tg-bubble pre { background: #f0f0f0; padding: 10px; border-radius: 8px; font-family: Consolas, monospace; font-size: 13px; overflow-x: auto; white-space: pre-wrap; }
 
         .btn-group { display: flex; gap: 12px; }
         .btn { padding: 14px 24px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 14px; }
@@ -139,20 +175,15 @@ HTML_TEMPLATE = """
         .btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
 
         .content-card { background: white; padding: 40px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 850px; overflow-y: auto; line-height: 1.7; color: #333; }
-        .content-card h1, .content-card h2 { color: var(--tg-blue); }
     </style>
 </head>
 <body>
 
 <div class="sidebar">
     <div class="logo"><i class="fa-solid fa-paper-plane"></i> Post Master</div>
-
     <button class="nav-item active" onclick="showView('editor', this)"><i class="fa-solid fa-pen-nib"></i> Editor</button>
     <button class="nav-item" onclick="showView('help', this)"><i class="fa-solid fa-circle-info"></i> Hilfe & Tipps</button>
-    <button class="nav-item" onclick="showView('impressum', this)"><i class="fa-solid fa-shield-halved"></i> Impressum</button>
-
     <div class="sidebar-footer">
-        <a href="mailto:deine-email@beispiel.de" class="nav-item"><i class="fa-solid fa-envelope"></i> Support</a>
         <a href="{{ coffee_link }}" target="_blank" class="nav-item" style="color: #f39c12; font-weight: bold; background: #fff8e1;"><i class="fa-solid fa-mug-hot"></i> Buy Me a Coffee</a>
     </div>
 </div>
@@ -162,7 +193,7 @@ HTML_TEMPLATE = """
         <div class="editor-container">
             <div class="panel">
                 <div class="panel-label">Markdown Eingabe</div>
-                <textarea id="editorInput" placeholder="# Deine Überschrift...&#10;&#10;Schreibe hier deinen Text. Nutze **Fett** oder Listen."></textarea>
+                <textarea id="editorInput" placeholder="Dein Markdown Text hier..."></textarea>
             </div>
             <div class="panel">
                 <div class="panel-label">Vorschau (Telegram Stil)</div>
@@ -177,23 +208,13 @@ HTML_TEMPLATE = """
             <button class="btn btn-danger" onclick="resetAll()"><i class="fa-solid fa-trash-can"></i> Reset</button>
         </div>
     </div>
-
     <div id="help" class="view">
         <div class="content-card">
-            <h1>Formatierungs-Tipps</h1>
+            <h1>Neue Features im Post Master Pro</h1>
             <ul>
-                <li><code># Überschrift</code> &rarr; Wird groß, fett und bekommt eine Rakete 🚀</li>
-                <li><code>## Untertitel</code> &rarr; Wird fett und bekommt einen Pin 📍</li>
-                <li><code>**Fett**</code> &rarr; <b>Wird fett dargestellt</b></li>
-                <li><code>> Zitat</code> &rarr; Erzeugt einen eleganten Zitat-Block (auch über mehrere Zeilen)</li>
+                <li><b>Mathe & Formeln:</b> Setze sie einfach in <code>$$Formel$$</code> oder <code>$ Formel $</code> – sie werden automatisch hervorgehoben und zerschießen das Layout nicht mehr!</li>
+                <li><b>Smart-Tabellen:</b> Füge normale Markdown-Tabellen ein. Der Bot wandelt sie in übersichtliche, Mobile-Friendly Listenblöcke um, da Telegram nativ keine Tabellen rendern kann.</li>
             </ul>
-        </div>
-    </div>
-
-    <div id="impressum" class="view">
-        <div class="content-card">
-            <h1>Impressum</h1>
-            <p>Dein Impressum hier...</p>
         </div>
     </div>
 </div>
@@ -253,7 +274,7 @@ HTML_TEMPLATE = """
                 body: JSON.stringify({text: inputArea.value})
             });
             const data = await res.json();
-            previewBubble.innerHTML = data.html; 
+            previewBubble.innerHTML = data.html;
         }, 350);
     });
 </script>
@@ -274,7 +295,6 @@ def index():
                     bot.send_message(MY_CHAT_ID, chunk, parse_mode='HTML')
                 return "OK"
             except Exception as e:
-                # Gibt nun exakt den Telegram-Fehler aus, falls doch noch ein Formatierungs-Leak passiert
                 return f"Fehler: {str(e)}", 500
     return render_template_string(HTML_TEMPLATE, coffee_link=BASE_COFFEE_URL)
 
