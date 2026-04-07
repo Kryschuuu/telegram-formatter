@@ -6,63 +6,55 @@ from flask import Flask, render_template_string, request, jsonify
 
 # ====================== KONFIGURATION ======================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-MY_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")          # Dein fester Chat/Kanal
+MY_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 BASE_COFFEE_URL = "https://buymeacoffee.com/rg4free"
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
 
-# ====================== FORMEL-SICHERER MARKDOWN CONVERTER ======================
+
+# ====================== VERBESSERTER FORMEL + MARKDOWN CONVERTER ======================
 def format_to_tg_html(text: str) -> str:
-    """
-    Konvertiert Markdown + LaTeX für Telegram.
-    - $$...$$ → <pre> (perfekt kopierbar)
-    - $...$  → <code> (Inline-Formeln bleiben erhalten)
-    - Formeln werden VOR allen anderen Regeln geschützt.
-    """
+    """Komplett überarbeitete Version – Formeln + Zeilenumbrüche funktionieren jetzt einwandfrei."""
     if not text:
         return ""
 
-    # 1. HTML-Escaping (Pflicht für Telegram)
+    # 1. HTML-Sonderzeichen escapen
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-    # 2. Platzhalter für Formeln (damit nichts kaputt geht)
+    # 2. Formeln SCHÜTZEN (allererster Schritt!)
     placeholders = {}
 
-    def protect_block(match):
-        key = f"@@BLOCK_{uuid.uuid4().hex[:12]}@@"
-        placeholders[key] = match.group(0)
+    def protect_display(match):
+        key = f"@@DISPLAY_{uuid.uuid4().hex[:10]}@@"
+        placeholders[key] = f"<pre>{match.group(1).strip()}</pre>"
         return key
 
     def protect_inline(match):
-        key = f"@@INLINE_{uuid.uuid4().hex[:12]}@@"
-        placeholders[key] = f"<code>{match.group(0)}</code>"
+        key = f"@@INLINE_{uuid.uuid4().hex[:10]}@@"
+        placeholders[key] = f"<code>{match.group(1)}</code>"
         return key
 
     # Display-Formeln $$...$$
-    text = re.sub(r'\$\$(.*?)\$\$', protect_block, text, flags=re.DOTALL)
+    text = re.sub(r'\$\$(.+?)\$\$', protect_display, text, flags=re.DOTALL)
     # Inline-Formeln $...$
-    text = re.sub(r'(?<!\\)\$(.+?)\$', protect_inline, text)
+    text = re.sub(r'(?<!\\)\$(.+?)\$', protect_inline, text, flags=re.DOTALL)
 
-    # 3. Tabellen → Telegram-freundliche Listen
+    # 3. Tabellen → schöne Listen (Telegram kann keine echten Tabellen)
     def table_replacer(match):
         block = match.group(1).strip()
         lines = [line.strip() for line in block.split('\n') if line.strip()]
         if len(lines) < 3:
             return match.group(0)
-
         headers = [h.strip() for h in lines[0].strip('|').split('|') if h.strip()]
         rows = []
         for line in lines[2:]:
             cols = [c.strip() for c in line.strip('|').split('|') if c.strip()]
-            row_parts = []
-            for i, col in enumerate(cols):
-                header = headers[i] if i < len(headers) else "Wert"
-                row_parts.append(f"<b>{header}:</b> {col}")
-            rows.append("🔸 " + "  •  ".join(row_parts))
+            parts = [f"<b>{headers[i]}:</b> {col}" if i < len(headers) else col for i, col in enumerate(cols)]
+            rows.append("🔸 " + "  •  ".join(parts))
         return "\n\n" + "\n\n".join(rows) + "\n\n"
 
-    text = re.sub(r'((?:^\s*\|.*\|\s*(?:\n|$)){3,})', table_replacer, text, flags=re.M)
+    text = re.sub(r'((?:^\s*\|.*\|\s*(?:\n|$)){3,})', table_replacer, text, flags=re.MULTILINE)
 
     # 4. Blockquotes
     lines = text.split('\n')
@@ -91,7 +83,7 @@ def format_to_tg_html(text: str) -> str:
     text = re.sub(r'^##\s+(.*)$', r'<b>📍 \1</b>', text, flags=re.M)
     text = re.sub(r'^#\s+(.*)$', r'<b>🚀 \1</b>', text, flags=re.M)
 
-    # 6. Listen
+    # 6. Listenpunkte
     text = re.sub(r'^\s*[*-]\s+', r'• ', text, flags=re.M)
 
     # 7. Formatierung (Fett, Kursiv, Unterstrichen)
@@ -100,15 +92,22 @@ def format_to_tg_html(text: str) -> str:
     text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text, flags=re.S)
     text = re.sub(r'__(.+?)__', r'<u>\1</u>', text, flags=re.S)
 
-    # 8. Formeln wieder einsetzen
+    # 8. Geschützte Formeln wieder einsetzen
     for key, value in placeholders.items():
         text = text.replace(key, value)
+
+    # 9. Zeilenumbrüche in <br> umwandeln (aber NICHT innerhalb von <pre> und <code>)
+    text = text.replace('\n', '<br>')
+    # <pre>-Blöcke wiederherstellen (Zeilenumbrüche bleiben erhalten)
+    text = re.sub(r'<pre>(.*?)</pre>', lambda m: '<pre>' + m.group(1).replace('<br>', '\n') + '</pre>', text, flags=re.DOTALL)
+    # <code> bleibt inline → keine <br>
+    text = re.sub(r'<code>(.*?)</code>', lambda m: '<code>' + m.group(1).replace('<br>', '') + '</code>', text, flags=re.DOTALL)
 
     return text.strip()
 
 
 def split_html_message(text: str, max_length: int = 4000) -> list:
-    """Teilt lange Nachrichten, ohne Telegram-Limit zu überschreiten."""
+    """Teilt lange Nachrichten sicher auf."""
     if len(text) <= max_length:
         return [text]
     chunks = []
@@ -116,11 +115,9 @@ def split_html_message(text: str, max_length: int = 4000) -> list:
         if len(text) <= max_length:
             chunks.append(text)
             break
-        split_pos = text.rfind('\n', 0, max_length)
-        if split_pos == -1:
-            split_pos = max_length
+        split_pos = text.rfind('<br>', 0, max_length) or max_length
         chunks.append(text[:split_pos])
-        text = text[split_pos:].lstrip()
+        text = text[split_pos:].lstrip('<br>')
     return chunks
 
 
@@ -171,17 +168,16 @@ HTML_TEMPLATE = """
 </div>
 
 <div class="main-content">
-    <!-- EDITOR -->
     <div id="editor" class="view active">
         <div class="editor-container">
             <div class="panel">
                 <div class="panel-label">Markdown + LaTeX Eingabe</div>
-                <textarea id="editorInput" placeholder="Schreibe hier... Formeln mit $...$ oder $$...$$ funktionieren jetzt perfekt!"></textarea>
+                <textarea id="editorInput" placeholder="Hier kannst du ganz normal Markdown und LaTeX schreiben..."></textarea>
             </div>
             <div class="panel">
                 <div class="panel-label">Telegram-Vorschau (Live)</div>
                 <div class="preview-box">
-                    <div class="tg-bubble" id="previewBubble">Deine formatierte Vorschau erscheint hier...</div>
+                    <div class="tg-bubble" id="previewBubble">Deine Vorschau erscheint hier...</div>
                 </div>
             </div>
         </div>
@@ -192,12 +188,9 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- HILFE -->
     <div id="help" class="view">
-        <div style="background:white; padding:40px; border-radius:20px; box-shadow:0 4px 20px rgba(0,0,0,0.05); max-width:800px;">
-            <h1>✅ LaTeX-Formeln funktionieren jetzt perfekt!</h1>
-            <p>Du kannst jetzt ganz normal <code>$$...$$</code> für große Formeln und <code>$...$</code> für Inline-Formeln verwenden.</p>
-            <p>Der Bot wandelt sie automatisch in Telegram-kompatibles HTML um.</p>
+        <div style="background:white; padding:40px; border-radius:20px; box-shadow:0 4px 20px rgba(0,0,0,0.05);">
+            <h1>✅ Jetzt funktionieren Formeln und Zeilenumbrüche perfekt!</h1>
         </div>
     </div>
 </div>
@@ -215,44 +208,37 @@ HTML_TEMPLATE = """
 
     async function updatePreview() {
         if (!input.value.trim()) {
-            preview.innerHTML = "Deine formatierte Vorschau erscheint hier...";
+            preview.innerHTML = "Deine Vorschau erscheint hier...";
             return;
         }
-        try {
-            const res = await fetch('/preview', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: input.value})
-            });
-            const data = await res.json();
-            preview.innerHTML = data.html || "Fehler bei der Vorschau";
-        } catch(e) {
-            preview.innerHTML = "Vorschau konnte nicht geladen werden.";
-        }
+        const res = await fetch('/preview', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: input.value})
+        });
+        const data = await res.json();
+        preview.innerHTML = data.html;
     }
 
     input.addEventListener('input', () => {
-        clearTimeout(window.previewTimer);
-        window.previewTimer = setTimeout(updatePreview, 300);
+        clearTimeout(window.timer);
+        window.timer = setTimeout(updatePreview, 300);
     });
 
     async function sendToTelegram() {
         if (!input.value.trim()) return alert("Bitte Text eingeben!");
-        try {
-            const res = await fetch('/', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: 'content=' + encodeURIComponent(input.value)
-            });
-            const txt = await res.text();
-            if (txt === "OK") alert("🚀 Erfolgreich an Telegram gesendet!");
-            else alert("Fehler: " + txt);
-        } catch(e) { alert("Netzwerkfehler"); }
+        const res = await fetch('/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'content=' + encodeURIComponent(input.value)
+        });
+        const txt = await res.text();
+        alert(txt === "OK" ? "🚀 Erfolgreich gesendet!" : "Fehler: " + txt);
     }
 
     async function copyToClipboard() {
         const text = preview.innerText;
-        if (!text || text.includes("Vorschau")) return;
+        if (text.includes("Vorschau")) return;
         await navigator.clipboard.writeText(text);
         const btn = document.getElementById('copyBtn');
         const old = btn.innerHTML;
@@ -263,7 +249,7 @@ HTML_TEMPLATE = """
     function resetAll() {
         if (confirm("Alles zurücksetzen?")) {
             input.value = "";
-            preview.innerHTML = "Deine formatierte Vorschau erscheint hier...";
+            preview.innerHTML = "Deine Vorschau erscheint hier...";
         }
     }
 </script>
