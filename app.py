@@ -1,133 +1,130 @@
 import os
-import telebot
 import re
 import uuid
+import telebot
 from flask import Flask, render_template_string, request, jsonify
 
-# --- KONFIGURATION ---
+# ====================== KONFIGURATION ======================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-MY_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+MY_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")          # Dein fester Chat/Kanal
+BASE_COFFEE_URL = "https://buymeacoffee.com/rg4free"
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
 
-BASE_COFFEE_URL = "https://buymeacoffee.com/rg4free"
-
-def format_to_tg_html(text):
-    """Konvertiert komplexes Markdown (inkl. Tabellen & Formeln) für Telegram."""
+# ====================== FORMEL-SICHERER MARKDOWN CONVERTER ======================
+def format_to_tg_html(text: str) -> str:
+    """
+    Konvertiert Markdown + LaTeX für Telegram.
+    - $$...$$ → <pre> (perfekt kopierbar)
+    - $...$  → <code> (Inline-Formeln bleiben erhalten)
+    - Formeln werden VOR allen anderen Regeln geschützt.
+    """
     if not text:
         return ""
 
-    # 1. HTML Sonderzeichen escapen (Pflicht für Telegram)
+    # 1. HTML-Escaping (Pflicht für Telegram)
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-    # 2. Tabellen zu Smart-Lists konvertieren (Da Telegram keine HTML-Tabellen unterstützt)
-    def table_replacer(match):
-        block = match.group(1).strip()
-        lines = block.split('\n')
-        if len(lines) < 3: return match.group(0)
-
-        # Header extrahieren
-        headers = [h.strip() for h in lines[0].strip('|').split('|')]
-
-        rows = []
-        for line in lines[2:]:
-            if not line.strip(): continue
-            cols = [c.strip() for c in line.strip('|').split('|')]
-
-            row_out = []
-            for i, col in enumerate(cols):
-                header = headers[i] if i < len(headers) else "Info"
-                row_out.append(f"<b>{header}:</b> {col}")
-            # Einen schönen Listenpunkt für jede Zeile bauen
-            rows.append("🔸 " + "\n      ".join(row_out))
-
-        return "\n\n" + "\n\n".join(rows) + "\n\n"
-
-    # Sucht nach Markdown-Tabellen (mind. 3 Zeilen, die mit | beginnen und enden)
-    table_pattern = r'((?:^[ \t]*\|.*?\|[ \t]*(?:\n|$)){3,})'
-    text = re.sub(table_pattern, table_replacer, text, flags=re.M)
-
-    # 3. Platzhalter für Code und mathematische Formeln
-    # Das verhindert, dass unsere Fettschrift-Regex die Formeln zerschießt
+    # 2. Platzhalter für Formeln (damit nichts kaputt geht)
     placeholders = {}
 
-    def add_placeholder(val):
-        key = f"@@BLOCK_{uuid.uuid4().hex}@@"
-        placeholders[key] = val
+    def protect_block(match):
+        key = f"@@BLOCK_{uuid.uuid4().hex[:12]}@@"
+        placeholders[key] = match.group(0)
         return key
 
-    # Multi-Line Code & Math (werden zu <pre>)
-    text = re.sub(r'\$\$(.*?)\$\$', lambda m: add_placeholder(f"<pre>{m.group(1).strip()}</pre>"), text, flags=re.S)
+    def protect_inline(match):
+        key = f"@@INLINE_{uuid.uuid4().hex[:12]}@@"
+        placeholders[key] = f"<code>{match.group(0)}</code>"
+        return key
 
-    # Inline Code & Math (werden zu <code>)
-    text = re.sub(r'`(.*?)`', lambda m: add_placeholder(f"<code>{m.group(1)}</code>"), text)
-    text = re.sub(r'\$(.*?)\$', lambda m: add_placeholder(f"<code>{m.group(1)}</code>"), text)
+    # Display-Formeln $$...$$
+    text = re.sub(r'\$\$(.*?)\$\$', protect_block, text, flags=re.DOTALL)
+    # Inline-Formeln $...$
+    text = re.sub(r'(?<!\\)\$(.+?)\$', protect_inline, text)
 
-    # 4. Blockquotes intelligent gruppieren
+    # 3. Tabellen → Telegram-freundliche Listen
+    def table_replacer(match):
+        block = match.group(1).strip()
+        lines = [line.strip() for line in block.split('\n') if line.strip()]
+        if len(lines) < 3:
+            return match.group(0)
+
+        headers = [h.strip() for h in lines[0].strip('|').split('|') if h.strip()]
+        rows = []
+        for line in lines[2:]:
+            cols = [c.strip() for c in line.strip('|').split('|') if c.strip()]
+            row_parts = []
+            for i, col in enumerate(cols):
+                header = headers[i] if i < len(headers) else "Wert"
+                row_parts.append(f"<b>{header}:</b> {col}")
+            rows.append("🔸 " + "  •  ".join(row_parts))
+        return "\n\n" + "\n\n".join(rows) + "\n\n"
+
+    text = re.sub(r'((?:^\s*\|.*\|\s*(?:\n|$)){3,})', table_replacer, text, flags=re.M)
+
+    # 4. Blockquotes
     lines = text.split('\n')
     new_lines = []
     in_quote = False
-
     for line in lines:
         m = re.match(r'^\s*&gt;\s?(.*)', line)
         if m:
-            content = m.group(1)
             if not in_quote:
-                new_lines.append('<blockquote>' + content)
+                new_lines.append('<blockquote>' + m.group(1))
                 in_quote = True
             else:
-                new_lines.append(content)
+                new_lines.append(m.group(1))
         else:
             if in_quote:
                 new_lines[-1] += '</blockquote>'
                 in_quote = False
             new_lines.append(line)
-
     if in_quote:
         new_lines[-1] += '</blockquote>'
-
     text = '\n'.join(new_lines)
 
-    # 5. Headlines umwandeln
+    # 5. Headlines
     text = re.sub(r'^####\s+(.*)$', r'<b>🔸 \1</b>', text, flags=re.M)
     text = re.sub(r'^###\s+(.*)$', r'<b>🔹 \1</b>', text, flags=re.M)
     text = re.sub(r'^##\s+(.*)$', r'<b>📍 \1</b>', text, flags=re.M)
     text = re.sub(r'^#\s+(.*)$', r'<b>🚀 \1</b>', text, flags=re.M)
 
-    # 6. Listenpunkte
+    # 6. Listen
     text = re.sub(r'^\s*[*-]\s+', r'• ', text, flags=re.M)
 
-    # 7. Fett, Kursiv, Unterstrichen (Bulletproof-Modus)
-    p = r'((?:(?!\n\n).)*?)'
-    text = re.sub(r'\*\*\*' + p + r'\*\*\*', r'<b><i>\1</i></b>', text, flags=re.S)
-    text = re.sub(r'\*\*' + p + r'\*\*', r'<b>\1</b>', text, flags=re.S)
-    text = re.sub(r'\*' + p + r'\*', r'<i>\1</i>', text, flags=re.S)
-    text = re.sub(r'__' + p + r'__', r'<u>\1</u>', text, flags=re.S)
+    # 7. Formatierung (Fett, Kursiv, Unterstrichen)
+    text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<b><i>\1</i></b>', text, flags=re.S)
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.S)
+    text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text, flags=re.S)
+    text = re.sub(r'__(.+?)__', r'<u>\1</u>', text, flags=re.S)
 
-    # 8. Platzhalter für Code und Math wieder einfügen
-    for key, val in placeholders.items():
-        text = text.replace(key, val)
+    # 8. Formeln wieder einsetzen
+    for key, value in placeholders.items():
+        text = text.replace(key, value)
 
     return text.strip()
 
-def split_html_message(text, max_length=4000):
-    """Teilt lange Texte auf, ohne Telegrams 4096 Limit zu sprengen."""
+
+def split_html_message(text: str, max_length: int = 4000) -> list:
+    """Teilt lange Nachrichten, ohne Telegram-Limit zu überschreiten."""
     if len(text) <= max_length:
         return [text]
-
     chunks = []
     while text:
         if len(text) <= max_length:
             chunks.append(text)
             break
         split_pos = text.rfind('\n', 0, max_length)
-        if split_pos == -1: split_pos = max_length
+        if split_pos == -1:
+            split_pos = max_length
         chunks.append(text[:split_pos])
         text = text[split_pos:].lstrip()
     return chunks
 
-# --- HTML FRONTEND ---
+
+# ====================== HTML FRONTEND ======================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="de">
@@ -135,162 +132,156 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Telegram Post Master Pro</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
-        :root { --tg-blue: #24A1DE; --tg-bg: #547594; --sidebar-width: 280px; --bg-light: #f4f7f9; }
-        * { box-sizing: border-box; transition: 0.2s ease-in-out; }
-        body { font-family: 'Segoe UI', Tahoma, sans-serif; margin: 0; display: flex; height: 100vh; background: var(--bg-light); }
-
-        .sidebar { width: var(--sidebar-width); background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; padding: 25px; }
-        .logo { font-size: 22px; font-weight: 800; color: var(--tg-blue); margin-bottom: 40px; display: flex; align-items: center; gap: 12px; }
-        .nav-item { padding: 14px 18px; margin-bottom: 8px; border-radius: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px; color: #555; text-decoration: none; font-weight: 500; font-size: 15px; border: none; background: none; width: 100%; text-align: left;}
-        .nav-item:hover { background: #f0f7ff; color: var(--tg-blue); }
-        .nav-item.active { background: var(--tg-blue); color: white; box-shadow: 0 4px 12px rgba(36, 161, 222, 0.25); }
-        .sidebar-footer { margin-top: auto; padding-top: 20px; border-top: 1px solid #eee; display: flex; flex-direction: column; gap: 5px;}
-
-        .main-content { flex: 1; display: flex; flex-direction: column; padding: 30px; overflow: hidden; }
-        .view { display: none; height: 100%; flex-direction: column; gap: 20px; }
+        :root { --tg-blue: #24A1DE; --bg-light: #f4f7f9; }
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; display: flex; height: 100vh; background: var(--bg-light); }
+        .sidebar { width: 280px; background: white; border-right: 1px solid #ddd; padding: 25px; display: flex; flex-direction: column; }
+        .logo { font-size: 24px; font-weight: 800; color: var(--tg-blue); display: flex; align-items: center; gap: 12px; margin-bottom: 40px; }
+        .nav-item { padding: 14px 18px; margin-bottom: 8px; border-radius: 12px; display: flex; align-items: center; gap: 12px; color: #555; font-weight: 500; background: none; border: none; width: 100%; text-align: left; cursor: pointer; }
+        .nav-item:hover, .nav-item.active { background: #f0f7ff; color: var(--tg-blue); }
+        .main-content { flex: 1; padding: 30px; overflow: auto; }
+        .view { display: none; flex-direction: column; gap: 20px; height: 100%; }
         .view.active { display: flex; }
-
-        .editor-container { display: flex; gap: 25px; flex: 1; min-height: 0; }
-        .panel { flex: 1; display: flex; flex-direction: column; gap: 10px; }
-        .panel-label { font-weight: bold; font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1.2px; }
-
-        textarea { flex: 1; border: 2px solid #e0e6ed; border-radius: 16px; padding: 20px; font-family: 'Consolas', monospace; resize: none; outline: none; font-size: 14px; background: white; line-height: 1.6; }
+        .editor-container { display: flex; gap: 25px; flex: 1; }
+        .panel { flex: 1; display: flex; flex-direction: column; }
+        .panel-label { font-weight: bold; font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        textarea { flex: 1; border: 2px solid #e0e6ed; border-radius: 16px; padding: 20px; font-family: 'Consolas', monospace; font-size: 15px; line-height: 1.6; resize: none; outline: none; }
         textarea:focus { border-color: var(--tg-blue); }
-
-        .preview-box { flex: 1; background: var(--tg-bg); border-radius: 16px; display: flex; justify-content: center; padding: 30px; overflow-y: auto; background-image: url('https://www.transparenttextures.com/patterns/cubes.png'); }
-
-        .tg-bubble { background: white; padding: 18px; border-radius: 18px; border-bottom-right-radius: 4px; max-width: 440px; width: 100%; height: fit-content; box-shadow: 0 8px 20px rgba(0,0,0,0.15); font-size: 15px; line-height: 1.5; color: #222; word-wrap: break-word; white-space: pre-wrap; }
-
-        .tg-bubble blockquote { border-left: 3px solid var(--tg-blue); margin: 5px 0; padding-left: 10px; color: #555; background: #f0f7ff; border-radius: 0 8px 8px 0; padding-top: 5px; padding-bottom: 5px;}
-        .tg-bubble code { background: #f0f0f0; padding: 2px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 13px; color: #d63384; }
-        .tg-bubble pre { background: #f0f0f0; padding: 10px; border-radius: 8px; font-family: Consolas, monospace; font-size: 13px; overflow-x: auto; white-space: pre-wrap; }
-
-        .btn-group { display: flex; gap: 12px; }
-        .btn { padding: 14px 24px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 14px; }
+        .preview-box { flex: 1; background: #547594; border-radius: 16px; padding: 30px; overflow-y: auto; background-image: url('https://www.transparenttextures.com/patterns/cubes.png'); display: flex; align-items: center; justify-content: center; }
+        .tg-bubble { background: white; padding: 22px; border-radius: 18px; border-bottom-right-radius: 6px; max-width: 460px; box-shadow: 0 10px 25px rgba(0,0,0,0.15); line-height: 1.55; color: #222; }
+        .btn-group { display: flex; gap: 12px; margin-top: 10px; }
+        .btn { flex: 1; padding: 16px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; font-size: 15px; display: flex; align-items: center; justify-content: center; gap: 10px; }
         .btn-primary { background: var(--tg-blue); color: white; }
         .btn-success { background: #34c759; color: white; }
         .btn-danger { background: #ff3b30; color: white; }
-        .btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
-
-        .content-card { background: white; padding: 40px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 850px; overflow-y: auto; line-height: 1.7; color: #333; }
     </style>
 </head>
 <body>
-
 <div class="sidebar">
-    <div class="logo"><i class="fa-solid fa-paper-plane"></i> Post Master</div>
+    <div class="logo"><i class="fa-solid fa-paper-plane"></i> Post Master Pro</div>
     <button class="nav-item active" onclick="showView('editor', this)"><i class="fa-solid fa-pen-nib"></i> Editor</button>
     <button class="nav-item" onclick="showView('help', this)"><i class="fa-solid fa-circle-info"></i> Hilfe & Tipps</button>
-    <div class="sidebar-footer">
-        <a href="{{ coffee_link }}" target="_blank" class="nav-item" style="color: #f39c12; font-weight: bold; background: #fff8e1;"><i class="fa-solid fa-mug-hot"></i> Buy Me a Coffee</a>
+    <div style="margin-top: auto; padding-top: 30px; border-top: 1px solid #eee;">
+        <a href="{{ coffee_link }}" target="_blank" class="nav-item" style="color:#f39c12; background:#fff8e1;">
+            <i class="fa-solid fa-mug-hot"></i> Buy Me a Coffee
+        </a>
     </div>
 </div>
 
 <div class="main-content">
+    <!-- EDITOR -->
     <div id="editor" class="view active">
         <div class="editor-container">
             <div class="panel">
-                <div class="panel-label">Markdown Eingabe</div>
-                <textarea id="editorInput" placeholder="Dein Markdown Text hier..."></textarea>
+                <div class="panel-label">Markdown + LaTeX Eingabe</div>
+                <textarea id="editorInput" placeholder="Schreibe hier... Formeln mit $...$ oder $$...$$ funktionieren jetzt perfekt!"></textarea>
             </div>
             <div class="panel">
-                <div class="panel-label">Vorschau (Telegram Stil)</div>
+                <div class="panel-label">Telegram-Vorschau (Live)</div>
                 <div class="preview-box">
-                    <div class="tg-bubble" id="previewBubble">Bereit für deinen Text...</div>
+                    <div class="tg-bubble" id="previewBubble">Deine formatierte Vorschau erscheint hier...</div>
                 </div>
             </div>
         </div>
         <div class="btn-group">
-            <button class="btn btn-primary" onclick="sendToTelegram()"><i class="fa-solid fa-share-from-square"></i> Senden</button>
-            <button class="btn btn-success" id="copyBtn" onclick="copyToClipboard()"><i class="fa-solid fa-copy"></i> Kopieren</button>
+            <button class="btn btn-primary" onclick="sendToTelegram()"><i class="fa-solid fa-share-from-square"></i> An Telegram senden</button>
+            <button class="btn btn-success" id="copyBtn" onclick="copyToClipboard()"><i class="fa-solid fa-copy"></i> Vorschau kopieren</button>
             <button class="btn btn-danger" onclick="resetAll()"><i class="fa-solid fa-trash-can"></i> Reset</button>
         </div>
     </div>
+
+    <!-- HILFE -->
     <div id="help" class="view">
-        <div class="content-card">
-            <h1>Neue Features im Post Master Pro</h1>
-            <ul>
-                <li><b>Mathe & Formeln:</b> Setze sie einfach in <code>$$Formel$$</code> oder <code>$ Formel $</code> – sie werden automatisch hervorgehoben und zerschießen das Layout nicht mehr!</li>
-                <li><b>Smart-Tabellen:</b> Füge normale Markdown-Tabellen ein. Der Bot wandelt sie in übersichtliche, Mobile-Friendly Listenblöcke um, da Telegram nativ keine Tabellen rendern kann.</li>
-            </ul>
+        <div style="background:white; padding:40px; border-radius:20px; box-shadow:0 4px 20px rgba(0,0,0,0.05); max-width:800px;">
+            <h1>✅ LaTeX-Formeln funktionieren jetzt perfekt!</h1>
+            <p>Du kannst jetzt ganz normal <code>$$...$$</code> für große Formeln und <code>$...$</code> für Inline-Formeln verwenden.</p>
+            <p>Der Bot wandelt sie automatisch in Telegram-kompatibles HTML um.</p>
         </div>
     </div>
 </div>
 
 <script>
-    const inputArea = document.getElementById('editorInput');
-    const previewBubble = document.getElementById('previewBubble');
+    const input = document.getElementById('editorInput');
+    const preview = document.getElementById('previewBubble');
 
-    function showView(viewId, navEl) {
+    function showView(id, el) {
         document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
         document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-        document.getElementById(viewId).classList.add('active');
-        navEl.classList.add('active');
+        document.getElementById(id).classList.add('active');
+        el.classList.add('active');
     }
 
-    function resetAll() {
-        if(confirm("Alles löschen?")) {
-            inputArea.value = "";
-            previewBubble.innerHTML = "Bereit für deinen Text...";
+    async function updatePreview() {
+        if (!input.value.trim()) {
+            preview.innerHTML = "Deine formatierte Vorschau erscheint hier...";
+            return;
+        }
+        try {
+            const res = await fetch('/preview', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: input.value})
+            });
+            const data = await res.json();
+            preview.innerHTML = data.html || "Fehler bei der Vorschau";
+        } catch(e) {
+            preview.innerHTML = "Vorschau konnte nicht geladen werden.";
         }
     }
 
-    async function copyToClipboard() {
-        const text = previewBubble.innerText;
-        if(!text || text === "Bereit für deinen Text...") return;
-        try {
-            await navigator.clipboard.writeText(text);
-            const btn = document.getElementById('copyBtn');
-            const old = btn.innerHTML;
-            btn.innerHTML = '<i class="fa-solid fa-check"></i> Kopiert!';
-            setTimeout(() => btn.innerHTML = old, 2000);
-        } catch (e) { alert("Fehler beim Kopieren."); }
-    }
+    input.addEventListener('input', () => {
+        clearTimeout(window.previewTimer);
+        window.previewTimer = setTimeout(updatePreview, 300);
+    });
 
     async function sendToTelegram() {
-        if(!inputArea.value) { alert("Bitte gib einen Text ein."); return; }
+        if (!input.value.trim()) return alert("Bitte Text eingeben!");
         try {
             const res = await fetch('/', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: 'content=' + encodeURIComponent(inputArea.value)
+                body: 'content=' + encodeURIComponent(input.value)
             });
-            const status = await res.text();
-            if(status === "OK") alert("🚀 Erfolgreich gesendet!");
-            else alert("Fehler: " + status);
-        } catch(e) { alert("Netzwerkfehler."); }
+            const txt = await res.text();
+            if (txt === "OK") alert("🚀 Erfolgreich an Telegram gesendet!");
+            else alert("Fehler: " + txt);
+        } catch(e) { alert("Netzwerkfehler"); }
     }
 
-    let delayTimer;
-    inputArea.addEventListener('input', () => {
-        clearTimeout(delayTimer);
-        delayTimer = setTimeout(async () => {
-            if(!inputArea.value) { previewBubble.innerHTML = "Bereit..."; return; }
-            const res = await fetch('/preview', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: inputArea.value})
-            });
-            const data = await res.json();
-            previewBubble.innerHTML = data.html;
-        }, 350);
-    });
+    async function copyToClipboard() {
+        const text = preview.innerText;
+        if (!text || text.includes("Vorschau")) return;
+        await navigator.clipboard.writeText(text);
+        const btn = document.getElementById('copyBtn');
+        const old = btn.innerHTML;
+        btn.innerHTML = '✅ Kopiert!';
+        setTimeout(() => btn.innerHTML = old, 1800);
+    }
+
+    function resetAll() {
+        if (confirm("Alles zurücksetzen?")) {
+            input.value = "";
+            preview.innerHTML = "Deine formatierte Vorschau erscheint hier...";
+        }
+    }
 </script>
 </body>
 </html>
 """
 
+# ====================== ROUTEN ======================
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
         content = request.form.get('content')
-        if not bot: return "Bot Token fehlt!", 500
+        if not bot or not MY_CHAT_ID:
+            return "Bot-Token oder Chat-ID fehlt!", 500
         if content:
             try:
-                formatted_html = format_to_tg_html(content)
-                chunks = split_html_message(formatted_html)
+                html = format_to_tg_html(content)
+                chunks = split_html_message(html)
                 for chunk in chunks:
                     bot.send_message(MY_CHAT_ID, chunk, parse_mode='HTML')
                 return "OK"
@@ -298,11 +289,13 @@ def index():
                 return f"Fehler: {str(e)}", 500
     return render_template_string(HTML_TEMPLATE, coffee_link=BASE_COFFEE_URL)
 
+
 @app.route('/preview', methods=['POST'])
 def preview_api():
-    data = request.json
-    raw_html = format_to_tg_html(data.get('text', ''))
-    return jsonify({'html': raw_html})
+    data = request.json or {}
+    html = format_to_tg_html(data.get('text', ''))
+    return jsonify({'html': html})
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
