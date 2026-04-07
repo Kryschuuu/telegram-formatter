@@ -92,9 +92,14 @@ def format_to_tg_html(text: str) -> str:
     text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text, flags=re.S)
     text = re.sub(r'__(.+?)__', r'<u>\1</u>', text, flags=re.S)
 
+    # code einfügen
+    text = re.sub(r'```(.*?)```', r'<pre>\1</pre>', text, flags=re.S)
+    text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
+
     # 8. Geschützte Formeln wieder einsetzen
     for key, value in placeholders.items():
         text = text.replace(key, value)
+    
 
     # 9. Zeilenumbrüche in <br> umwandeln (aber NICHT innerhalb von <pre> und <code>)
     text = text.replace('\n', '<br>')
