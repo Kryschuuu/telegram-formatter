@@ -14,100 +14,58 @@ app = Flask(__name__)
 
 
 # ====================== VERBESSERTER FORMEL + MARKDOWN CONVERTER ======================
-def format_to_tg_html(text: str) -> str:
-    """Komplett überarbeitete Version – Formeln + Zeilenumbrüche funktionieren jetzt einwandfrei."""
-    if not text:
+def format_to_tg_html(markdown_text):
+    if not markdown_text:
         return ""
 
-    # 1. HTML-Sonderzeichen escapen
+    # 1. Platzhalter für Code-Blöcke (Inhalt vor Formatierung schützen)
+    placeholders = {}
+    def repl_code(match):
+        p_id = f"___CODE_BLOCK_{len(placeholders)}___"
+        placeholders[p_id] = match.group(0)
+        return p_id
+
+    # Inline-Code und mehrzeiligen Code schützen
+    text = re.sub(r'```.*?```', repl_code, markdown_text, flags=re.DOTALL)
+    text = re.sub(r'`[^`\n]+`', repl_code, text)
+
+    # HTML-Sonderzeichen im restlichen Text eskapieren
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-    # 2. Formeln SCHÜTZEN (allererster Schritt!)
-    placeholders = {}
+    # 2. Überschriften konvertieren (Telegram unterstützt kein <h1>-<h3>, daher nutzen wir <b>)
+    # Entfernt führende Symbole und setzt die Zeile in Fettschrift mit sauberem Umbruch
+    text = re.sub(r'^(?:📍\s*)?###?\s*(.+)$', r'\n<b>\1</b>', text, flags=re.MULTILINE)
 
-    def protect_display(match):
-        key = f"@@DISPLAY_{uuid.uuid4().hex[:10]}@@"
-        placeholders[key] = f"<pre>{match.group(1).strip()}</pre>"
-        return key
+    # 3. Standard-Markdown-Formatierungen
+    # Fett (**text** oder __text__)
+    text = re.sub(r'\*\*(.*?)\*\*|__(.*?)__', lambda m: f"<b>{m.group(1) or m.group(2)}</b>", text)
+    # Kursiv (*text* oder _text_)
+    text = re.sub(r'\*(.*?)\*|_(.*?)_', lambda m: f"<i>{m.group(1) or m.group(2)}</i>", text)
 
-    def protect_inline(match):
-        key = f"@@INLINE_{uuid.uuid4().hex[:10]}@@"
-        placeholders[key] = f"<code>{match.group(1)}</code>"
-        return key
+    # 4. Listen-Punkte vereinheitlichen (Sowohl * als auch • zu Telegram-Bullets machen)
+    text = re.sub(r'^[•*]\s*(.+)$', r'• \1', text, flags=re.MULTILINE)
 
-    # Display-Formeln $$...$$
-    text = re.sub(r'\$\$(.+?)\$\$', protect_display, text, flags=re.DOTALL)
-    # Inline-Formeln $...$
-    text = re.sub(r'(?<!\\)\$(.+?)\$', protect_inline, text, flags=re.DOTALL)
+    # 5. Links konvertieren [Text](URL) -> <a href="URL">Text</a>
+    # Auch extrem lange URLs (wie die Google Search URL aus deinem Post) werden hier sicher erfasst
+    text = re.sub(r'\[([^\]]+)\]\((https?://[^\s)]+)\)', r'<a href="\2">\1</a>', text)
 
-    # 3. Tabellen → schöne Listen (Telegram kann keine echten Tabellen)
-    def table_replacer(match):
-        block = match.group(1).strip()
-        lines = [line.strip() for line in block.split('\n') if line.strip()]
-        if len(lines) < 3:
-            return match.group(0)
-        headers = [h.strip() for h in lines[0].strip('|').split('|') if h.strip()]
-        rows = []
-        for line in lines[2:]:
-            cols = [c.strip() for c in line.strip('|').split('|') if c.strip()]
-            parts = [f"<b>{headers[i]}:</b> {col}" if i < len(headers) else col for i, col in enumerate(cols)]
-            rows.append("🔸 " + "  •  ".join(parts))
-        return "\n\n" + "\n\n".join(rows) + "\n\n"
-
-    text = re.sub(r'((?:^\s*\|.*\|\s*(?:\n|$)){3,})', table_replacer, text, flags=re.MULTILINE)
-
-    # 4. Blockquotes
-    lines = text.split('\n')
-    new_lines = []
-    in_quote = False
-    for line in lines:
-        m = re.match(r'^\s*&gt;\s?(.*)', line)
-        if m:
-            if not in_quote:
-                new_lines.append('<blockquote>' + m.group(1))
-                in_quote = True
-            else:
-                new_lines.append(m.group(1))
+    # 6. Code-Blöcke wieder zurückholen und in Telegram-HTML übersetzen
+    for p_id, original in placeholders.items():
+        if original.startswith('```'):
+            # Mehrzeiliger Code -> <pre>
+            code_content = original.strip('`').strip()
+            code_content = code_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            text = text.replace(p_id, f"<pre>{code_content}</pre>")
         else:
-            if in_quote:
-                new_lines[-1] += '</blockquote>'
-                in_quote = False
-            new_lines.append(line)
-    if in_quote:
-        new_lines[-1] += '</blockquote>'
-    text = '\n'.join(new_lines)
+            # Inline-Code -> <code>
+            code_content = original.strip('`')
+            code_content = code_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            text = text.replace(p_id, f"<code>{code_content}</code>")
 
-    # 5. Headlines
-    text = re.sub(r'^####\s+(.*)$', r'<b>🔸 \1</b>', text, flags=re.M)
-    text = re.sub(r'^###\s+(.*)$', r'<b>🔹 \1</b>', text, flags=re.M)
-    text = re.sub(r'^##\s+(.*)$', r'<b>📍 \1</b>', text, flags=re.M)
-    text = re.sub(r'^#\s+(.*)$', r'<b>🚀 \1</b>', text, flags=re.M)
-
-    # 6. Listenpunkte
-    text = re.sub(r'^\s*[*-]\s+', r'• ', text, flags=re.M)
-
-    # 7. Formatierung (Fett, Kursiv, Unterstrichen)
-    text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<b><i>\1</i></b>', text, flags=re.S)
-    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.S)
-    text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text, flags=re.S)
-    text = re.sub(r'__(.+?)__', r'<u>\1</u>', text, flags=re.S)
-
-    # code einfügen
-    text = re.sub(r'```(.*?)```', r'<pre>\1</pre>', text, flags=re.S)
-    text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
-
-    # 8. Geschützte Formeln wieder einsetzen
-    for key, value in placeholders.items():
-        text = text.replace(key, value)
+    # 7. Zeilenumbrüche für Telegram vorbereiten
+    # Telegram interpretiert normale \n als Umbruch, wir bereinigen doppelte Rückstände
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
     
-
-    # 9. Zeilenumbrüche in <br> umwandeln (aber NICHT innerhalb von <pre> und <code>)
-    text = text.replace('\n', '<br>')
-    # <pre>-Blöcke wiederherstellen (Zeilenumbrüche bleiben erhalten)
-    text = re.sub(r'<pre>(.*?)</pre>', lambda m: '<pre>' + m.group(1).replace('<br>', '\n') + '</pre>', text, flags=re.DOTALL)
-    # <code> bleibt inline → keine <br>
-    text = re.sub(r'<code>(.*?)</code>', lambda m: '<code>' + m.group(1).replace('<br>', '') + '</code>', text, flags=re.DOTALL)
-
     return text.strip()
 
 
