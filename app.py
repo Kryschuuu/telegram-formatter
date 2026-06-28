@@ -32,38 +32,62 @@ def format_to_tg_html(markdown_text):
     # HTML-Sonderzeichen im restlichen Text eskapieren
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-    # 2. Überschriften konvertieren (Telegram unterstützt kein <h1>-<h3>, daher nutzen wir <b>)
-    # Entfernt führende Symbole und setzt die Zeile in Fettschrift mit sauberem Umbruch
+    # 2. Überschriften konvertieren (Telegram unterstützt kein h1-h3, daher b)
     text = re.sub(r'^(?:📍\s*)?###?\s*(.+)$', r'\n<b>\1</b>', text, flags=re.MULTILINE)
 
-    # 3. Standard-Markdown-Formatierungen
-    # Fett (**text** oder __text__)
-    text = re.sub(r'\*\*(.*?)\*\*|__(.*?)__', lambda m: f"<b>{m.group(1) or m.group(2)}</b>", text)
-    # Kursiv (*text* oder _text_)
+    # 3. Standard-Markdown-Formatierungen (Fett / Kursiv)
+    text = re.sub(r'\*\frac{(.*?)}{(.*?)}\*\*|\*\*(.*?)\*\*|__(.*?)__', lambda m: f"<b>{m.group(3) or m.group(4)}</b>", text)
     text = re.sub(r'\*(.*?)\*|_(.*?)_', lambda m: f"<i>{m.group(1) or m.group(2)}</i>", text)
 
-    # 4. Listen-Punkte vereinheitlichen (Sowohl * als auch • zu Telegram-Bullets machen)
+    # 4. Listen-Punkte vereinheitlichen
     text = re.sub(r'^[•*]\s*(.+)$', r'• \1', text, flags=re.MULTILINE)
 
-    # 5. Links konvertieren [Text](URL) -> <a href="URL">Text</a>
-    # Auch extrem lange URLs (wie die Google Search URL aus deinem Post) werden hier sicher erfasst
-    text = re.sub(r'\[([^\]]+)\]\((https?://[^\s)]+)\)', r'<a href="\2">\1</a>', text)
+    # 5. Link-Verarbeitung & Fußnoten-Extraktion (Dein Wunsch + Crash-Schutz)
+    extracted_footnotes = []
 
-    # 6. Code-Blöcke wieder zurückholen und in Telegram-HTML übersetzen
+    def process_links(match):
+        display_text = match.group(1).strip()
+        url = match.group(2).strip()
+
+        # Fall A: Der Anzeigetext ist selbst eine URL (wie unten in deinen Fußnoten)
+        # Wir geben die nackte URL aus. Telegram macht sie nativ klickbar.
+        # Das spart massig Speicherplatz und verhindert das Zerschneiden von HTML-Tags!
+        if display_text.startswith('http') or url in display_text:
+            return url
+
+        # Fall B: Es ist ein echter Text-Link im Fließtext (z.B. [Platons](...))
+        # Wir extrahieren die Riesen-URL für den Fußnotenbereich
+        extracted_footnotes.append(url)
+        fn_idx = len(extracted_footnotes)
+        return f"{display_text} [*{fn_idx}]"
+
+    # Alle Markdown-Links verarbeiten
+    text = re.sub(r'\[([^\]]+)\]\((https?://[^\s)]+)\)', process_links, text)
+
+    # Wenn Text-Links extrahiert wurden, fügen wir sie als neue Fußnoten vor der bestehenden [1] ein
+    if extracted_footnotes:
+        new_footnotes = ""
+        for i, url in enumerate(extracted_footnotes, 1):
+            new_footnotes += f"[*{i}] {url}\n"
+        
+        # Wir suchen nach der originalen [1] am Zeilenanfang im Text
+        if re.search(r'^\[1\]', text, re.MULTILINE):
+            text = re.sub(r'^\[1\]', f"{new_footnotes}\n[1]", text, count=1, flags=re.MULTILINE)
+        else:
+            text += f"\n\n{new_footnotes}"
+
+    # 6. Code-Blöcke wieder zurückholen
     for p_id, original in placeholders.items():
         if original.startswith('```'):
-            # Mehrzeiliger Code -> <pre>
             code_content = original.strip('`').strip()
             code_content = code_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             text = text.replace(p_id, f"<pre>{code_content}</pre>")
         else:
-            # Inline-Code -> <code>
             code_content = original.strip('`')
             code_content = code_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             text = text.replace(p_id, f"<code>{code_content}</code>")
 
-    # 7. Zeilenumbrüche für Telegram vorbereiten
-    # Telegram interpretiert normale \n als Umbruch, wir bereinigen doppelte Rückstände
+    # 7. Zeilenumbrüche bereinigen
     text = text.replace('\r\n', '\n').replace('\r', '\n')
     
     return text.strip()
