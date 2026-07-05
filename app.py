@@ -281,32 +281,57 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        const input = document.getElementById('editorInput');
-        const preview = document.getElementById('previewBubble');
-
-        input.addEventListener('input', () => {
-            fetch('/preview', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: input.value})
-            })
-            .then(r => r.json())
-            .then(data => {
-                preview.innerHTML = data.html || "Deine Vorschau erscheint hier...";
-            });
-        });
-
-        function sendToTelegram() {
-            const formData = new FormData();
-            formData.append('content', input.value);
-            fetch('/', { method: 'POST', body: formData })
-            .then(r => r.text())
-            .then(res => {
-                if(res === "OK") alert("Erfolgreich an Telegram gesendet!");
-                else alert("Fehler: " + res);
-            });
+    const input = document.getElementById('editorInput');
+    const preview = document.getElementById('previewBubble');
+    function showView(id, el) {
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+        el.classList.add('active');
+    }
+    async function updatePreview() {
+        if (!input.value.trim()) {
+            preview.innerHTML = "Deine Vorschau erscheint hier...";
+            return;
         }
-    </script>
+        const res = await fetch('/preview', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: input.value})
+        });
+        const data = await res.json();
+        preview.innerHTML = data.html;
+    }
+    input.addEventListener('input', () => {
+        clearTimeout(window.timer);
+        window.timer = setTimeout(updatePreview, 300);
+    });
+    async function sendToTelegram() {
+        if (!input.value.trim()) return alert("Bitte Text eingeben!");
+        const res = await fetch('/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'content=' + encodeURIComponent(input.value)
+        });
+        const txt = await res.text();
+        alert(txt === "OK" ? "🚀 Erfolgreich gesendet!" : "Fehler: " + txt);
+    }
+    async function copyToClipboard() {
+        const text = preview.innerText;
+        if (text.includes("Vorschau")) return;
+        await navigator.clipboard.writeText(text);
+        const btn = document.getElementById('copyBtn');
+        const old = btn.innerHTML;
+        btn.innerHTML = '✅ Kopiert!';
+        setTimeout(() => btn.innerHTML = old, 1800);
+    }
+    function resetAll() {
+        if (confirm("Alles zurücksetzen?")) {
+            input.value = "";
+            preview.innerHTML = "Deine Vorschau erscheint hier...";
+        }
+    }
+</script>
 </body>
 </html>
 """
