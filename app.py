@@ -265,7 +265,7 @@ HTML_TEMPLATE = """
             <div class="editor-container">
                 <div class="panel">
                     <div class="panel-label">Markdown + LaTeX Eingabe</div>
-                    <textarea id="editorInput" placeholder="Schreibe dein Markdown / LaTeX hier..."></textarea>
+                    <textarea id="editorInput" placeholder="Hier kannst du ganz normal Markdown und LaTeX schreiben..."></textarea>
                 </div>
                 <div class="panel">
                     <div class="panel-label">Telegram-Vorschau (Live)</div>
@@ -276,6 +276,13 @@ HTML_TEMPLATE = """
             </div>
             <div class="btn-group">
                 <button class="btn btn-primary" onclick="sendToTelegram()"><i class="fa-solid fa-share-from-square"></i> An Telegram senden</button>
+                <button class="btn btn-success" id="copyBtn" onclick="copyToClipboard()"><i class="fa-solid fa-copy"></i> Vorschau kopieren</button>
+                <button class="btn btn-danger" onclick="resetAll()"><i class="fa-solid fa-trash-can"></i> Reset</button>
+            </div>
+        </div>
+        <div id="help" class="view">
+            <div style="background:white; padding:40px; border-radius:20px; box-shadow:0 4px 20px rgba(0,0,0,0.05);">
+                <h1>✅ Jetzt funktionieren Formeln und Zeilenumbrüche perfekt!</h1>
             </div>
         </div>
     </div>
