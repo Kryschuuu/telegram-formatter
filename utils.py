@@ -1,4 +1,4 @@
-"""
+r"""
 utils.py
 ========
 Reine, I/O-freie Konvertierungs- und Aufteilungslogik für
@@ -15,12 +15,18 @@ Eingabe (Markdown mit LaTeX ``$...$``/``$$...$$`` und Pipe-Tabellen)
     -> build_messages()                       entscheidet Rich vs. Regular
        |-- Rich-Pfad  (LaTeX/Tabellen vorhanden)
        |     -> markdown_to_rich_markdown()   GFM + nativem LaTeX
+       |        `-> convert_deepseek_latex_syntax()  \(..\)->$..$, \[..\]->$$..$$
        |     -> chunk_text(..., 32768)        Aufteilung am Blocklimit
        |     -> payload "sendRichMessage"
        `-- Regular-Pfad (reiner Text mit Formatierung)
              -> markdown_to_html()            Telegram-HTML (fett/kursiv/...)
              -> chunk_text(..., 4096)         Aufteilung am 4096-Limit
              -> payload "sendMessage"
+
+Unterstützte LaTeX-Delimiter in der Eingabe:
+- ``$...$`` / ``$$...$$``  (klassisch, von Telegram nativ gerendert)
+- ``\(...\)`` / ``\[...\]`` (DeepSeek/Gemini) -- werden vor dem Versand in die
+  Dollar-Syntax übersetzt, weil Telegram sie sonst als Text ausgeben würde.
 
 Wichtige Telegram-Fakten (Bot API 10.1+, Stand 2026):
 - ``sendMessage`` limitiert den Text auf **4096** Zeichen und unterstützt
@@ -102,51 +108,6 @@ def validate_latex_braces(formula: str) -> bool:
             if depth < 0:  # schließende Klammer ohne öffnende
                 return False
     return depth == 0
-
-
-def _find_delimiter_close(
-    text: str, opener: str, closer: str, start: int
-) -> tuple[int, str]:
-    """
-    Findet die schließende Marke für einen geöffneten Formel-Delimiter.
-
-    Unterstützt sowohl einfache Delimiter (``, $``) als auch
-    Backslash-Delimiter (``\(``, ``\[``).
-
-    Gibt ein Tuple zurück: (Endposition, Formel-Text).
-    Bei verschachtelten Delimitern wird die korrekte schließende Position
-    gesucht, um Formeln wie ``\[ x $ y \]`` zu unterstützen.
-    """
-    n = len(text)
-    i = start
-    brace_depth = 0
-    brace_close_pending = False
-
-    while i < n:
-        ch = text[i]
-
-        # Bei Backslash-Delimitern: schlicht nach dem Closer suchen
-        if opener.startswith("\\") and text[i:].startswith(closer):
-            return i + len(closer), text[start : i]
-
-        # Bei Dollar-Delimitern: schlicht nach dem Closer suchen
-        if opener == "$" and ch == "$":
-            # Nur schließen, wenn wir nicht gerade ein einzelnes $ suchen
-            # und das nächste Zeichen kein $ ist (oder wir $$ als Closer haben)
-            if closer == "$$" and i + 1 < n and text[i + 1] == "$":
-                return i + 2, text[start:i]
-            elif closer == "$":
-                return i, text[start:i]
-
-        # Klammer-Traversal für verschachtelte Formeln
-        if ch == "{":
-            brace_depth += 1
-        elif ch == "}":
-            brace_depth -= 1
-
-        i += 1
-
-    return -1, text[start:]
 
 
 def split_formulas(text: str) -> list[Segment]:
@@ -246,6 +207,82 @@ def split_formulas(text: str) -> list[Segment]:
 def has_latex(text: str) -> bool:
     """True, wenn ``text`` mindestens eine gültige ``$...$``/``$$...$$``-Formel enthält."""
     return any(seg.kind != "text" for seg in split_formulas(text))
+
+
+def convert_deepseek_latex_syntax(text: str) -> str:
+    r"""
+    Normalisiert DeepSeek/Gemini-LaTeX-Delimiter auf Telegram-Syntax.
+
+    - ``\(...\)``  ->  ``$...$``    (Inline-Math)
+    - ``\[...\]``  ->  ``$$...$$``  (Display-Math)
+
+    Telegram Rich Messages rendern ausschließlich ``$...$``/``$$...$$``.
+    KI-Tools wie DeepSeek Chat und Gemini liefern jedoch die
+    Backslash-Delimiter, die Telegram unverändert als Text ausgeben würde.
+
+    Der Formelinhalt wird **1:1** übernommen (inklusive Zeilenumbrüchen und
+    verschachtelter Strukturen wie ``\binom{\binom{70}{6}}{33}``).
+
+    Robustheit:
+    - Bereits vorhandene ``$...$``/``$$...$$``-Formeln werden übersprungen und
+      bleiben unangetastet -- gemischte Dokumente funktionieren dadurch.
+    - Ein doppelter Backslash (``\\``, LaTeX-Zeilenumbruch bzw. escapter
+      Backslash) wird nicht als Delimiter-Beginn fehlinterpretiert.
+    - Unvollständige Delimiter ohne Gegenstück bleiben unverändert stehen,
+      statt den restlichen Text zu zerstören.
+
+    Hinweis: Code muss vor dem Aufruf geschützt sein (Platzhalter), damit
+    Backslash-Klammern in Codeblöcken nicht umgeschrieben werden.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+
+    while i < n:
+        pair = text[i : i + 2]
+
+        # 1. Bestehende $$...$$-Formel unverändert übernehmen.
+        if pair == "$$":
+            end = text.find("$$", i + 2)
+            if end != -1:
+                out.append(text[i : end + 2])
+                i = end + 2
+                continue
+
+        # 2. Bestehende $...$-Formel unverändert übernehmen
+        #    ("$ 20" ist eine Preisangabe, kein Formelbeginn).
+        if text[i] == "$" and not (i + 1 < n and text[i + 1].isspace()):
+            end = text.find("$", i + 1)
+            if end != -1 and (end == i + 1 or text[end - 1] != "$"):
+                out.append(text[i : end + 1])
+                i = end + 1
+                continue
+
+        # 3. Doppelter Backslash -> kein Delimiter (z. B. LaTeX-Zeilenumbruch).
+        if pair == "\\\\":
+            out.append(pair)
+            i += 2
+            continue
+
+        # 4. \[...\] -> $$...$$ (Display, DeepSeek/Gemini)
+        if pair == r"\[":
+            end = text.find(r"\]", i + 2)
+            if end != -1:
+                out.append("$$" + text[i + 2 : end] + "$$")
+                i = end + 2
+                continue
+
+        # 5. \(...\) -> $...$ (Inline, DeepSeek/Gemini)
+        if pair == r"\(":
+            end = text.find(r"\)", i + 2)
+            if end != -1:
+                out.append("$" + text[i + 2 : end] + "$")
+                i = end + 2
+                continue
+
+        out.append(text[i])
+        i += 1
+
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -378,37 +415,41 @@ def markdown_to_html(text: str) -> str:
         text,
     )
 
-    # 2. Formeln defensiv schützen (HTML kann sie nicht rendern, aber der
+    # 2. DeepSeek/Gemini-Delimiter auf Telegram-Syntax normalisieren, damit
+    #    der Formelschutz unten nur noch eine Syntax kennen muss.
+    text = convert_deepseek_latex_syntax(text)
+
+    # 3. Formeln defensiv schützen (HTML kann sie nicht rendern, aber der
     #    Inhalt darf durch die folgenden Regexes nicht zerstört werden).
     text = _protect_math(text, store)
 
-    # 3. Verbleibenden Text escapen.
+    # 4. Verbleibenden Text escapen.
     text = _escape_html(text)
 
-    # 4. Tabellen als lesbare Zeilen (Fallback; wird normalerweise nicht
+    # 5. Tabellen als lesbare Zeilen (Fallback; wird normalerweise nicht
     #    erreicht, weil Tabellen über den Rich-Pfad laufen).
     text = _tables_to_lines(text)
 
-    # 5. Überschriften in Fettschrift mit Emoji-Marker.
+    # 6. Überschriften in Fettschrift mit Emoji-Marker.
     text = re.sub(r"^####+\s+(.*)$", r"<b>🔸 \1</b>", text, flags=re.M)
     text = re.sub(r"^###\s+(.*)$", r"<b>🔹 \1</b>", text, flags=re.M)
     text = re.sub(r"^##\s+(.*)$", r"<b>📍 \1</b>", text, flags=re.M)
     text = re.sub(r"^#\s+(.*)$", r"<b>🚀 \1</b>", text, flags=re.M)
 
-    # 6. Blockquotes ("> " am Zeilenanfang).
+    # 7. Blockquotes ("> " am Zeilenanfang).
     text = _wrap_blockquotes(text)
 
-    # 7. Links.
+    # 8. Links.
     text = re.sub(
         r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text
     )
 
-    # 8. Listenpunkte.
+    # 9. Listenpunkte.
     text = re.sub(r"^\s*[-*+]\s+", "• ", text, flags=re.M)
     text = re.sub(r"^\s*\d+[.)]\s+", "• ", text, flags=re.M)
 
-    # 9. Inline-Formatierung (Reihenfolge wichtig: fett vor kursiv,
-    #    Unterstreichen vor Kursiv-_).
+    # 10. Inline-Formatierung (Reihenfolge wichtig: fett vor kursiv,
+    #     Unterstreichen vor Kursiv-_).
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"__(.+?)__", r"<u>\1</u>", text)
     text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", text)
@@ -544,13 +585,16 @@ def _tables_to_lines(text: str) -> str:
 # Markdown -> Rich Markdown (Rich-Pfad, sendRichMessage)
 # ---------------------------------------------------------------------------
 def markdown_to_rich_markdown(text: str) -> str:
-    """
+    r"""
     Wandelt Markdown in Telegrams "Rich Markdown" um (Feld ``markdown`` im
     ``InputRichMessage``-Objekt).
 
     Rich Markdown ist GFM-kompatibel und unterstützt daher ``**fett**``,
     ``*kursiv*``, ``~~durchgestrichen~~``, Code, Listen, Überschriften,
     Blockquotes, LaTeX (``$...$``/``$$...$$``) und Pipe-Tabellen nativ.
+
+    DeepSeek/Gemini-Delimiter (``\(...\)``/``\[...\]``) werden dabei über
+    :func:`convert_deepseek_latex_syntax` in die Dollar-Syntax übersetzt.
 
     Der einzige Unterschied zur Eingabe: Unterstreichen wird hier über
     ``<u>...</u>`` ausgedrückt, weil ``__...__`` in Rich Markdown Fett
@@ -568,10 +612,14 @@ def markdown_to_rich_markdown(text: str) -> str:
     text = re.sub(r"```([^\n]*)\n(.*?)```", fenced, text, flags=re.DOTALL)
     text = re.sub(r"`([^`\n]+)`", lambda m: store(f"`{m.group(1)}`"), text)
 
-    # 2. Unterstreichen __x__ -> <u>x</u>.
+    # 2. DeepSeek/Gemini-Delimiter auf Telegram-Syntax normalisieren
+    #    (\(...\) -> $...$, \[...\] -> $$...$$). Code ist bereits geschützt.
+    text = convert_deepseek_latex_syntax(text)
+
+    # 3. Unterstreichen __x__ -> <u>x</u>.
     text = re.sub(r"__([^_\n]+)__", r"<u>\1</u>", text)
 
-    # 3. Tabellen blockweise normalisieren; alles andere bleibt GFM.
+    # 4. Tabellen blockweise normalisieren; alles andere bleibt GFM.
     blocks = re.split(r"\n\s*\n", text)
     rendered = []
     for block in blocks:

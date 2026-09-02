@@ -13,7 +13,8 @@ Nachrichten.
 
 - **LaTeX-Konvertierung** — Unterstützt mehrere Delimiter-Syntaxe:
   - Klassisch: `$…$` (Inline) und `$$…$$` (Display)
-  - DeepSeek/Gemini: `\($…$\)` und `\[…\]`
+  - DeepSeek/Gemini: `\(…\)` und `\[…\]` — werden automatisch in die
+    Telegram-Syntax `$…$`/`$$…$$` umgewandelt
   
   Verschachtelte Strukturen wie `$\binom{\binom{70}{6}}{33}$` und
   Spezialsymbole (`\sum`, `\int`, `\alpha`, …) bleiben intakt. Kein
@@ -112,7 +113,8 @@ n | L(n,6,6,2) | Quelle
 ### DeepSeek/Gemini-Syntax
 
 KI-Tools wie DeepSeek und Gemini verwenden eine andere LaTeX-Syntax.
- telegram-formatter unterstützt auch diese:
+telegram-formatter erkennt sie und wandelt sie automatisch um, denn Telegram
+rendert ausschließlich `$…$` und `$$…$$`:
 
 ```markdown
 Die gespeicherte Energie \(E\) eines Kondensators beträgt:
@@ -122,8 +124,19 @@ E = \frac{1}{2} C U^2
 \]
 ```
 
-Beide Syntaxformen (`$...$`/`$$...$$` und `\($...$\)`/`\[...\]`) werden
-erkannt und korrekt als Rich-Message versendet.
+wird zu:
+
+```markdown
+Die gespeicherte Energie $E$ eines Kondensators beträgt:
+
+$$
+E = \frac{1}{2} C U^2
+$$
+```
+
+Beide Syntaxformen (`$...$`/`$$...$$` und `\(...\)`/`\[...\]`) werden erkannt
+und als Rich-Message versendet. Der Formelinhalt bleibt dabei unverändert;
+Formeln in Code-Blöcken werden nicht angefasst.
 
 ### Als Bibliothek
 

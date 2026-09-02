@@ -9,6 +9,7 @@ from utils import (
     RICH_MESSAGE_MAX_CHARS,
     build_messages,
     chunk_text,
+    convert_deepseek_latex_syntax,
     has_latex,
     has_table,
     markdown_to_html,
@@ -193,11 +194,15 @@ E = \frac{1}{2} C U^2
 
 
 def test_build_rich_for_deepseek_math():
-    """DeepSeek-Syntax sollte Rich-Message auslösen."""
+    """DeepSeek-Syntax löst Rich-Message aus und wird zu ``$...$`` normalisiert."""
     msgs = build_messages(r"Formel \(x^2\)", 123)
     assert len(msgs) == 1
     assert msgs[0].kind == "rich"
-    assert r"\(x^2\)" in msgs[0].payload["rich_message"]["markdown"]
+    markdown = msgs[0].payload["rich_message"]["markdown"]
+    assert "$x^2$" in markdown
+    # Telegram rendert die Backslash-Delimiter nicht -> dürfen nicht mehr auftauchen.
+    assert r"\(" not in markdown
+    assert r"\)" not in markdown
 
 
 def test_build_rich_for_deepseek_display_math():
@@ -205,6 +210,95 @@ def test_build_rich_for_deepseek_display_math():
     msgs = build_messages(r"Formel \[x^2\]", 123)
     assert len(msgs) == 1
     assert msgs[0].kind == "rich"
+    markdown = msgs[0].payload["rich_message"]["markdown"]
+    assert "$$x^2$$" in markdown
+    assert r"\[" not in markdown
+    assert r"\]" not in markdown
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek/Gemini-Delimiter -> Telegram-Syntax (convert_deepseek_latex_syntax)
+# ---------------------------------------------------------------------------
+def test_convert_inline_delimiters():
+    assert convert_deepseek_latex_syntax(r"Die Energie \(E\) ist") == "Die Energie $E$ ist"
+
+
+def test_convert_display_delimiters():
+    assert convert_deepseek_latex_syntax(r"\[E = mc^2\]") == "$$E = mc^2$$"
+
+
+def test_convert_task_example_end_to_end():
+    """Das Beispiel aus der Aufgabenstellung muss exakt so herauskommen."""
+    source = "Die Energie \\(E\\) beträgt\n\\[E = \\frac{1}{2}CU^2\\]"
+    expected = "Die Energie $E$ beträgt\n$$E = \\frac{1}{2}CU^2$$"
+    assert convert_deepseek_latex_syntax(source) == expected
+    assert markdown_to_rich_markdown(source) == expected
+
+
+def test_convert_multiline_display_keeps_newlines():
+    source = "\\[\nE = \\frac{1}{2} C U^2\n\\]"
+    assert convert_deepseek_latex_syntax(source) == "$$\nE = \\frac{1}{2} C U^2\n$$"
+
+
+def test_convert_keeps_nested_braces_verbatim():
+    source = r"\(\binom{\binom{70}{6}}{33}\)"
+    assert convert_deepseek_latex_syntax(source) == r"$\binom{\binom{70}{6}}{33}$"
+
+
+def test_convert_leaves_existing_dollar_math_untouched():
+    source = "$x^2$ und $$y^2$$"
+    assert convert_deepseek_latex_syntax(source) == source
+
+
+def test_convert_mixed_syntaxes():
+    source = r"$a$ und \(b\) und $$c$$ und \[d\]"
+    assert convert_deepseek_latex_syntax(source) == "$a$ und $b$ und $$c$$ und $$d$$"
+
+
+def test_convert_ignores_price_dollar():
+    """``$ 20`` ist eine Preisangabe und darf keine Formel öffnen."""
+    source = r"Kosten $ 20 und \(x\)"
+    assert convert_deepseek_latex_syntax(source) == "Kosten $ 20 und $x$"
+
+
+def test_convert_unterminated_inline_stays_text():
+    source = r"offen \( ohne Ende"
+    assert convert_deepseek_latex_syntax(source) == source
+
+
+def test_convert_unterminated_display_stays_text():
+    source = r"offen \[ ohne Ende"
+    assert convert_deepseek_latex_syntax(source) == source
+
+
+def test_convert_double_backslash_is_no_delimiter():
+    """``\\\\`` (LaTeX-Zeilenumbruch) darf nicht als ``\\(`` gelesen werden."""
+    source = r"Zeile \\ (kein Delimiter)"
+    assert convert_deepseek_latex_syntax(source) == source
+
+
+def test_convert_empty_and_plain_text():
+    assert convert_deepseek_latex_syntax("") == ""
+    assert convert_deepseek_latex_syntax("nur Text") == "nur Text"
+
+
+def test_rich_does_not_touch_deepseek_syntax_in_code():
+    """Backslash-Klammern in Code bleiben unverändert."""
+    rich = markdown_to_rich_markdown("Inline `\\(x\\)` und\n\n```py\nf(\\(x\\))\n```")
+    assert r"`\(x\)`" in rich
+    assert r"f(\(x\))" in rich
+
+
+def test_rich_converts_deepseek_but_keeps_dollar_math():
+    rich = markdown_to_rich_markdown(r"\(a\) und $b$ und \[c\]")
+    assert rich == "$a$ und $b$ und $$c$$"
+
+
+def test_html_renders_deepseek_math_content():
+    """Im HTML-Pfad bleibt der Formelinhalt erhalten (ohne Delimiter)."""
+    html = markdown_to_html(r"Energie \(E\) hier")
+    assert "E" in html
+    assert r"\(" not in html
 
 
 # ---------------------------------------------------------------------------
