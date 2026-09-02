@@ -12,15 +12,33 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
   und `\[...\]` (Display-Math) zusätzlich zum klassischen `$...$`/`$$...$$`.
   Diese Syntax wird von DeepSeek Chat, Gemini und anderen KI-Tools verwendet.
   Formeln werden korrekt als LaTeX erkannt und als Rich-Message versendet.
+- **Neue Funktion `convert_deepseek_latex_syntax()`** in `utils.py`: normalisiert
+  `\(...\)` → `$...$` und `\[...\]` → `$$...$$`. Eingebunden in
+  `markdown_to_rich_markdown()` und `markdown_to_html()`.
+
+### Behoben
+
+- **Telegram rendert DeepSeek-Delimiter nicht**: Bisher wurden `\(...\)`/`\[...\]`
+  zwar als LaTeX *erkannt* (Rich-Pfad), aber unverändert in die Payload
+  geschrieben — Telegram gab sie dadurch als rohen Text mit Backslashes aus.
+  Die Delimiter werden jetzt in die von Telegram unterstützte Dollar-Syntax
+  übersetzt, während der Formelinhalt 1:1 erhalten bleibt.
+
+### Geändert
+
+- Entfernt: ungenutzte Hilfsfunktion `_find_delimiter_close()` (toter Code, der
+  zudem eine `DeprecationWarning` wegen ungültiger Escape-Sequenz auslöste).
+- Dokumentation (`README.md`, `templates/index.html`) beschreibt die
+  DeepSeek/Gemini-Syntax; Versionsangabe der Web-Oberfläche auf 1.2.0 angehoben.
 
 ### Tests
 
-- 11 neue Tests für die DeepSeek/Gemini-Syntax (`test_split_inline_math_deepseek_syntax`,
-  `test_split_display_math_deepseek_syntax`, `test_split_mixed_delimiters`,
-  `test_split_preserves_nested_in_deepseek_syntax`, `test_has_latex_deepseek_syntax`,
-  `test_has_latex_mixed_syntax`, `test_unterminated_paren_stays_text`,
-  `test_unterminated_bracket_stays_text`, `test_deepseek_real_world_example`,
-  `test_build_rich_for_deepseek_math`, `test_build_rich_for_deepseek_display_math`).
+- 81 Tests gesamt (vorher 66), davon 26 rund um die DeepSeek/Gemini-Syntax:
+  Erkennung (`split_formulas`, `has_latex`), Konvertierung
+  (`convert_deepseek_latex_syntax`) sowie die Payload-Ausgabe über
+  `build_messages()`. Abgedeckt sind gemischte Delimiter, mehrzeilige
+  Display-Formeln, verschachtelte Klammern, Preisangaben (`$ 20`),
+  unvollständige Delimiter, doppelte Backslashes und Code-Schutz.
 
 ## [1.1.0] - 2026-09-02
 

@@ -146,7 +146,10 @@
                     <p class="text-sm text-slate-600 leading-relaxed">
                         Markdown mit Formatierungen (Fett, Kursiv, Code, …), LaTeX-Formeln
                         (<code class="bg-slate-100 px-1 rounded">$…$</code> / <code class="bg-slate-100 px-1 rounded">$$…$$</code>)
-                        und Tabellen links in den Editor schreiben.
+                        und Tabellen links in den Editor schreiben. Auch die Syntax von
+                        DeepSeek und Gemini (<code class="bg-slate-100 px-1 rounded">\(…\)</code> /
+                        <code class="bg-slate-100 px-1 rounded">\[…\]</code>) wird erkannt und
+                        automatisch umgewandelt.
                     </p>
                 </div>
             </li>
@@ -261,6 +264,21 @@
             </details>
             <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
                 <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+                    Werden Formeln aus DeepSeek oder Gemini unterstützt?
+                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                </summary>
+                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+                    Ja. KI-Tools wie DeepSeek und Gemini liefern LaTeX mit den Delimitern
+                    <code class="bg-slate-100 px-1 rounded">\(…\)</code> (inline) und
+                    <code class="bg-slate-100 px-1 rounded">\[…\]</code> (abgesetzt).
+                    Telegram rendert nur <code class="bg-slate-100 px-1 rounded">$…$</code> und
+                    <code class="bg-slate-100 px-1 rounded">$$…$$</code>, deshalb wird die Syntax
+                    beim Erzeugen der Payload automatisch umgewandelt — der Formelinhalt bleibt
+                    dabei unverändert. Einfach den Text aus dem Chat hierher kopieren.
+                </p>
+            </details>
+            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
+                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
                     Es klappt nicht — was kann ich bei Fehlern tun?
                     <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
                 </summary>
@@ -286,7 +304,7 @@
             </p>
             <p class="text-slate-400 leading-relaxed">
                 Markdown + LaTeX → sendefertige Telegram-Nachrichten.
-                Open Source unter MIT-Lizenz · Version 1.1.0.
+                Open Source unter MIT-Lizenz · Version 1.2.0.
             </p>
         </div>
         <div>
