@@ -4,6 +4,40 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [1.1.0] - 2026-09-02
+
+Neue Web-UI-Features (Minor-Bump nach Semantic Versioning).
+
+### Hinzugefügt
+- **Reset-Button** „Zurücksetzen" in der Web-Oberfläche: leert Eingabe,
+  Vorschau, Payload-Ausgabe und Statusmeldung und setzt den Fokus zurück
+  ins Eingabefeld.
+- **Buy-me-a-coffee-Button** (`https://buymeacoffee.com/rg4free`) im Header
+  (gelb hervorgehoben) sowie als Unterstützungs-Link im Footer
+  (`target="_blank"`, `rel="noopener"`).
+- **Disclaimer**: ausführlicher Haftungsausschluss als Hinweisbox unter dem
+  Editor (eigene Verantwortung, Akzeptanz der Nutzungsbedingungen, keine
+  Verbindung zu Telegram, keine Datenspeicherung, Haftungsausschluss) plus
+  Kurzform im Footer.
+- **Howto**: nummerierte Schritt-für-Schritt-Anleitung direkt auf der Seite
+  (Token via @BotFather, Chat-ID ermitteln, Eingabe, Vorschau prüfen,
+  Versand).
+- **FAQ**: sieben aufklappbare Akkordeons (Bot-Token, Chat-ID,
+  LaTeX-Rendering, Nachrichtenlänge, Datenschutz, Formatierung,
+  Fehlerbehebung).
+- Font-Awesome-Icons für Buttons, Abschnitte und Statusanzeigen.
+- Tests: `tests/test_app.py` prüft Reset-Button, Coffee-Link, Disclaimer
+  und Howto/FAQ (55 Tests gesamt).
+- `docs/PROMPT.md` (wiederverwendbarer Arbeitsauftrag) und
+  `docs/PR_DESCRIPTION.md` (fertiger PR-Text).
+
+### Geändert
+- **Optik**: Sticky-Header, Karten-Layout für alle Sektionen, neuer
+  mehrspaltiger Footer; Konfigurationsstatus („Bot konfiguriert" /
+  „Kein Bot-Token gesetzt") im Header sichtbar.
+- README: Versions-Badge und Versionsangabe auf **1.1.0**,
+  Funktionsübersicht um die neuen UI-Features ergänzt.
+
 ## [1.0.0] - 2026-09-02
 
 Komplette Überarbeitung: Code-Review, Bugfixing, Tests, Dokumentation.
