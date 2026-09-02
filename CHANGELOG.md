@@ -4,6 +4,24 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [1.2.0] - 2026-09-02
+
+### Hinzugefügt
+
+- **DeepSeek/Gemini-LaTeX-Syntax**: Unterstützung für `\(...\)` (Inline-Math)
+  und `\[...\]` (Display-Math) zusätzlich zum klassischen `$...$`/`$$...$$`.
+  Diese Syntax wird von DeepSeek Chat, Gemini und anderen KI-Tools verwendet.
+  Formeln werden korrekt als LaTeX erkannt und als Rich-Message versendet.
+
+### Tests
+
+- 11 neue Tests für die DeepSeek/Gemini-Syntax (`test_split_inline_math_deepseek_syntax`,
+  `test_split_display_math_deepseek_syntax`, `test_split_mixed_delimiters`,
+  `test_split_preserves_nested_in_deepseek_syntax`, `test_has_latex_deepseek_syntax`,
+  `test_has_latex_mixed_syntax`, `test_unterminated_paren_stays_text`,
+  `test_unterminated_bracket_stays_text`, `test_deepseek_real_world_example`,
+  `test_build_rich_for_deepseek_math`, `test_build_rich_for_deepseek_display_math`).
+
 ## [1.1.0] - 2026-09-02
 
 Neue Web-UI-Features (Minor-Bump nach Semantic Versioning).
