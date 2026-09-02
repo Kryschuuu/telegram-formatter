@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -24,6 +24,10 @@ Nachrichten.
   Wortgrenzen aufgeteilt (4096 Zeichen für klassische, 32768 für Rich
   Messages), ohne Formatierungen oder Tabellen zu zerreißen.
 - **Unicode-sicher** — NFC-Normalisierung für Diakritika wie `ì`.
+- **Komfortable Web-Oberfläche** (v1.1.0) — Live-Vorschau und Payloads in
+  Echtzeit, Reset-Button („Zurücksetzen"), Sticky-Header im Karten-Layout,
+  Schritt-für-Schritt-Howto, aufklappbares FAQ, Disclaimer-Hinweisbox sowie
+  Buy-me-a-coffee-Unterstützungs-Link (Header & Footer).
 
 ## Warum zwei Pfade?
 
@@ -132,7 +136,9 @@ telegram-formatter/
 ├── docs/
 │   ├── BLUEPRINT.md        # Architektur & Datenflüsse
 │   ├── DEPLOYMENT.md       # Render.com-Anleitung
-│   └── CODE_REVIEW.md      # Review-Ergebnisse & Fixes
+│   ├── CODE_REVIEW.md      # Review-Ergebnisse & Fixes
+│   ├── PROMPT.md           # Wiederverwendbarer Arbeitsauftrag (KI-Agent)
+│   └── PR_DESCRIPTION.md   # PR-Text für die 1.1.0-Änderungen
 └── requirements.txt
 ```
 
@@ -151,4 +157,4 @@ Schritt-für-Schritt-Anleitung für [Render.com](https://render.com) in
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **1.0.0**.
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **1.1.0**.

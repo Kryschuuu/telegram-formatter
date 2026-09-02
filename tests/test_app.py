@@ -20,6 +20,26 @@ def test_index_renders(client):
     assert b"Telegram Formatter" in resp.data
 
 
+def test_index_contains_new_ui_elements(client):
+    """Reset-Button, Coffee-Link, Disclaimer und Howto/FAQ sind vorhanden."""
+    resp = client.get("/")
+    page = resp.data.decode("utf-8")
+    # Reset-Button
+    assert 'id="resetBtn"' in page
+    assert "Zurücksetzen" in page
+    # Buy-me-a-coffee: Header + Footer, sicherer Extern-Link
+    assert "https://buymeacoffee.com/rg4free" in page
+    assert 'target="_blank"' in page
+    assert 'rel="noopener"' in page
+    # Disclaimer (Hinweisbox + Kurzform im Footer)
+    assert "Haftungsausschluss" in page
+    assert "Keine Datenspeicherung" in page
+    # Howto & FAQ
+    assert 'id="howto"' in page
+    assert 'id="faq"' in page
+    assert page.count("<details") >= 7  # sieben aufklappbare Akkordeons
+
+
 def test_convert_regular(client):
     resp = client.post("/api/convert", json={"text": "**fett** text"})
     data = resp.get_json()

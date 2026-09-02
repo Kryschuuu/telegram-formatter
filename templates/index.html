@@ -5,60 +5,318 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Telegram Formatter — Markdown + LaTeX</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+          crossorigin="anonymous" referrerpolicy="no-referrer" />
     <style>
         .tg-bubble {
             background: white;
             padding: 16px;
             border-radius: 12px;
             border-bottom-right-radius: 4px;
+            border: 1px solid #e2e8f0;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             word-wrap: break-word;
             white-space: pre-wrap;
         }
+        /* FAQ-Akkordeons */
+        details.faq-item summary { cursor: pointer; list-style: none; }
+        details.faq-item summary::-webkit-details-marker { display: none; }
+        details.faq-item summary .faq-chevron { transition: transform .2s ease; }
+        details.faq-item[open] summary .faq-chevron { transform: rotate(180deg); }
     </style>
 </head>
-<body class="bg-slate-50 font-sans min-h-screen">
+<body class="bg-slate-100 font-sans min-h-screen flex flex-col">
 
-<header class="bg-white border-b border-slate-200">
-    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center gap-2">
-        <i class="fa-solid fa-paper-plane text-sky-600"></i>
+<!-- ===== Header (sticky) ===== -->
+<header class="bg-white/95 backdrop-blur border-b border-slate-200 shadow-sm sticky top-0 z-40">
+    <div class="max-w-6xl mx-auto px-6 py-3 flex items-center gap-3">
+        <i class="fa-solid fa-paper-plane text-sky-600 text-xl" aria-hidden="true"></i>
         <h1 class="text-xl font-black text-slate-800">Telegram Formatter</h1>
-        <span class="text-xs text-slate-400 uppercase font-bold tracking-wider">Markdown + LaTeX → Telegram</span>
-        <span id="status" class="ml-auto text-xs font-bold"></span>
+        <span class="hidden md:inline text-xs text-slate-400 uppercase font-bold tracking-wider">
+            Markdown + LaTeX → Telegram
+        </span>
+        <span id="status" class="ml-auto text-xs font-bold {{ 'text-emerald-600' if configured else 'text-amber-600' }}">
+            {{ '● Bot konfiguriert' if configured else '○ Kein Bot-Token gesetzt' }}
+        </span>
+        <a href="https://buymeacoffee.com/rg4free" target="_blank" rel="noopener"
+           title="Unterstütze die Entwicklung mit einem Kaffee"
+           class="bg-amber-400 hover:bg-amber-500 text-slate-900 font-bold text-sm px-4 py-2 rounded-xl shadow transition-colors flex items-center gap-2 whitespace-nowrap">
+            <i class="fa-solid fa-mug-hot" aria-hidden="true"></i> Buy me a coffee
+        </a>
     </div>
 </header>
 
-<main class="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
+<main class="max-w-6xl mx-auto px-6 py-8 w-full space-y-8">
 
-    <!-- Eingabe -->
-    <section class="space-y-4">
-        <label class="block text-sm font-bold text-slate-700">Markdown + LaTeX Eingabe</label>
-        <textarea id="input" rows="18"
-                  class="w-full p-4 border border-slate-300 rounded-xl font-mono text-sm outline-none focus:border-sky-500 resize-y"
-                  placeholder="**Fett**, *kursiv*, __unterstrichen__, `code` und $x^2 + y^2$ ..."></textarea>
-        <button id="sendBtn"
-                class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-3 rounded-xl shadow-md transition-colors">
-            An Telegram senden
-        </button>
-        <p id="sendStatus" class="text-sm text-slate-500"></p>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+
+        <!-- ===== Eingabe ===== -->
+        <section class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
+            <label for="input" class="block text-sm font-bold text-slate-700">
+                <i class="fa-solid fa-keyboard text-sky-600 mr-1" aria-hidden="true"></i>
+                Markdown + LaTeX Eingabe
+            </label>
+            <textarea id="input" rows="18"
+                      class="w-full p-4 border border-slate-300 rounded-xl font-mono text-sm outline-none focus:border-sky-500 resize-y bg-slate-50"
+                      placeholder="**Fett**, *kursiv*, __unterstrichen__, `code` und $x^2 + y^2$ ..."></textarea>
+            <div class="flex gap-3">
+                <button id="sendBtn"
+                        class="flex-1 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-bold py-3 rounded-xl shadow-md transition-colors">
+                    <i class="fa-solid fa-paper-plane mr-1" aria-hidden="true"></i> An Telegram senden
+                </button>
+                <button id="resetBtn" type="button"
+                        title="Leert Eingabe, Vorschau, Payloads und Statusmeldung"
+                        class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 px-4 rounded-xl transition-colors">
+                    <i class="fa-solid fa-rotate-left mr-1" aria-hidden="true"></i> Zurücksetzen
+                </button>
+            </div>
+            <p id="sendStatus" class="text-sm text-slate-500"></p>
+
+            <!-- ===== Disclaimer (Hinweisbox unter dem Editor) ===== -->
+            <aside class="border border-amber-300 bg-amber-50 text-amber-900 rounded-xl p-4 text-sm leading-relaxed"
+                   aria-label="Haftungsausschluss">
+                <p class="font-bold flex items-center gap-2 mb-1">
+                    <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Haftungsausschluss
+                </p>
+                <p>
+                    Die Nutzung dieses Tools erfolgt auf eigene Verantwortung. Du allein bist
+                    für den Inhalt der gesendeten Nachrichten sowie für die Sicherheit deines
+                    Bot-Tokens und deiner Chat-ID verantwortlich; mit der Nutzung akzeptierst
+                    du die Nutzungsbedingungen dieses Projekts. Dieses Tool steht in keiner
+                    Verbindung zu Telegram — Nachrichten werden im Namen deines eigenen Bots an
+                    deine eigenen Chats gesendet. Es werden keine Inhalte dauerhaft
+                    gespeichert; Eingaben und Token werden ausschließlich zur Konvertierung
+                    und zum Versand verarbeitet. Eine Haftung für Datenverlust, abgelehnte
+                    Zustellungen, Bot-Sperren oder mittelbare Schäden ist ausgeschlossen.
+                </p>
+            </aside>
+        </section>
+
+        <!-- ===== Vorschau / Ausgabe ===== -->
+        <section class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
+            <label class="block text-sm font-bold text-slate-700">
+                <i class="fa-solid fa-eye text-sky-600 mr-1" aria-hidden="true"></i>
+                Vorschau (Live)
+            </label>
+            <div class="tg-bubble text-sm" id="preview">Vorschau erscheint hier…</div>
+
+            <label class="block text-sm font-bold text-slate-700 pt-2">
+                <i class="fa-solid fa-code text-sky-600 mr-1" aria-hidden="true"></i>
+                Gebaute Telegram-Payloads
+            </label>
+            <pre id="payloads" class="bg-slate-900 text-slate-100 text-xs p-4 rounded-xl overflow-auto max-h-96">—</pre>
+        </section>
+    </div>
+
+    <!-- ===== Howto ===== -->
+    <section id="howto" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+        <h2 class="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-list-ol text-sky-600" aria-hidden="true"></i> So funktioniert's — Schritt für Schritt
+        </h2>
+        <ol class="space-y-4">
+            <li class="flex gap-4">
+                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">1</span>
+                <div>
+                    <p class="font-bold text-slate-800">Bot-Token holen</p>
+                    <p class="text-sm text-slate-600 leading-relaxed">
+                        In Telegram <a class="text-sky-700 underline" href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>
+                        anschreiben, <code class="bg-slate-100 px-1 rounded">/newbot</code> ausführen und den angezeigten Token kopieren.
+                        Ihn als Umgebungsvariable <code class="bg-slate-100 px-1 rounded">TELEGRAM_BOT_TOKEN</code> setzen
+                        (oder beim Deployen im Hosting-Panel eintragen).
+                    </p>
+                </div>
+            </li>
+            <li class="flex gap-4">
+                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">2</span>
+                <div>
+                    <p class="font-bold text-slate-800">Chat-ID ermitteln</p>
+                    <p class="text-sm text-slate-600 leading-relaxed">
+                        <a class="text-sky-700 underline" href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>
+                        anschreiben und die eigene numerische ID ablesen; für Gruppen/Kanälen den Bot dort
+                        hinzufügen und die (negative) ID via <code class="bg-slate-100 px-1 rounded">getUpdates</code> auslesen.
+                        Als <code class="bg-slate-100 px-1 rounded">TELEGRAM_CHAT_ID</code> setzen.
+                    </p>
+                </div>
+            </li>
+            <li class="flex gap-4">
+                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">3</span>
+                <div>
+                    <p class="font-bold text-slate-800">Text eingeben</p>
+                    <p class="text-sm text-slate-600 leading-relaxed">
+                        Markdown mit Formatierungen (Fett, Kursiv, Code, …), LaTeX-Formeln
+                        (<code class="bg-slate-100 px-1 rounded">$…$</code> / <code class="bg-slate-100 px-1 rounded">$$…$$</code>)
+                        und Tabellen links in den Editor schreiben.
+                    </p>
+                </div>
+            </li>
+            <li class="flex gap-4">
+                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">4</span>
+                <div>
+                    <p class="font-bold text-slate-800">Vorschau &amp; Payloads prüfen</p>
+                    <p class="text-sm text-slate-600 leading-relaxed">
+                        Rechts erscheint sofort die Live-Vorschau und darunter die exakt gebauten
+                        Telegram-API-Payloads — inklusive automatischer Aufteilung in mehrere
+                        Nachrichten, falls nötig.
+                    </p>
+                </div>
+            </li>
+            <li class="flex gap-4">
+                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">5</span>
+                <div>
+                    <p class="font-bold text-slate-800">Senden</p>
+                    <p class="text-sm text-slate-600 leading-relaxed">
+                        Auf „An Telegram senden" klicken — der Status unter dem Button zeigt Erfolg
+                        oder Fehlermeldung. Mit „Zurücksetzen" lässt sich alles wieder leeren.
+                    </p>
+                </div>
+            </li>
+        </ol>
     </section>
 
-    <!-- Vorschau / Ausgabe -->
-    <section class="space-y-4">
-        <label class="block text-sm font-bold text-slate-700">Vorschau (Live)</label>
-        <div class="tg-bubble text-sm" id="preview">Vorschau erscheint hier…</div>
-
-        <label class="block text-sm font-bold text-slate-700 pt-2">Gebaute Telegram-Payloads</label>
-        <pre id="payloads" class="bg-slate-900 text-slate-100 text-xs p-4 rounded-xl overflow-auto max-h-96">—</pre>
+    <!-- ===== FAQ ===== -->
+    <section id="faq" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+        <h2 class="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-circle-question text-sky-600" aria-hidden="true"></i> FAQ — Häufige Fragen
+        </h2>
+        <div class="space-y-3">
+            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
+                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+                    Ist der Bot-Token sicher? Wo wird er gespeichert?
+                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                </summary>
+                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+                    Der Token liegt nur als Umgebungsvariable auf dem Server und wird ausschließlich
+                    für den Versand an die Telegram-API verwendet — er wird nie im Browser
+                    ausgeliefert, nicht in Logs geschrieben und nicht in einer Datenbank gespeichert.
+                    Behandele ihn dennoch wie ein Passwort: nie öffentlich posten, bei Verdacht via
+                    @BotFather mit <code class="bg-slate-100 px-1 rounded">/revoke</code> neu erzeugen.
+                </p>
+            </details>
+            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
+                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+                    Wie finde ich meine Chat-ID heraus?
+                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                </summary>
+                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+                    Für Privat-Chats: <a class="text-sky-700 underline" href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>
+                    starten und die angezeigte Zahl verwenden. Für Gruppen und Kanäle den Bot
+                    hinzufügen, eine Testnachricht senden und die <code class="bg-slate-100 px-1 rounded">chat.id</code>
+                    im Antwort-JSON von <code class="bg-slate-100 px-1 rounded">https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>
+                    ablesen (Gruppen-IDs beginnen meist mit <code class="bg-slate-100 px-1 rounded">-100</code>).
+                </p>
+            </details>
+            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
+                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+                    Warum sieht meine LaTeX-Formel in der Vorschau einfach aus?
+                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                </summary>
+                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+                    Die Editor-Vorschau ist nur eine Orientierung. Echtes LaTeX-Rendering passiert
+                    erst in Telegram selbst: Sobald <code class="bg-slate-100 px-1 rounded">$…$</code>-Formeln
+                    oder Tabellen erkannt werden, baut das Tool automatisch eine Rich-Message,
+                    die Telegram nativ als Formel rendert (Bot API 10.1+). Die Vorschau kann das
+                    browserseitig nicht leisten — der Payload rechts zeigt dir aber das korrekte Ergebnis.
+                </p>
+            </details>
+            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
+                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+                    Wie lang darf eine Nachricht sein?
+                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                </summary>
+                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+                    Telegram erlaubt 4096 Zeichen für klassische und 32768 Zeichen für Rich
+                    Messages. Längere Texte werden automatisch an Absatz-, Zeilen- und Wortgrenzen
+                    aufgeteilt — ohne Formatierungen oder Tabellen zu zerreißen. Die Statuszeile
+                    unter dem Sende-Button zeigt an, wenn in mehrere Nachrichten aufgeteilt wurde.
+                </p>
+            </details>
+            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
+                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+                    Was passiert mit meinen eingegebenen Daten?
+                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                </summary>
+                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+                    Nichts Bleibendes: Deine Eingaben werden nur im Arbeitsspeicher konvertiert
+                    und — nur wenn du aktiv auf „Senden" klickst — an die Telegram-API übergeben.
+                    Es gibt keine Datenbank, keine Analyse-Cookies, kein Tracking und keine
+                    Auswertung. Beim reinen Konvertieren ohne Sende-Button verlässt dein Text den
+                    Server gar nicht Richtung Telegram.
+                </p>
+            </details>
+            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
+                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+                    Welche Formatierungen werden unterstützt?
+                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                </summary>
+                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+                    Fett <code class="bg-slate-100 px-1 rounded">**x**</code>, Kursiv
+                    <code class="bg-slate-100 px-1 rounded">*x*</code>/<code class="bg-slate-100 px-1 rounded">_x_</code>,
+                    Unterstrichen <code class="bg-slate-100 px-1 rounded">__x__</code>, Durchgestrichen
+                    <code class="bg-slate-100 px-1 rounded">~~x~~</code>, Inline-Code
+                    <code class="bg-slate-100 px-1 rounded">`x`</code>, Codeblöcke, Links,
+                    Überschriften, Listen und Blockquotes — zusätzlich LaTeX-Formeln und
+                    Pipe-Tabellen (als Rich Messages).
+                </p>
+            </details>
+            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
+                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+                    Es klappt nicht — was kann ich bei Fehlern tun?
+                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                </summary>
+                <ul class="text-sm text-slate-600 mt-2 leading-relaxed list-disc list-inside space-y-1">
+                    <li>„TELEGRAM_BOT_TOKEN nicht konfiguriert" → Umgebungsvariable setzen und den Server neu starten.</li>
+                    <li>„Keine Chat-ID angegeben" → <code class="bg-slate-100 px-1 rounded">TELEGRAM_CHAT_ID</code> setzen (Howto, Schritt 2).</li>
+                    <li>„401 Unauthorized" → Token falsch oder widerrufen; neu bei @BotFather holen.</li>
+                    <li>„400 Bad Request / chat not found" → Bot ist nicht im Ziel-Chat Mitglied bzw. ID-Tipp (Vorzeichen beachten).</li>
+                    <li>„429 Too Many Requests" → Telegram-Rate-Limit; kurze Pause, dann erneut senden.</li>
+                </ul>
+            </details>
+        </div>
     </section>
 
 </main>
+
+<!-- ===== Footer ===== -->
+<footer class="bg-slate-800 text-slate-300 mt-auto">
+    <div class="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
+        <div>
+            <p class="font-black text-white flex items-center gap-2 mb-2">
+                <i class="fa-solid fa-paper-plane text-sky-400" aria-hidden="true"></i> Telegram Formatter
+            </p>
+            <p class="text-slate-400 leading-relaxed">
+                Markdown + LaTeX → sendefertige Telegram-Nachrichten.
+                Open Source unter MIT-Lizenz · Version 1.1.0.
+            </p>
+        </div>
+        <div>
+            <p class="font-bold text-white mb-2 flex items-center gap-2">
+                <i class="fa-solid fa-scale-balanced text-slate-400" aria-hidden="true"></i> Kurz-Disclaimer
+            </p>
+            <p class="text-xs text-slate-400 leading-relaxed">
+                Nutzung auf eigene Verantwortung; für den Inhalt der Nachrichten sind allein die
+                Nutzenden gemäß den Nutzungsbedingungen verantwortlich. Keine Verbindung zu
+                Telegram. Keine Datenspeicherung. Keine Haftung für Schäden.
+            </p>
+        </div>
+        <div class="md:text-right">
+            <p class="font-bold text-white mb-2 flex items-center gap-2 md:justify-end">
+                <i class="fa-solid fa-heart text-rose-400" aria-hidden="true"></i> Unterstützen
+            </p>
+            <a href="https://buymeacoffee.com/rg4free" target="_blank" rel="noopener"
+               class="inline-flex items-center gap-2 font-bold text-amber-300 hover:text-amber-200 transition-colors">
+                <i class="fa-solid fa-mug-hot" aria-hidden="true"></i> Buy me a coffee
+            </a>
+        </div>
+    </div>
+</footer>
 
 <script>
     const input = document.getElementById('input');
     const preview = document.getElementById('preview');
     const payloads = document.getElementById('payloads');
     const sendBtn = document.getElementById('sendBtn');
+    const resetBtn = document.getElementById('resetBtn');
     const sendStatus = document.getElementById('sendStatus');
 
     // Einfache Markdown-Vorschau (nur zur Orientierung im Editor).
@@ -88,6 +346,16 @@
         }
     }
 
+    // Setzt die komplette Arbeitsfläche zurück: Eingabe, Vorschau, Payloads,
+    // Statusmeldung — und gibt den Fokus an das Eingabefeld zurück.
+    function resetAll() {
+        input.value = '';
+        preview.innerHTML = 'Vorschau erscheint hier…';
+        payloads.textContent = '—';
+        sendStatus.textContent = '';
+        input.focus();
+    }
+
     async function send() {
         sendBtn.disabled = true;
         sendBtn.textContent = 'Sende…';
@@ -103,12 +371,13 @@
             sendStatus.textContent = 'Netzwerkfehler.';
         } finally {
             sendBtn.disabled = false;
-            sendBtn.textContent = 'An Telegram senden';
+            sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane mr-1" aria-hidden="true"></i> An Telegram senden';
         }
     }
 
     input.addEventListener('input', () => { renderPreview(); refreshPayloads(); });
     sendBtn.addEventListener('click', send);
+    resetBtn.addEventListener('click', resetAll);
 
     renderPreview();
     refreshPayloads();
