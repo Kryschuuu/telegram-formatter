@@ -1,42 +1,34 @@
 """
 utils.py
 ========
-Hilfsfunktionen zur Konvertierung von Rohtext (LaTeX-Formeln, Tabellen,
-Sonderzeichen) in Telegram-kompatibles Nachrichtenformat.
+Reine, I/O-freie Konvertierungs- und Aufteilungslogik für
+"Markdown + LaTeX -> Telegram".
 
-STATUS DIESER DATEI — BITTE ZUERST LESEN
------------------------------------------
-Das GitHub-Repository "Kryschuuu/telegram-formatter" sowie die Dateien
-app.py, utils.py, beispiel_input.txt und beispiel_output.txt konnten zum
-Zeitpunkt dieser Bearbeitung NICHT eingesehen werden (GitHub blockiert
-automatisierten Zugriff auf die tree-Ansicht per robots.txt; der Repo-Name
-taucht in keiner Websuche auf; es wurden auch keine Dateien in diesen Chat
-hochgeladen). Diese Datei ist deshalb KEINE Zeile-für-Zeile-Korrektur des
-Originalcodes, sondern eine lauffähige, getestete Referenzimplementierung,
-die exakt die in der Aufgabenstellung beschriebenen Fehlerklassen sauber
-löst:
+Dieses Modul enthält KEINE Netzwerk- oder Flask-Abhängigkeiten und ist
+dadurch isoliert testbar (siehe ``tests/test_utils.py``). Die eigentlichen
+Versandaufrufe liegen in :mod:`sender`, die Web-Oberfläche in :mod:`app`.
 
-  1. Verschachtelte LaTeX-Strukturen (z. B. \\binom{\\binom{70}{6}}{33})
-     werden von naiven Regex-Ersetzungen zerstört, weil reguläre Ausdrücke
-     keine beliebig tief verschachtelten, geklammerten Strukturen erkennen
-     können ("balanced matching" ist mit regulären Sprachen nicht lösbar).
-  2. Tabellen (z. B. "Tabelle 3" mit L(n,6,6,2)-Ergebnissen) wurden
-     vermutlich als monospaced ASCII-Text verschickt statt als Telegrams
-     native Tabellen-Blöcke — das verrutscht auf schmalen Bildschirmen.
-  3. Sonderzeichen wie "ì" wurden verstümmelt, weil Dateien ohne explizites
-     UTF-8-Encoding bzw. ohne Unicode-Normalisierung (NFC) verarbeitet
-     wurden.
-  4. LaTeX-Formeln wurden vermutlich über sendMessage() + parse_mode=
-     "MarkdownV2" verschickt. Das ist der Kernfehler: Regular Messages
-     unterstützen KEIN LaTeX — auch nicht mit $...$-Syntax. Natives LaTeX
-     gibt es erst seit Telegram Bot API 10.1 (11. Juni 2026) und
-     ausschließlich über Rich Messages (Methode sendRichMessage, Format
-     "Rich Markdown" bzw. "Rich HTML").
+Übersicht der Verarbeitungskette
+--------------------------------
+Eingabe (Markdown mit LaTeX ``$...$``/``$$...$$`` und Pipe-Tabellen)
+    -> normalize_text()                       Unicode/Zeilenumbrüche
+    -> build_messages()                       entscheidet Rich vs. Regular
+       |-- Rich-Pfad  (LaTeX/Tabellen vorhanden)
+       |     -> markdown_to_rich_markdown()   GFM + nativem LaTeX
+       |     -> chunk_text(..., 32768)        Aufteilung am Blocklimit
+       |     -> payload "sendRichMessage"
+       `-- Regular-Pfad (reiner Text mit Formatierung)
+             -> markdown_to_html()            Telegram-HTML (fett/kursiv/...)
+             -> chunk_text(..., 4096)         Aufteilung am 4096-Limit
+             -> payload "sendMessage"
 
-Quellen (verifiziert per Live-Abruf am 21. Juli 2026, da dies nach dem
-Trainingsstand des Modells liegt):
-  - https://core.telegram.org/bots/api (Changelog Bot API 10.1 / 10.2)
-  - https://core.telegram.org/bots/features#rich-messages
+Wichtige Telegram-Fakten (Bot API 10.1+, Stand 2026):
+- ``sendMessage`` limitiert den Text auf **4096** Zeichen und unterstützt
+  **kein** LaTeX und **keine** Tabellen (nur MarkdownV2/HTML).
+- ``sendRichMessage`` akzeptiert bis zu **32768** Zeichen und unterstützt
+  nativ LaTeX ($...$ / $$...$$) sowie GFM-Tabellen. Das Feld im
+  ``rich_message``-Objekt heißt **``markdown``** (alternativ ``html`` oder
+  ``blocks``) -- es gibt KEIN Feld ``format``/``text``.
 """
 
 from __future__ import annotations
@@ -45,151 +37,157 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+# ---------------------------------------------------------------------------
+# Konstanten (Telegram-Limits)
+# ---------------------------------------------------------------------------
+#: Maximale Zeichenlänge einer klassischen Nachricht (sendMessage).
+REGULAR_MESSAGE_MAX_CHARS = 4_096
+#: Maximale Zeichenlänge einer Rich Message (sendRichMessage, UTF-8).
+RICH_MESSAGE_MAX_CHARS = 32_768
+#: Maximale Block-Anzahl einer Rich Message (Listeneinträge, Tabellenzeilen ...).
+RICH_MESSAGE_MAX_BLOCKS = 500
+
+
+@dataclass
+class Segment:
+    """Ein zusammenhängender Text- oder Formel-Abschnitt."""
+
+    kind: str  # "text" | "inline_math" | "display_math"
+    content: str
+
+
+@dataclass
+class TelegramMessage:
+    """Eine sendefertige Nachricht mit Methoden-Wahl und API-Payload."""
+
+    kind: str  # "rich" (sendRichMessage) | "regular" (sendMessage)
+    payload: dict
+
 
 # ---------------------------------------------------------------------------
-# FEHLER 3 (Sonderzeichen, z. B. "ì"): Unicode-Normalisierung
+# Unicode-Normalisierung
 # ---------------------------------------------------------------------------
 def normalize_text(text: str) -> str:
     """
-    Normalisiert Unicode-Text nach NFC (vorkomponierte Form).
+    Normalisiert Eingabetext nach NFC (vorkomponierte Form) und
+    vereinheitlicht Zeilenumbrüche auf ``\\n``.
 
-    URSPRÜNGLICHER FEHLER (rekonstruiert):
-    Öffnet man eine Datei mit open(path).read() OHNE encoding="utf-8" (z. B.
-    unter Windows mit dem Locale-Default cp1252), werden Zeichen wie "ì"
-    (U+00EC, LATIN SMALL LETTER I WITH GRAVE) entweder zu Mojibake ("Ã¬")
-    oder — falls die Quelle NFD-normalisiert war — in zwei Codepoints
-    zerlegt: "i" (U+0069) + COMBINING GRAVE ACCENT (U+0300). Nachgelagerte,
-    zeichenweise arbeitende Funktionen (z. B. MarkdownV2-Escaping oder die
-    Berechnung von MessageEntity-Offsets, die Telegram in UTF-16-Code-Units
-    verlangt, siehe core.telegram.org/api/entities) zählen dann falsche
-    Zeichenlängen und verschieben nachfolgende Formatierungen.
-
-    KORREKTUR:
-    - Dateien werden IMMER explizit mit encoding="utf-8" geöffnet (app.py).
-    - Der Text wird zusätzlich mit unicodedata.normalize("NFC", ...) in die
-      vorkomponierte Form gebracht, sodass "ì" unabhängig von der
-      Eingabeform immer EIN einzelner Codepoint ist.
+    Hintergrund: Wird eine Datei ohne explizites ``encoding="utf-8"``
+    gelesen oder kommt Text NFD-normalisiert an, zerfallen Zeichen wie
+    ``ì`` in mehrere Codepoints (``i`` + COMBINING GRAVE ACCENT). Das
+    verschiebt nachgelagerte Offsets und Längenberechnungen. NFC stellt
+    sicher, dass ein Zeichen immer EIN Codepoint ist.
     """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     return unicodedata.normalize("NFC", text)
 
 
 # ---------------------------------------------------------------------------
-# FEHLER 1 (verschachtelte Formeln): klammern-balanciertes Parsing statt Regex
+# LaTeX: klammern-balanciertes Erkennen statt Regex
 # ---------------------------------------------------------------------------
 def validate_latex_braces(formula: str) -> bool:
-    """Prüft, ob alle {}-Klammern in einer Formel korrekt balanciert sind."""
+    """
+    Prüft, ob alle geschweiften Klammern in ``formula`` balanciert sind.
+
+    Reguläre Ausdrücke können beliebig tief verschachtelte Klammerstrukturen
+    nicht erkennen ("balanced matching" ist mit regulären Sprachen nicht
+    lösbar). Deshalb wird hier iterativ gezählt.
+    """
     depth = 0
     for ch in formula:
         if ch == "{":
             depth += 1
         elif ch == "}":
             depth -= 1
-            if depth < 0:
+            if depth < 0:  # schließende Klammer ohne öffnende
                 return False
     return depth == 0
 
 
-@dataclass
-class Segment:
-    kind: str  # "text" | "inline_math" | "display_math"
-    content: str
-
-
 def split_formulas(text: str) -> list[Segment]:
     """
-    Zerlegt einen Textblock zeichenweise in Text- und Formel-Segmente.
+    Zerlegt ``text`` zeichenweise in Text- und Formel-Segmente.
 
-    URSPRÜNGLICHER FEHLER (rekonstruiert):
-    Ein Muster wie re.compile(r'\\$(.+?)\\$') oder
-    re.compile(r'\\\\binom\\{(.*?)\\}\\{(.*?)\\}') funktioniert nur für NICHT
-    verschachtelte Ausdrücke. Bei $\\binom{\\binom{70}{6}}{33}$ matcht die
-    "non-greedy" Gruppe (.*?) bereits an der ERSTEN schließenden Klammer
-    nach der ersten öffnenden — die Formel wird syntaktisch mittendrin
-    zerschnitten, z. B. zu "\\binom{70" statt "\\binom{70}{6}".
+    - ``$$...$$`` markiert eine Display-Formel (Block, zentriert).
+    - ``$...$`` markiert eine Inline-Formel.
+    - Ein ``$`` gefolgt von Leerzeichen (z. B. Preisangabe ``$ 20``) wird
+      NICHT als Formelbeginn gewertet.
+    - Unvollständige/unbalancierte Formeln bleiben als normaler Text stehen,
+      statt den Rest des Dokuments zu zerstören.
 
-    KORREKTUR:
-    Der Text wird zeichenweise durchlaufen. '$$' markiert Display-Formeln
-    (Block, zentriert dargestellt), ein einzelnes '$' markiert Inline-
-    Formeln. Für jede gefundene Formel wird validate_latex_braces()
-    aufgerufen — verschachtelte Klammern werden dadurch NICHT mehr
-    zerschnitten, weil kein Regex-Gruppen-Matching mehr auf den
-    Klammerinhalt angewendet wird, sondern nur die Fundstelle der
-    schließenden '$'/'$$'-Marke gesucht wird; der Formelinhalt selbst
-    bleibt unangetastet und wird 1:1 an Telegram weitergereicht.
-    Ein '$' vor einem Leerzeichen (z. B. Preisangaben wie "$ 20") wird
-    NICHT als Formelbeginn gewertet.
+    Entscheidend ist, dass der Formelinhalt 1:1 (unverändert) übernommen
+    wird -- inklusive verschachtelter Strukturen wie
+    ``\\binom{\\binom{70}{6}}{33}`` und Spezialsymbole wie ``\\alpha``,
+    ``\\sum``, ``\\int``. Es wird nur die Fundstelle der schließenden
+    ``$``-Marke gesucht, nie der Klammerinhalt per Regex gruppiert.
     """
     segments: list[Segment] = []
-    i, n = 0, len(text)
     buf: list[str] = []
+    i, n = 0, len(text)
 
     def flush_text() -> None:
+        """Sammelt gepufferten Text in ein Text-Segment."""
         if buf:
             segments.append(Segment("text", "".join(buf)))
             buf.clear()
 
     while i < n:
-        if text[i] == "$":
-            is_display = text[i : i + 2] == "$$"
-            delim = "$$" if is_display else "$"
-            start = i + len(delim)
-
-            if not is_display and start < n and text[start].isspace():
-                buf.append(text[i])
-                i += 1
-                continue
-
-            end = text.find(delim, start)
-            if end == -1:
-                buf.append(text[i])
-                i += 1
-                continue
-
-            formula = text[start:end]
-            if not validate_latex_braces(formula):
-                formula = f"\\text{{[FEHLER: unbalancierte Klammern]}} {formula}"
-
-            flush_text()
-            segments.append(
-                Segment("display_math" if is_display else "inline_math", formula)
-            )
-            i = end + len(delim)
-        else:
+        if text[i] != "$":
             buf.append(text[i])
             i += 1
+            continue
+
+        # Delimiter bestimmen: "$$" (Display) oder "$" (Inline).
+        is_display = text[i : i + 2] == "$$"
+        delim = "$$" if is_display else "$"
+        start = i + len(delim)
+
+        # "$ " -> Preisangabe, kein Formelbeginn.
+        if not is_display and start < n and text[start].isspace():
+            buf.append(text[i])
+            i += 1
+            continue
+
+        # Keine schließende Marke -> Dollarzeichen wörtlich übernehmen.
+        end = text.find(delim, start)
+        if end == -1:
+            buf.append(text[i])
+            i += 1
+            continue
+
+        formula = text[start:end]
+        flush_text()
+        segments.append(
+            Segment("display_math" if is_display else "inline_math", formula)
+        )
+        i = end + len(delim)
 
     flush_text()
     return segments
 
 
+def has_latex(text: str) -> bool:
+    """True, wenn ``text`` mindestens eine gültige ``$...$``/``$$...$$``-Formel enthält."""
+    return any(seg.kind != "text" for seg in split_formulas(text))
+
+
 # ---------------------------------------------------------------------------
-# FEHLER 2 (Tabellen): native Rich-Markdown-Tabellen statt ASCII-Grafik
+# Tabellen: Pipe-Format -> GFM
 # ---------------------------------------------------------------------------
 def parse_pipe_table(block: str) -> list[list[str]] | None:
     """
-    Parst einen Pipe-getrennten Tabellenblock (z. B. "Tabelle 3" mit
-    L(n,6,6,2)-Ergebnissen) in eine Liste von Zeilen (Zeile = Liste Zellen).
+    Parst einen Pipe-getrennten Tabellenblock in eine Liste von Zeilen
+    (jede Zeile ist eine Liste von Zellen). Gibt ``None`` zurück, wenn der
+    Block keine erkennbare Tabelle ist.
 
-    Erwartetes Rohformat in der Eingabedatei, z. B.:
-        n     | L(n,6,6,2)  | Quelle
-        ------|-------------|-------
-        20    | 10          | [Thm 3.1]
+    Akzeptiert sowohl das klassische Format::
 
-    URSPRÜNGLICHER FEHLER (rekonstruiert):
-    Solche Blöcke wurden vermutlich mit str.split() auf Leerzeichen zerlegt
-    und in einen <pre>-/Codeblock verpackt (sendMessage-Regular-Message).
-    Auf dem Desktop sieht das notdürftig nach Tabelle aus, auf schmalen
-    Handybildschirmen bricht die feste Breite um — aus der Tabelle wird
-    Zeichensalat, und Telegram unterstützt in Regular Messages ohnehin
-    keine echten Tabellen.
+        n    | L(n,6,6,2) | Quelle
+        -----|------------|--------
+        20   | 10         | [Thm 3.1]
 
-    KORREKTUR:
-    Das Pipe-Format wird erkannt (inkl. optionaler Markdown-Trennzeile
-    "---|---|---") und als saubere Zeilenstruktur zurückgegeben, die
-    anschließend über rows_to_rich_markdown_table() in eine ECHTE Rich-
-    Markdown-Tabelle übersetzt wird (GFM-Syntax; Telegram rendert das seit
-    Bot API 10.1 nativ inkl. Ausrichtung, colspan/rowspan, striped-Zebra-
-    streifen — siehe core.telegram.org/bots/features#rich-messages).
+    als auch GFM mit Markdown-Trennzeile (``---|---``), die beim Parsen
+    verworfen wird.
     """
     lines = [ln for ln in block.splitlines() if ln.strip()]
     if len(lines) < 2 or "|" not in lines[0]:
@@ -197,114 +195,387 @@ def parse_pipe_table(block: str) -> list[list[str]] | None:
 
     rows: list[list[str]] = []
     for idx, line in enumerate(lines):
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        body = line.strip()
+        if body.startswith("|"):
+            body = body[1:]
+        if body.endswith("|"):
+            body = body[:-1]
+        cells = [c.strip() for c in body.split("|")]
+
+        # Markdown-Trennzeile (z. B. "---|---") -> keine Nutzdaten.
         if idx == 1 and all(re.fullmatch(r":?-{2,}:?", c) for c in cells):
-            continue  # Markdown-Trennzeile, keine Nutzdaten
+            continue
+
         rows.append(cells)
-    return rows if len(rows) >= 2 else None
+
+    if len(rows) < 2:  # Header allein reicht nicht für eine Tabelle
+        return None
+
+    # Spaltenanzahl an die breiteste Zeile angleichen (defensive Pufferung).
+    width = max(len(r) for r in rows)
+    for r in rows:
+        r.extend([""] * (width - len(r)))
+    return rows
 
 
-def rows_to_rich_markdown_table(rows: list[list[str]]) -> str:
+def rows_to_gfm_table(rows: list[list[str]]) -> str:
     """
     Baut aus geparsten Zeilen eine GitHub-Flavored-Markdown-Tabelle, wie sie
-    Telegrams "Rich Markdown"-Stil seit Bot API 10.1 nativ rendert.
+    Telegrams "Rich Markdown" (sendRichMessage) nativ rendert.
     """
     if not rows:
         return ""
     header, *data = rows
-    out = ["| " + " | ".join(header) + " |", "|" + "|".join(" --- " for _ in header) + "|"]
-    out.extend("| " + " | ".join(row) + " |" for row in data)
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "|" + "|".join("---" for _ in header) + "|",
+    ]
+    lines.extend("| " + " | ".join(row) + " |" for row in data)
+    return "\n".join(lines)
+
+
+def has_table(text: str) -> bool:
+    """True, wenn ``text`` mindestens einen Pipe-Tabellenblock enthält."""
+    return any(parse_pipe_table(b) is not None for b in re.split(r"\n\s*\n", text))
+
+
+# ---------------------------------------------------------------------------
+# Hilfsklasse: Platzhalter-Schutz für Code/Formeln
+# ---------------------------------------------------------------------------
+class _PlaceholderStore:
+    """
+    Ersetzt sensible Textstücke (Codeblöcke, Formeln) durch eindeutige
+    Platzhalter, damit nachgelagerte Regex-Ersetzungen sie nicht anfassen.
+    Verwendet das NUL-Zeichen als Marker, das in normalem Text praktisch nie
+    vorkommt und nach dem Restore vollständig verschwindet.
+    """
+
+    def __init__(self) -> None:
+        self._items: list[str] = []
+
+    def __call__(self, value: str) -> str:
+        """Ersetzt ``value`` durch einen eindeutigen Platzhalter."""
+        token = f"\x00{len(self._items)}\x00"
+        self._items.append(value)
+        return token
+
+    def restore(self, text: str) -> str:
+        for i, value in enumerate(self._items):
+            text = text.replace(f"\x00{i}\x00", value)
+        return text
+
+
+def _escape_html(text: str) -> str:
+    """Escaped die drei in Telegram-HTML bedeutungstragenden Zeichen."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# ---------------------------------------------------------------------------
+# Markdown -> Telegram-HTML (Regular-Pfad, sendMessage)
+# ---------------------------------------------------------------------------
+def markdown_to_html(text: str) -> str:
+    """
+    Wandelt Markdown in Telegram-HTML (``parse_mode="HTML"``) um.
+
+    Unterstützt: Fett ``**x**``, Kursiv ``*x*``/``_x_``, Unterstreichen
+    ``__x__``, Durchgestrichen ``~~x~~``, Inline-Code `` `x` ``, Codeblöcke,
+    Links, Überschriften, Blockquotes und Listen. Code und (defensiv) LaTeX
+    werden vor den Ersetzungen geschützt und am Ende unverändert
+    wiederhergestellt.
+    """
+    text = normalize_text(text)
+    store = _PlaceholderStore()
+
+    # 1. Fenced-Code-Blöcke (```...```) und Inline-Code schützen.
+    def fenced(m: re.Match) -> str:
+        lang = m.group(1).strip()
+        content = m.group(2).rstrip("\n")
+        if lang:
+            return store(f'<pre language="{lang}">{_escape_html(content)}</pre>')
+        return store(f"<pre>{_escape_html(content)}</pre>")
+
+    text = re.sub(r"```([^\n]*)\n(.*?)```", fenced, text, flags=re.DOTALL)
+    text = re.sub(
+        r"`([^`\n]+)`",
+        lambda m: store(f"<code>{_escape_html(m.group(1))}</code>"),
+        text,
+    )
+
+    # 2. Formeln defensiv schützen (HTML kann sie nicht rendern, aber der
+    #    Inhalt darf durch die folgenden Regexes nicht zerstört werden).
+    text = _protect_math(text, store)
+
+    # 3. Verbleibenden Text escapen.
+    text = _escape_html(text)
+
+    # 4. Tabellen als lesbare Zeilen (Fallback; wird normalerweise nicht
+    #    erreicht, weil Tabellen über den Rich-Pfad laufen).
+    text = _tables_to_lines(text)
+
+    # 5. Überschriften in Fettschrift mit Emoji-Marker.
+    text = re.sub(r"^####+\s+(.*)$", r"<b>🔸 \1</b>", text, flags=re.M)
+    text = re.sub(r"^###\s+(.*)$", r"<b>🔹 \1</b>", text, flags=re.M)
+    text = re.sub(r"^##\s+(.*)$", r"<b>📍 \1</b>", text, flags=re.M)
+    text = re.sub(r"^#\s+(.*)$", r"<b>🚀 \1</b>", text, flags=re.M)
+
+    # 6. Blockquotes ("> " am Zeilenanfang).
+    text = _wrap_blockquotes(text)
+
+    # 7. Links.
+    text = re.sub(
+        r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text
+    )
+
+    # 8. Listenpunkte.
+    text = re.sub(r"^\s*[-*+]\s+", "• ", text, flags=re.M)
+    text = re.sub(r"^\s*\d+[.)]\s+", "• ", text, flags=re.M)
+
+    # 9. Inline-Formatierung (Reihenfolge wichtig: fett vor kursiv,
+    #    Unterstreichen vor Kursiv-_).
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"__(.+?)__", r"<u>\1</u>", text)
+    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", text)
+    text = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", r"<i>\1</i>", text)
+    text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
+
+    return store.restore(text)
+
+
+def _protect_math(text: str, store: _PlaceholderStore) -> str:
+    """Ersetzt gültige ``$...$``/``$$...$$``-Formeln durch Platzhalter."""
+    out: list[str] = []
+    i, n = 0, len(text)
+
+    while i < n:
+        if text[i] != "$":
+            out.append(text[i])
+            i += 1
+            continue
+
+        is_display = text[i : i + 2] == "$$"
+        delim = "$$" if is_display else "$"
+        start = i + len(delim)
+
+        if not is_display and start < n and text[start].isspace():
+            out.append(text[i])
+            i += 1
+            continue
+
+        end = text.find(delim, start)
+        if end == -1:
+            out.append(text[i])
+            i += 1
+            continue
+
+        formula = text[start:end]
+        if not validate_latex_braces(formula):
+            out.append(text[i])
+            i += 1
+            continue
+
+        out.append(store(_escape_html(formula)))
+        i = end + len(delim)
+
+    return "".join(out)
+
+
+def _wrap_blockquotes(text: str) -> str:
+    """Gruppiert aufeinanderfolgende ``> ``-Zeilen in ein ``<blockquote>``."""
+    lines = text.split("\n")
+    out: list[str] = []
+    in_quote = False
+    for line in lines:
+        m = re.match(r"^\s*&gt;\s?(.*)", line)  # ">" wurde bereits zu "&gt;"
+        if m:
+            if not in_quote:
+                out.append("<blockquote>" + m.group(1))
+                in_quote = True
+            else:
+                out.append(m.group(1))
+        else:
+            if in_quote:
+                out[-1] += "</blockquote>"
+                in_quote = False
+            out.append(line)
+    if in_quote:
+        out[-1] += "</blockquote>"
     return "\n".join(out)
 
 
+def _tables_to_lines(text: str) -> str:
+    """Wandelt Pipe-Tabellen in lesbare ``Header: Wert``-Zeilen um (Fallback)."""
+
+    def repl(m: re.Match) -> str:
+        rows = parse_pipe_table(m.group(0))
+        if not rows:
+            return m.group(0)
+        header, *data = rows
+        lines = []
+        for row in data:
+            parts = [f"<b>{header[i]}:</b> {row[i]}" for i in range(len(header))]
+            lines.append("🔸 " + " • ".join(parts))
+        return "\n".join(lines)
+
+    return re.sub(r"(?m)(^.*\|.*$\n?){2,}", repl, text)
+
+
 # ---------------------------------------------------------------------------
-# FEHLER 4 (LaTeX in Regular Messages statt Rich Messages): Zusammenbau
+# Markdown -> Rich Markdown (Rich-Pfad, sendRichMessage)
 # ---------------------------------------------------------------------------
-def to_rich_markdown(raw_text: str) -> str:
+def markdown_to_rich_markdown(text: str) -> str:
     """
-    Wandelt einen Rohtext-Abschnitt in gültiges "Rich Markdown" (Bot API
-    10.1/10.2) um: $...$/$$...$$-Formeln bleiben unverändert als natives
-    LaTeX stehen (Telegram rendert das nur im Rich-Message-Pfad, siehe
-    sendRichMessage() in app.py — NICHT über sendMessage()), Pipe-
-    Tabellenblöcke werden in native Rich-Markdown-Tabellen übersetzt.
+    Wandelt Markdown in Telegrams "Rich Markdown" um (Feld ``markdown`` im
+    ``InputRichMessage``-Objekt).
+
+    Rich Markdown ist GFM-kompatibel und unterstützt daher ``**fett**``,
+    ``*kursiv*``, ``~~durchgestrichen~~``, Code, Listen, Überschriften,
+    Blockquotes, LaTeX (``$...$``/``$$...$$``) und Pipe-Tabellen nativ.
+
+    Der einzige Unterschied zur Eingabe: Unterstreichen wird hier über
+    ``<u>...</u>`` ausgedrückt, weil ``__...__`` in Rich Markdown Fett
+    bedeutet. Tabellen werden zusätzlich in gültige GFM-Form normalisiert.
     """
-    text = normalize_text(raw_text)
+    text = normalize_text(text)
+    store = _PlaceholderStore()
+
+    # 1. Code schützen, damit "$" und "__" darin unangetastet bleiben.
+    def fenced(m: re.Match) -> str:
+        lang = m.group(1).strip()
+        content = m.group(2).rstrip("\n")
+        return store(f"```{lang}\n{content}\n```")
+
+    text = re.sub(r"```([^\n]*)\n(.*?)```", fenced, text, flags=re.DOTALL)
+    text = re.sub(r"`([^`\n]+)`", lambda m: store(f"`{m.group(1)}`"), text)
+
+    # 2. Unterstreichen __x__ -> <u>x</u>.
+    text = re.sub(r"__([^_\n]+)__", r"<u>\1</u>", text)
+
+    # 3. Tabellen blockweise normalisieren; alles andere bleibt GFM.
     blocks = re.split(r"\n\s*\n", text)
     rendered = []
     for block in blocks:
-        table_rows = parse_pipe_table(block)
-        if table_rows:
-            rendered.append(rows_to_rich_markdown_table(table_rows))
+        rows = parse_pipe_table(block)
+        rendered.append(rows_to_gfm_table(rows) if rows else block)
+
+    return store.restore("\n\n".join(rendered))
+
+
+# ---------------------------------------------------------------------------
+# Nachrichtenbau und Aufteilung
+# ---------------------------------------------------------------------------
+def needs_rich_message(text: str) -> bool:
+    """True, wenn der Text LaTeX oder eine Tabelle enthält (-> Rich-Pfad)."""
+    return has_latex(text) or has_table(text)
+
+
+def build_messages(raw_text: str, chat_id: int | str) -> list[TelegramMessage]:
+    """
+    Baut aus Rohtext sendefertige Telegram-Nachrichten.
+
+    - Enthält der Text LaTeX oder Tabellen, wird er in Rich Markdown
+      übersetzt und über ``sendRichMessage`` (Feld ``markdown``) verschickt.
+    - Reiner Formatierungstext läuft über ``sendMessage`` mit
+      ``parse_mode="HTML"``.
+
+    In beiden Fällen wird an den jeweiligen Zeichenlimits aufgeteilt
+    (4096 bzw. 32768), wobei die Aufteilung an Absatz-/Zeilen-/Wortgrenzen
+    erfolgt und Formatierungen so weit wie möglich intakt bleiben.
+    """
+    text = normalize_text(raw_text).strip()
+    if not text:
+        return []
+
+    if needs_rich_message(text):
+        rich_text = markdown_to_rich_markdown(text)
+        chunks = chunk_text(rich_text, RICH_MESSAGE_MAX_CHARS)
+        return [
+            TelegramMessage(
+                kind="rich",
+                payload={"chat_id": chat_id, "rich_message": {"markdown": chunk}},
+            )
+            for chunk in chunks
+        ]
+
+    html = markdown_to_html(text)
+    chunks = chunk_text(html, REGULAR_MESSAGE_MAX_CHARS)
+    return [
+        TelegramMessage(
+            kind="regular",
+            payload={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
+        )
+        for chunk in chunks
+    ]
+
+
+def _group(items: list[str], max_chars: int, joiner: str) -> list[str]:
+    """
+    Gruppiert ``items`` zu Strings (verbunden mit ``joiner``), die jeweils
+    ``max_chars`` nicht überschreiten. Überlange Einzel-Items werden hart
+    geteilt.
+    """
+    chunks: list[str] = []
+    buf: list[str] = []
+    for item in items:
+        if len(item) > max_chars:
+            if buf:
+                chunks.append(joiner.join(buf))
+                buf = []
+            chunks.extend(item[i : i + max_chars] for i in range(0, len(item), max_chars))
             continue
-
-        segments = split_formulas(block)
-        parts = []
-        for seg in segments:
-            if seg.kind == "text":
-                parts.append(seg.content)
-            elif seg.kind == "inline_math":
-                parts.append(f"${seg.content}$")
-            else:
-                parts.append(f"$${seg.content}$$")
-        rendered.append("".join(parts))
-    return "\n\n".join(rendered)
-
-
-RICH_MESSAGE_MAX_CHARS = 32_768  # UTF-8-Zeichen-Limit für Rich Messages (Bot API 10.1)
-RICH_MESSAGE_MAX_BLOCKS = 500    # Max. Blöcke (Listeneinträge, Tabellenzeilen, Zitate ...)
-
-
-def chunk_rich_markdown(text: str, max_chars: int = RICH_MESSAGE_MAX_CHARS) -> list[str]:
-    """
-    Teilt langen Rich-Markdown-Text an Absatzgrenzen unterhalb des
-    32.768-Zeichen-Limits von Rich Messages auf. Es wird nie mitten in einer
-    Formel oder Tabelle getrennt, da Absätze durch Leerzeilen begrenzt sind
-    und Formeln/Tabellen innerhalb eines Absatzes zusammengehalten werden.
-    """
-    if len(text) <= max_chars:
-        return [text]
-
-    paragraphs = text.split("\n\n")
-    chunks, current, current_len = [], [], 0
-    for p in paragraphs:
-        p_len = len(p) + 2
-        if current_len + p_len > max_chars and current:
-            chunks.append("\n\n".join(current))
-            current, current_len = [], 0
-        current.append(p)
-        current_len += p_len
-    if current:
-        chunks.append("\n\n".join(current))
+        if buf and len(joiner.join(buf)) + len(joiner) + len(item) > max_chars:
+            chunks.append(joiner.join(buf))
+            buf = []
+        buf.append(item)
+    if buf:
+        chunks.append(joiner.join(buf))
     return chunks
 
 
-# ---------------------------------------------------------------------------
-# Fallback: Escaping für REGULAR Messages (sendMessage, parse_mode=MarkdownV2)
-# ---------------------------------------------------------------------------
-_MARKDOWN_V2_SPECIAL = r"_*[]()~`>#+-=|{}.!\\"
+def _split_oversized_paragraph(paragraph: str, max_chars: int) -> list[str]:
+    """Teilt einen einzelnen zu langen Absatz: erst an Zeilen-, dann an Wortgrenzen."""
+    lines = paragraph.split("\n")
+    if len(lines) > 1:
+        return _group(lines, max_chars, "\n")
+    words = paragraph.split(" ")
+    if len(words) > 1:
+        return _group(words, max_chars, " ")
+    return [paragraph[i : i + max_chars] for i in range(0, len(paragraph), max_chars)]
 
 
-def escape_markdown_v2(text: str) -> str:
+def chunk_text(text: str, max_chars: int) -> list[str]:
     """
-    Escaped Sonderzeichen für Telegrams klassisches MarkdownV2 (Regular
-    Messages, siehe core.telegram.org/bots/api#markdownv2-style).
+    Teilt ``text`` in Stücke von höchstens ``max_chars`` Zeichen auf.
 
-    WICHTIG: MarkdownV2 kennt KEIN LaTeX — '$' hat dort keine Sonderbe-
-    deutung und würde einfach als literales Dollarzeichen angezeigt. Diese
-    Funktion wird deshalb nur für kurze Klartext-Abschnitte OHNE Formeln
-    /Tabellen verwendet; alles mit Formeln/Tabellen läuft stattdessen über
-    to_rich_markdown() + sendRichMessage() (siehe app.py: build_messages()).
+    Reihenfolge der bevorzugten Trennstellen:
+    1. Absatzgrenzen (Leerzeilen) -- Tabellen/Formeln liegen innerhalb eines
+       Absatzes und bleiben dadurch erhalten.
+    2. Zeilengrenzen.
+    3. Wortgrenzen.
+    4. Harter Schnitt (nur bei pathologisch langen Einzelwörtern).
     """
-    return re.sub(f"([{re.escape(_MARKDOWN_V2_SPECIAL)}])", r"\\\1", text)
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
 
+    paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+    chunks: list[str] = []
+    buf: list[str] = []
 
-def needs_rich_message(text: str) -> bool:
-    """
-    True, wenn der Textabschnitt LaTeX-Formeln oder eine Pipe-Tabelle
-    enthält und deshalb zwingend über sendRichMessage() statt sendMessage()
-    verschickt werden muss, weil Regular Messages beides nicht darstellen
-    können.
-    """
-    has_math = "$" in text
-    has_table = bool(re.search(r"^\s*\S.*\|.*\S\s*$", text, re.MULTILINE))
-    return has_math or has_table
+    for p in paragraphs:
+        if len(p) <= max_chars:
+            if buf and len("\n\n".join(buf)) + 2 + len(p) > max_chars:
+                chunks.append("\n\n".join(buf))
+                buf = []
+            buf.append(p)
+        else:
+            # Absatz allein zu lang -> vorherigen Puffer abschließen.
+            if buf:
+                chunks.append("\n\n".join(buf))
+                buf = []
+            chunks.extend(_split_oversized_paragraph(p, max_chars))
+
+    if buf:
+        chunks.append("\n\n".join(buf))
+    return chunks
