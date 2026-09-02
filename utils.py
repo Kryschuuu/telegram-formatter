@@ -104,22 +104,71 @@ def validate_latex_braces(formula: str) -> bool:
     return depth == 0
 
 
+def _find_delimiter_close(
+    text: str, opener: str, closer: str, start: int
+) -> tuple[int, str]:
+    """
+    Findet die schließende Marke für einen geöffneten Formel-Delimiter.
+
+    Unterstützt sowohl einfache Delimiter (``, $``) als auch
+    Backslash-Delimiter (``\(``, ``\[``).
+
+    Gibt ein Tuple zurück: (Endposition, Formel-Text).
+    Bei verschachtelten Delimitern wird die korrekte schließende Position
+    gesucht, um Formeln wie ``\[ x $ y \]`` zu unterstützen.
+    """
+    n = len(text)
+    i = start
+    brace_depth = 0
+    brace_close_pending = False
+
+    while i < n:
+        ch = text[i]
+
+        # Bei Backslash-Delimitern: schlicht nach dem Closer suchen
+        if opener.startswith("\\") and text[i:].startswith(closer):
+            return i + len(closer), text[start : i]
+
+        # Bei Dollar-Delimitern: schlicht nach dem Closer suchen
+        if opener == "$" and ch == "$":
+            # Nur schließen, wenn wir nicht gerade ein einzelnes $ suchen
+            # und das nächste Zeichen kein $ ist (oder wir $$ als Closer haben)
+            if closer == "$$" and i + 1 < n and text[i + 1] == "$":
+                return i + 2, text[start:i]
+            elif closer == "$":
+                return i, text[start:i]
+
+        # Klammer-Traversal für verschachtelte Formeln
+        if ch == "{":
+            brace_depth += 1
+        elif ch == "}":
+            brace_depth -= 1
+
+        i += 1
+
+    return -1, text[start:]
+
+
 def split_formulas(text: str) -> list[Segment]:
     """
     Zerlegt ``text`` zeichenweise in Text- und Formel-Segmente.
 
+    Unterstützte Formel-Delimiter:
     - ``$$...$$`` markiert eine Display-Formel (Block, zentriert).
     - ``$...$`` markiert eine Inline-Formel.
-    - Ein ``$`` gefolgt von Leerzeichen (z. B. Preisangabe ``$ 20``) wird
-      NICHT als Formelbeginn gewertet.
-    - Unvollständige/unbalancierte Formeln bleiben als normaler Text stehen,
-      statt den Rest des Dokuments zu zerstören.
+    - ``\\[...\\]`` markiert eine Display-Formel (DeepSeek/Gemini-Syntax).
+    - ``\\(...\\)`` markiert eine Inline-Formel (DeepSeek/Gemini-Syntax).
+
+    Ein ``$`` gefolgt von Leerzeichen (z. B. Preisangabe ``$ 20``) wird
+    NICHT als Formelbeginn gewertet.
+    Unvollständige/unbalancierte Formeln bleiben als normaler Text stehen,
+    statt den Rest des Dokuments zu zerstören.
 
     Entscheidend ist, dass der Formelinhalt 1:1 (unverändert) übernommen
     wird -- inklusive verschachtelter Strukturen wie
     ``\\binom{\\binom{70}{6}}{33}`` und Spezialsymbole wie ``\\alpha``,
     ``\\sum``, ``\\int``. Es wird nur die Fundstelle der schließenden
-    ``$``-Marke gesucht, nie der Klammerinhalt per Regex gruppiert.
+    Marke gesucht, nie der Klammerinhalt per Regex gruppiert.
     """
     segments: list[Segment] = []
     buf: list[str] = []
@@ -132,35 +181,63 @@ def split_formulas(text: str) -> list[Segment]:
             buf.clear()
 
     while i < n:
-        if text[i] != "$":
-            buf.append(text[i])
-            i += 1
-            continue
+        ch = text[i]
 
-        # Delimiter bestimmen: "$$" (Display) oder "$" (Inline).
-        is_display = text[i : i + 2] == "$$"
-        delim = "$$" if is_display else "$"
-        start = i + len(delim)
+        # Prüfe auf die verschiedenen Formel-Delimiter (Priorität wichtig!)
+        # 1. $$...$$ (Display)
+        if text[i:i+2] == "$$":
+            start = i + 2
+            end = text.find("$$", start)
+            if end != -1:
+                formula = text[start:end]
+                flush_text()
+                segments.append(Segment("display_math", formula))
+                i = end + 2
+                continue
 
-        # "$ " -> Preisangabe, kein Formelbeginn.
-        if not is_display and start < n and text[start].isspace():
-            buf.append(text[i])
-            i += 1
-            continue
+        # 2. \[...\] (Display, DeepSeek/Gemini)
+        if text[i:i+2] == r"\[":
+            start = i + 2
+            end = text.find(r"\]", start)
+            if end != -1:
+                formula = text[start:end]
+                flush_text()
+                segments.append(Segment("display_math", formula))
+                i = end + 2
+                continue
 
-        # Keine schließende Marke -> Dollarzeichen wörtlich übernehmen.
-        end = text.find(delim, start)
-        if end == -1:
-            buf.append(text[i])
-            i += 1
-            continue
+        # 3. \(...\) (Inline, DeepSeek/Gemini)
+        if text[i:i+2] == r"\(":
+            start = i + 2
+            end = text.find(r"\)", start)
+            if end != -1:
+                formula = text[start:end]
+                flush_text()
+                segments.append(Segment("inline_math", formula))
+                i = end + 2
+                continue
 
-        formula = text[start:end]
-        flush_text()
-        segments.append(
-            Segment("display_math" if is_display else "inline_math", formula)
-        )
-        i = end + len(delim)
+        # 4. $...$ (Inline)
+        if ch == "$":
+            # "$ " -> Preisangabe, kein Formelbeginn.
+            if i + 1 < n and text[i + 1].isspace():
+                buf.append(ch)
+                i += 1
+                continue
+
+            # Einzelnes $ suchen (nicht $$)
+            start = i + 1
+            end = text.find("$", start)
+            if end != -1 and (end == start or text[end - 1] != "$"):
+                formula = text[start:end]
+                flush_text()
+                segments.append(Segment("inline_math", formula))
+                i = end + 1
+                continue
+
+        # Kein Delimiter -> normaler Text
+        buf.append(ch)
+        i += 1
 
     flush_text()
     return segments
@@ -342,39 +419,83 @@ def markdown_to_html(text: str) -> str:
 
 
 def _protect_math(text: str, store: _PlaceholderStore) -> str:
-    """Ersetzt gültige ``$...$``/``$$...$$``-Formeln durch Platzhalter."""
+    """
+    Ersetzt gültige LaTeX-Formeln durch Platzhalter.
+
+    Unterstützte Delimiter:
+    - ``$...$`` / ``$$...$$`` (klassisch)
+    - ``\\(...\\)`` / ``\\[...\\]`` (DeepSeek/Gemini-Syntax)
+    """
     out: list[str] = []
     i, n = 0, len(text)
 
     while i < n:
-        if text[i] != "$":
-            out.append(text[i])
-            i += 1
-            continue
+        ch = text[i]
 
-        is_display = text[i : i + 2] == "$$"
-        delim = "$$" if is_display else "$"
-        start = i + len(delim)
+        # 1. $$...$$ (Display)
+        if text[i:i+2] == "$$":
+            start = i + 2
+            end = text.find("$$", start)
+            if end != -1:
+                formula = text[start:end]
+                if validate_latex_braces(formula):
+                    out.append(store(_escape_html(formula)))
+                    i = end + 2
+                    continue
+                out.append(text[i])
+                i += 1
+                continue
 
-        if not is_display and start < n and text[start].isspace():
-            out.append(text[i])
-            i += 1
-            continue
+        # 2. \\[...\\] (Display, DeepSeek/Gemini)
+        if text[i:i+2] == r"\[":
+            start = i + 2
+            end = text.find(r"\]", start)
+            if end != -1:
+                formula = text[start:end]
+                if validate_latex_braces(formula):
+                    out.append(store(_escape_html(formula)))
+                    i = end + 2
+                    continue
+                out.append(text[i])
+                i += 1
+                continue
 
-        end = text.find(delim, start)
-        if end == -1:
-            out.append(text[i])
-            i += 1
-            continue
+        # 3. \\(...\\) (Inline, DeepSeek/Gemini)
+        if text[i:i+2] == r"\(":
+            start = i + 2
+            end = text.find(r"\)", start)
+            if end != -1:
+                formula = text[start:end]
+                if validate_latex_braces(formula):
+                    out.append(store(_escape_html(formula)))
+                    i = end + 2
+                    continue
+                out.append(text[i])
+                i += 1
+                continue
 
-        formula = text[start:end]
-        if not validate_latex_braces(formula):
-            out.append(text[i])
-            i += 1
-            continue
+        # 4. $...$ (Inline)
+        if ch == "$":
+            # "$ " -> Preisangabe, kein Formelbeginn.
+            if i + 1 < n and text[i + 1].isspace():
+                out.append(ch)
+                i += 1
+                continue
 
-        out.append(store(_escape_html(formula)))
-        i = end + len(delim)
+            start = i + 1
+            end = text.find("$", start)
+            if end != -1 and (end == start or text[end - 1] != "$"):
+                formula = text[start:end]
+                if validate_latex_braces(formula):
+                    out.append(store(_escape_html(formula)))
+                    i = end + 1
+                    continue
+                out.append(ch)
+                i += 1
+                continue
+
+        out.append(ch)
+        i += 1
 
     return "".join(out)
 

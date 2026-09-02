@@ -116,6 +116,98 @@ def test_has_latex():
 
 
 # ---------------------------------------------------------------------------
+# Formel-Erkennung: DeepSeek/Gemini-Syntax \(...\) und \[...\]
+# ---------------------------------------------------------------------------
+
+def test_split_inline_math_deepseek_syntax():
+    """DeepSeek verwendet \\(...\\) für Inline-Math."""
+    segs = split_formulas(r"Text \(x^2\) Ende")
+    assert [s.kind for s in segs] == ["text", "inline_math", "text"]
+    assert segs[1].content == "x^2"
+
+
+def test_split_display_math_deepseek_syntax():
+    """DeepSeek verwendet \\[...\\] für Display-Math."""
+    segs = split_formulas(r"Vor \[E = \frac{1}{2}CU^2\] nach")
+    assert segs[1].kind == "display_math"
+    assert segs[1].content == r"E = \frac{1}{2}CU^2"
+
+
+def test_split_mixed_delimiters():
+    """Gleiche Formel mit verschiedenen Delimitern."""
+    segs = split_formulas(r"$a$ und \(b\) und $$c$$ und \[d\]")
+    kinds = [s.kind for s in segs]
+    assert kinds == [
+        "inline_math", "text", "inline_math", "text",
+        "display_math", "text", "display_math",
+    ]
+
+
+def test_split_preserves_nested_in_deepseek_syntax():
+    """Verschachtelte Strukturen auch in DeepSeek-Syntax."""
+    formula = r"\frac{a}{\frac{b}{c}}"
+    segs = split_formulas(rf"\({formula}\)")
+    assert segs[0].kind == "inline_math"
+    assert segs[0].content == formula
+
+
+def test_has_latex_deepseek_syntax():
+    """\\(...\\) und \\[...\\] werden als LaTeX erkannt."""
+    assert has_latex(r"Formel \(x^2\)") is True
+    assert has_latex(r"Formel \[x^2\]") is True
+    assert has_latex(r"Kein latex hier") is False
+
+
+def test_has_latex_mixed_syntax():
+    """Gemischte Syntax wird korrekt erkannt."""
+    assert has_latex(r"$a$ und \(b\) und $$c$$ und \[d\]") is True
+
+
+def test_unterminated_paren_stays_text():
+    """Unvollständige \\(...\\) bleibt als Text."""
+    text = r"Hier \(fehlt das Ende"
+    segs = split_formulas(text)
+    assert all(s.kind == "text" for s in segs)
+
+
+def test_unterminated_bracket_stays_text():
+    """Unvollständige \\[...\\] bleibt als Text."""
+    text = r"Hier \[fehlt das Ende"
+    segs = split_formulas(text)
+    assert all(s.kind == "text" for s in segs)
+
+
+def test_deepseek_real_world_example():
+    """Echtes Beispiel aus DeepSeek mit komplexen Formeln."""
+    text = r"""Die gespeicherte Energie \(E\) eines Kondensators beträgt:
+
+\[
+E = \frac{1}{2} C U^2
+\]"""
+    assert has_latex(text) is True
+    segs = split_formulas(text)
+    # Sollte: Text, \(E\), Text, \[Formel\], Text
+    kinds = [s.kind for s in segs]
+    assert "inline_math" in kinds
+    assert "display_math" in kinds
+
+
+def test_build_rich_for_deepseek_math():
+    """DeepSeek-Syntax sollte Rich-Message auslösen."""
+    msgs = build_messages(r"Formel \(x^2\)", 123)
+    assert len(msgs) == 1
+    assert msgs[0].kind == "rich"
+    assert r"\(x^2\)" in msgs[0].payload["rich_message"]["markdown"]
+
+
+def test_build_rich_for_deepseek_display_math():
+    """DeepSeek Display-Syntax sollte Rich-Message auslösen."""
+    msgs = build_messages(r"Formel \[x^2\]", 123)
+    assert len(msgs) == 1
+    assert msgs[0].kind == "rich"
+
+
+# ---------------------------------------------------------------------------
 # Tabellen
 # ---------------------------------------------------------------------------
 def test_parse_pipe_table_classic():

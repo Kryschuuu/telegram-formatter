@@ -5,16 +5,19 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ## Funktionsübersicht
 
-- **LaTeX-Konvertierung** — Inline-Formeln `$…$` und Display-Formeln `$$…$$`
-  werden unverändert und korrekt gerendert, auch verschachtelte Strukturen
-  wie `$\binom{\binom{70}{6}}{33}$` und Spezialsymbole (`\sum`, `\int`,
-  `\alpha`, …). Kein Zerschneiden durch naive Regex.
+- **LaTeX-Konvertierung** — Unterstützt mehrere Delimiter-Syntaxe:
+  - Klassisch: `$…$` (Inline) und `$$…$$` (Display)
+  - DeepSeek/Gemini: `\($…$\)` und `\[…\]`
+  
+  Verschachtelte Strukturen wie `$\binom{\binom{70}{6}}{33}$` und
+  Spezialsymbole (`\sum`, `\int`, `\alpha`, …) bleiben intakt. Kein
+  Zerschneiden durch naive Regex.
 - **Telegram-Formatierung** — Fett `**x**`, Kursiv `*x*`/`_x_`,
   Unterstreichen `__x__`, Durchgestrichen `~~x~~`, Inline-Code `` `x` ``,
   Codeblöcke, Links, Überschriften, Listen und Blockquotes.
@@ -106,6 +109,22 @@ n | L(n,6,6,2) | Quelle
 20 | 10 | [Thm 3.1]
 ```
 
+### DeepSeek/Gemini-Syntax
+
+KI-Tools wie DeepSeek und Gemini verwenden eine andere LaTeX-Syntax.
+ telegram-formatter unterstützt auch diese:
+
+```markdown
+Die gespeicherte Energie \(E\) eines Kondensators beträgt:
+
+\[
+E = \frac{1}{2} C U^2
+\]
+```
+
+Beide Syntaxformen (`$...$`/`$$...$$` und `\($...$\)`/`\[...\]`) werden
+erkannt und korrekt als Rich-Message versendet.
+
 ### Als Bibliothek
 
 ```python
@@ -157,4 +176,4 @@ Schritt-für-Schritt-Anleitung für [Render.com](https://render.com) in
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **1.1.0**.
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **1.2.0**.
