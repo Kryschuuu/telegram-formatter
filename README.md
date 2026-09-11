@@ -198,7 +198,7 @@ Review-Checkliste: `python -m telegram_formatter.botctl checklist`
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                  # 178 Tests
+pytest -q                                  # 180 Tests
 ruff check .                               # Stil & offensichtliche Fehler
 bandit -c pyproject.toml -r telegram_formatter -ll   # Sicherheits-Scan
 ```
@@ -215,6 +215,8 @@ Paket, Doku unter `docs/`, Prüf- und Audit-Artefakte in `peer-review/`,
 
 ```
 telegram-formatter/
+├── app.py                      # ⚠ veralteter Deploy-Shim: reine Weiterleitung an
+│                               #   telegram_formatter.app (entfällt mit 3.0.0)
 ├── telegram_formatter/         # ← gesamter Laufzeitcode als Python-Paket
 │   ├── app.py                  #   Flask-Weboberfläche (WSGI-Einstieg)
 │   ├── cli.py                  #   Kommandozeilen-Einstieg
@@ -245,6 +247,7 @@ telegram-formatter/
 ├── security/                   # Schutzziel-Matrix, Threat-Model, Grenzen
 ├── .github/                    # CODEOWNERS, PR-Template, SECURITY.md, CI-Workflow
 ├── pyproject.toml              # Paketierung + Ruff/pytest/Bandit-Konfiguration
+├── render.yaml                 # Render-Blueprint: kanonischer Start, Health-Check, Env-Vars
 ├── requirements.txt            # Laufzeit-Deps (gepinnt; pyproject liest sie dynamisch)
 ├── requirements-dev.txt        # Dev-Deps (pytest)
 ├── CHANGELOG.md                # Versionierung (Keep a Changelog)
@@ -261,7 +264,13 @@ erzwingt der Code?“ → `security/README.md`.
 ## Deployment
 
 Schritt-für-Schritt-Anleitung für [Render.com](https://render.com) in
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Der kanonische Startbefehl ist
+zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
+übernimmt dort die Konfiguration neu aus dem Blueprint angelegter Dienste.
+
+> **Gestörter Alt-Start?** Leitet das Dashboard noch `gunicorn app:app` weiter
+> — die Adresse zeigt über den veralteten Root-Shim `app.py` auf dieselbe App.
+> Der Shim entfällt mit 3.0.0; bis umstellen.
 
 ## Dokumentation
 

@@ -23,7 +23,7 @@ Verhalten, Payloads und API der Telegram-Schnittstelle sind unverändert.
 | `utils.py` | `telegram_formatter/utils.py` | Modulname bewusst unverändert (öffentliche Referenzen in Doku/CI) |
 | `sender.py` | `telegram_formatter/sender.py` | |
 | `cli.py` | `telegram_formatter/cli.py` | Einstieg: `python -m telegram_formatter.cli` |
-| `app.py` | `telegram_formatter/app.py` | WSGI: `gunicorn "telegram_formatter.app:app"` |
+| `app.py` | `telegram_formatter/app.py` | WSGI: `gunicorn "telegram_formatter.app:app"`; Root-`app.py` bleibt als veralteter Forwarding-Shim (entfällt 3.0.0) |
 | `botctl.py` | `telegram_formatter/botctl.py` | Einstieg: `python -m telegram_formatter.botctl` |
 | `botkit/` | `telegram_formatter/botkit/` | Paketinhalt unverändert |
 | `templates/index.html` | `telegram_formatter/templates/index.html` | Flask löst Templates jetzt im Paket auf |
@@ -84,6 +84,23 @@ from telegram_formatter.botkit.session import BotSession
 | `gunicorn app:app --bind 0.0.0.0:$PORT` | `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT` |
 | `python examples/own_bot/minimal_bot.py` | *(unverändert)* — Imports zeigen jetzt auf das Paket; ausführbar aus Repo-Wurzel |
 
+### Deployment-Fallback (Start-Kommando)
+
+Der rechte Wert oben ist der **kanonische** Einstieg. Hosting-Plattformen
+übernehmen ihr Start-Kommando jedoch aus dem Dashboard (nicht aus dem Git),
+sodass nach dem Merge von 2.0.0 der alte Befehl `gunicorn app:app` gegen ein
+nicht mehr existierendes Root-Modul lief — Build erfolgreich, Start mit
+`ModuleNotFoundError: No module named 'app'`. Deshalb gilt:
+
+| Ebene | Zustand ab 2.0.x |
+|---|---|
+| `app.py` (Wurzel) | **Veralteter Kompatibilitäts-Shim**: einzeilige, rein weiterleitende Adresse für den alten Befehl; **Entfernung mit 3.0.0**. Keine Logik — erzwungen durch `tests/test_app.py` (identisches WSGI-Objekt + AST-Prüfung). |
+| `render.yaml` (Wurzel) | Render-Blueprint mit dem kanonischen Start-Kommando, `healthCheckPath: /`, `PYTHON_VERSION` und den Secrets `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` (`sync: false` → bleiben im Dashboard-Store). Gilt automatisch nur für **aus dem Blueprint erzeugte** Dienste; bestehende Services einmalig umstellen (docs/DEPLOYMENT.md, Schritt 3a). |
+
+Empfehlung: Start-Kommando im Dashboard auf den kanonischen Befehl setzen und
+den Shim wegwerfen, sobald 3.0.0 ansteht — er ist eine Überbrückung, keine
+zweite Einstiegsschicht.
+
 ## 4. Verhaltensneutrale Bereinigungen (toter Code)
 
 | Fundstelle | Maßnahme |
@@ -140,6 +157,8 @@ Ausgeführt am 2026-09-11 unter `python -m venv` (Python 3.11.2):
 - [ ] Imports auf `telegram_formatter…` umstellen (oben, Abschnitt 3)
 - [ ] `pip install -e .` (optional) oder Repo-Wurzel im `PYTHONPATH`
 - [ ] Deployment: Start-Kommando auf `gunicorn "telegram_formatter.app:app"` stellen
+      (der Root-Shim `app.py` überbrückt den alten Befehl nur, bis 3.0.0;
+      neu angelegte Render-Dienste übernehmen ihn aus `render.yaml`)
 - [ ] Eigenen Audit-Trail von `.botkit/reviews.json` nach `audit/reviews.json` übernehmen:
       `git mv .botkit/reviews.json audit/reviews.json` (bzw. Datei verschieben)
 - [ ] README/Abschnitt „Struktur“ lesen — neue Ordner `docs/`, `peer-review/`,

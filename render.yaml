@@ -1,0 +1,38 @@
+# Render-Blueprint für das Dashboard (https://docs.render.com/blueprint-spec)
+# ============================================================================
+# Deklariert den **kanonischen** Start dieses Dienstes. Der Einstieg liegt
+# seit 2.0.0 im Paket — siehe MIGRATION.md, Abschnitt 3. Das Root-Modul
+# ``app.py`` ist nur noch ein veralteter Kompatibilitäts-Shim (entfällt mit
+# 3.0.0) und wird hier bewusst *nicht* referenziert.
+#
+# Wirkung:
+#   * Ein **neu** über diesen Blueprint angelegter Dienst (Render → New →
+#     Blueprint) bekommt Build-, Start-, Health-Check- und Umgebungs-
+#     konfiguration direkt aus dieser Datei.
+#   * Ein **bestehender**, per Hand im Dashboard angelegter Web Service wird
+#     davon *nicht* automatisch umgestellt — siehe den Blueprint-Sync-Hinweis
+#     in docs/DEPLOYMENT.md (Schritt 3a).
+#
+# Secrets gehören nicht ins Git: ``sync: false`` hält die Werte im
+# Dashboard-Store (beim ersten Blueprint-Durchlauf wird danach gefragt).
+services:
+  - type: web
+    name: telegram-formatter
+    runtime: python
+    plan: free # für mehr Leistung ersetzen, z. B. 0.5c-512mb
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    # Die Anführungszeichen um das Modul bleiben: Render führt den Befehl über
+    # eine Shell aus, und das quoting hält "modul:objekt" als ein Argument
+    # (identisch zu docs/DEPLOYMENT.md, Schritt 3).
+    startCommand: 'gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT'
+    healthCheckPath: /
+    envVars:
+      # Python-Version der Build-Umgebung (muss zu requires-python >= 3.10 passen).
+      - key: PYTHON_VERSION
+        value: "3.11"
+      # Secret bleibt im Dashboard-Store, nie im Git.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false

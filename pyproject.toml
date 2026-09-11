@@ -40,6 +40,10 @@ botctl = "telegram_formatter.botctl:main"
 version = { attr = "telegram_formatter.__version__" }
 dependencies = { file = ["requirements.txt"] }
 
+# Nur das Paket selbst wird installiert. Das Root-`app.py` ist bewusst
+# *kein* Modul des Wheels: es ist ein Deployment-Shim für das
+# Dashboard-Start-Kommando der Plattform (siehe MIGRATION.md §3) und soll
+# nicht als `import app` Teil der öffentlichen API werden.
 [tool.setuptools.packages.find]
 include = ["telegram_formatter*"]
 
