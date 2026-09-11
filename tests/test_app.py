@@ -63,13 +63,31 @@ def test_index_contains_new_ui_elements(client):
     assert page.count("<details") >= 7  # sieben aufklappbare Akkordeons
 
 
-def test_assets_are_external_no_inline_script(client):
-    """Audit H-5: keine Inline-Skripte/Styles -> CSP ohne unsafe-inline tragfähig."""
+def test_assets_are_self_hosted_no_inline_script(client):
+    """Audit H-5 + Redesign 2026-09: gar keine Fremdnetze mehr.
+
+    Der Tailwind-Play-CDN war die Ursache des Design-Bruchs: er injizierte
+    Inline-<style>-Regeln, die die CSP (ohne 'unsafe-inline') blockierte —
+    die Seite fiel auf ungestylten Rohtext zurück. Seit dem Redesign liegt
+    das komplette Design (4 CSS-Schichten + Theme-/Editor-JS) selbst-gehostet
+    unter ``static/``; die CSP bleibt strikt ``'self'``.
+    """
     page = client.get("/").data.decode("utf-8")
     assert "<script>" not in page.replace("<script src", "<script_src")
-    assert "static/app.js" in page
-    assert "static/app.css" in page
-    assert "cdn.tailwindcss.com/3.4.16" in page  # versionsgepinnt
+    assert "<style" not in page
+    assert 'style="' not in page
+    for asset in (
+        "css/tokens.css",
+        "css/base.css",
+        "css/layout.css",
+        "css/components.css",
+        "js/theme.js",
+        "js/app.js",
+    ):
+        assert f"static/{asset}" in page, f"fehlendes Asset: {asset}"
+    # Frühere CDN-Quellen müssen spurlos entfernt sein.
+    for host in ("cdn.tailwindcss.com", "cdnjs.cloudflare.com", "unpkg.com", "jsdelivr"):
+        assert host not in page
 
 
 def test_security_headers_present(client):
@@ -77,7 +95,10 @@ def test_security_headers_present(client):
     csp = resp.headers["Content-Security-Policy"]
     assert "frame-ancestors 'none'" in csp
     assert "unsafe-inline" not in csp
-    assert "https://cdn.tailwindcss.com" in csp
+    assert "script-src 'self'" in csp
+    assert "style-src 'self'" in csp
+    # Selbst-gehostetes Design: keine externen Hosts mehr in der CSP.
+    assert "cdn." not in csp
     assert resp.headers["X-Content-Type-Options"] == "nosniff"
     assert resp.headers["X-Frame-Options"] == "DENY"
     assert resp.headers["Referrer-Policy"] == "no-referrer"
