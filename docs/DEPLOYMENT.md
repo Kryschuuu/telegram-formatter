@@ -42,6 +42,30 @@ Setze im Formular die folgenden Werte:
 > Der `Start Command` ist wichtig: Die App muss auf `0.0.0.0` und dem von
 > Render vorgegebenen `PORT` lauschen, damit sie erreichbar ist.
 
+### Schritt 3a: Alternativ — Blueprint (`render.yaml`) statt Formular
+
+Das Repository enthält einen Render-Blueprint [`render.yaml`](../render.yaml),
+der genau die Werte oben deklariert (Start-Kommando, Health-Check `/`,
+`PYTHON_VERSION`, Env-Vars). **Neue** Dienste legst du damit an:
+**New + → Blueprint** → Repository wählen → die nach `sync: false` gefragten
+Secrets eintragen. Danach gleicht Render die Konfiguration des Dienstes bei
+jedem Push automatisch an die Datei an (Blueprint-Sync).
+
+Wichtig: Ein **bestehender**, per Hand angelegter Web Service wird von
+`render.yaml` **nicht** umgestellt — Blueprint-Sync gilt nur für Dienste, die
+aus dem Blueprint entstanden sind. Für den bestehenden Dienst gilt deshalb:
+
+* Start-Kommando einmalig im Dashboard auf
+  `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT` setzen
+  (Settings → Service → Start Command → *Manual Deploy*), **oder**
+* Dienst neu aus dem Blueprint anlegen und den alten ersetzen.
+
+> **Warum läuft der alte Befehl `gunicorn app:app` trotzdem wieder?** In der
+> Repository-Wurzel liegt ein veralteter Kompatibilitäts-Shim `app.py`, der
+> ausschließlich auf `telegram_formatter.app:app` weiterleitet (enthält keine
+> Logik, abgesichert durch `tests/test_app.py`). Er ist als Übergang gedacht
+> und entfällt mit **3.0.0** — stelle bis dahin auf den kanonischen Befehl um.
+
 ## Schritt 4: Umgebungsvariablen setzen
 
 Unter **Environment → Environment Variables** diese Einträge hinzufügen:
@@ -89,6 +113,12 @@ pytest -q                          # Tests ausführen
 
 ## Troubleshooting
 
+- **`ModuleNotFoundError: No module named 'app'`** — das Start-Kommando zeigt
+  auf das alte Root-Modul, während der Shim `app.py` fehlt (z. B. nach seiner
+  Entfernung in 3.0.0). Build und Start sind zwei Schritte: Render meldet
+  `== Build successful`, crasht aber im `== Running`-Abschnitt. Abhilfe:
+  Start-Kommando auf `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT`
+  stellen (siehe Schritt 3/3a) und **Manual Deploy** auslösen.
 - **„TELEGRAM_BOT_TOKEN nicht konfiguriert"** — Variable in Schritt 4
   fehlt oder ist falsch; nach dem Setzen **Manual Deploy** auslösen.
 - **App startet nicht** — Logs unter **Logs** im Render-Dashboard prüfen.

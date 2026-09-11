@@ -27,5 +27,12 @@
 /requirements.txt                   @Kryschuuu
 /requirements-dev.txt               @Kryschuuu
 
+# Deployment-Einstieg: /app.py ist der veraltete Forwarding-Shim für das
+# Dashboard-Kommando `gunicorn app:app` (entfällt 3.0.0), /render.yaml der
+# Render-Blueprint mit dem kanonischen Start — beide ändern die laufende
+# Produktion, deshalb Review-pflichtig.
+/app.py                             @Kryschuuu
+/render.yaml                        @Kryschuuu
+
 # BYOB-Architektur-Doku (regelpflichtig, weil sie das Gate beschreibt)
 /docs/DECENTRAL_BOT_ARCHITECTURE.md @Kryschuuu

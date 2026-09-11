@@ -4,6 +4,60 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [Unreleased]
+
+### Behoben (Deploy-Start nach der Paket-Umstellung)
+
+- **`ModuleNotFoundError: No module named 'app'` auf Render.com.** Der dort
+  hinterlegte Start-Befehl `gunicorn app:app` — der Python-Default *vor* der
+  Umstellung — zeigte nach 2.0.0 auf ein nicht mehr existierendes Root-Modul:
+  Build erfolgreich (`== Build successful`), Start abgestürzt. Der kanonische
+  Einstieg ist `telegram_formatter.app:app`; für noch nicht umgestellte
+  Deployments leitet ab sofort ein Root-Shim weiter, der Blueprint stellt den
+  Befehl dauerhaft richtig.
+
+### Hinzugefügt
+
+- **`app.py` (Repository-Wurzel) — veralteter Kompatibilitäts-Shim.**
+  Einzeilige, rein weiterleitende Adresse (`from telegram_formatter.app import
+  app`), damit ein im Hosting-Dashboard hinterlegtes `gunicorn app:app` ohne
+  Dashboard-Änderung sofort wieder läuft. **Als veraltet markiert; Entfernung
+  mit 3.0.0.** Abgesichert durch zwei Tests in `tests/test_app.py`:
+  (1) identisches WSGI-Objekt plus Routen-/HTTP-200-Rauchtest über den Shim,
+  (2) AST-Vertrag, der den Shim auf Docstring + einen Re-Export beschränkt
+  (keine Funktionen, Klassen, Aufrufe, Control-Flow) — so verkommt er nie zur
+  zweiten Logik-Kopie.
+- **`render.yaml` — Render-Blueprint.** Deklariert den kanonischen Start
+  `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT`,
+  `healthCheckPath: /`, `PYTHON_VERSION` `3.11` sowie `TELEGRAM_BOT_TOKEN` und
+  `TELEGRAM_CHAT_ID` mit `sync: false` (Secrets bleiben im Dashboard-Store und
+  landen nie im Git). Blueprint-Sync gilt nur für aus dem Blueprint erzeugte
+  Dienste; Ablauf für bestehende Services: `docs/DEPLOYMENT.md`, Schritt 3a.
+
+### Geändert
+
+- **Doku nachgezogen:** `docs/DEPLOYMENT.md` (Blueprint-Alternative,
+  Sync-Hinweis für bestehende Services, Troubleshooting-Eintrag zum
+  `ModuleNotFoundError`), `MIGRATION.md` §3 (Deployment-Fallback: Root-Shim ↔
+  kanonischer Einstieg), README-Strukturbaum, `docs/ARCHITECTURE.md` §5
+  (Konfigurationstabellen um Shim und Blueprint ergänzt).
+- **CI:** Ruff prüft das Root-`app.py` ausdrücklich mit
+  (`ruff check app.py telegram_formatter examples tests`); der
+  `pull_request.paths`-Filter löst den Workflow jetzt auch bei Änderungen an
+  `app.py`/`render.yaml` aus. `.github/CODEOWNERS` markiert `/app.py` und
+  `/render.yaml` als review-pflichtig (beide ändern den laufenden Dienst).
+
+### Verifiziert
+
+- `pytest -q` → **180 passed** (178 Baseline aus 2.0.0 + 2 Shim-Tests);
+  `ruff check app.py telegram_formatter examples tests` sauber; Bandit `-ll`
+  ohne Befund.
+- Lokale Replikation des Render-Starts: `gunicorn app:app` (alt, über den Shim)
+  und `gunicorn "telegram_formatter.app:app"` (kanonisch) liefern beide
+  HTTP 200. Der Footer sagt „GNU GPL v3 · Version 2.0.0" — die Version kommt
+  aus `telegram_formatter.__version__` und nicht mehr aus einer hartkodierten
+  Angabe (zuvor auf „MIT · 1.2.0" verdriftet).
+
 ## [2.0.0] - 2026-09-11
 
 ### Geändert (Repository-Reorganisation — verhaltensneutral)

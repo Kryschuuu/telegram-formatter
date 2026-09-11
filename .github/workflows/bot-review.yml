@@ -16,6 +16,8 @@ on:
       - ".gitleaks.toml"
       - "requirements*.txt"
       - "pyproject.toml"
+      - "app.py"
+      - "render.yaml"
       - ".github/workflows/bot-review.yml"
   push:
     branches: [main]
@@ -47,7 +49,9 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Ruff (Stil & Fehler)
-        run: ruff check telegram_formatter examples tests
+        # app.py (Wurzel) explizit mitprüfen: der veraltete Deploy-Shim soll
+        # stets ein reiner Weiterleiter bleiben (siehe tests/test_app.py).
+        run: ruff check app.py telegram_formatter examples tests
 
       - name: Bandit (Sicherheits-Scan)
         run: bandit -c pyproject.toml -r telegram_formatter examples/own_bot -ll

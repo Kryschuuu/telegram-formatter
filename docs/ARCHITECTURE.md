@@ -92,6 +92,8 @@ Parameter ein. `utils.py` importiert weder `flask` noch `requests` noch
 | Datei/Ebene | Inhalt |
 |---|---|
 | `pyproject.toml` | PEP-621-Metadaten, Konsolen-Skripte, Ruff-, pytest- und Bandit-Konfiguration; Deps dynamisch aus `requirements.txt` |
+| `render.yaml` | Render-Blueprint: kanonischer Start `gunicorn "telegram_formatter.app:app"`, `healthCheckPath: /`, `PYTHON_VERSION`, Secrets mit `sync: false` |
+| `app.py` (Wurzel) | **Veraltet (entfällt 3.0.0):** reiner Forwarding-Shim für Deployments mit altem Start-Befehl `gunicorn app:app`; keine Logik, erzwungen durch `tests/test_app.py` |
 | `requirements.txt` / `requirements-dev.txt` | gepinnte Laufzeit-/Dev-Abhängigkeiten (Build-Kompatibilität zu Render.com) |
 | `.gitleaks.toml` | Secret-Scan-Freigaben (nur Negativbeispiele, eng begrenzt) |
 | `docs/` | aktuelle Projekt-Dokumentation |
