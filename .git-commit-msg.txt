@@ -1,31 +1,40 @@
-fix(utils): Formel-Routing nach GFM-Regeln, Attribut-Escaping, Kleinfixes
+fix(botkit.review): Gate-Bypasses schließen, Ablehnung wirksam machen
 
-Audit-Befunde B-4, M-1, B-12, N-1, O-2:
+Audit-Befunde H-1 (hoch) und B-3 (mittel):
 
-* B-4: Inline-Math erkennt Formelbereiche jetzt mit gemeinsamen
-  _math_bounds_ok-Praedikat in allen drei Scannern (split_formulas,
-  convert_deepseek_latex_syntax, _protect_math) — Randregeln wie GFM:
-  kein Whitespace an den Randern des Formelinhalts, keine Ziffer direkt
-  hinter dem schliessenden '$', keine Formel ueber Absatzgrenzen.
-  "Das Buch kostet $100 und der Stift $200." bleibt damit normaler
-  Text (kein Rich-Fehlrouting, kein kaputtes LaTeX-Rendering); echte
-  $E=mc^2$-Formeln routen weiterhin auf den Rich-Pfad.
-  Display-$$...$$ verlangt nicht-leeren Inhalt innerhalb eines
-  Abschnitts.
-* M-1: _escape_html escaped zusaetzlich " — Links und language="…"-
-  Attribute koennen nicht mehr per Anfuehrungszeichen aufgebrochen
-  werden. Fence-Info-Strings laufen durch eine Allowlist
-  (_FENCE_LANG_RE, max. 40 Zeichen, sicheres Alphabet); unbekannte
-  Angaben fuellen das Attribut leer statt es zu injizieren. Gilt fuer
-  Regular- UND Rich-Pfad.
-* B-12: Listenkonvertierung erhaelt die Einrückung (verschachtelte
-  Listen kollabieren nicht mehr auf Ebene 0).
-* N-1: normalize_text entfernt NUL-Zeichen — sie waeren sonst mit den
-  \x00-Markern des _PlaceholderStore kollidiert (Inhaltsvertauschung,
-  von Telegram ohnehin abgelehnt).
-* O-2: _group fuehrt den Laengensaldo inkrementell statt ueber
-  join().len() je Item (quadratisches Verhalten auf grossen Dokumenten
-  beseitigt; identische Chunk-Grenzen).
+Statische Analyse (H-1):
+* Modul-Fakten-Pass (collect_facts) vor der Visitor-Visite:
+  - import-Aliases werden auf Modulpfade zurueckgebildet
+    ("import requests as rq" hebelte BK004 voellig aus),
+  - from-Importe auf punktlose Aufrufe (from os import system),
+  - Session-/Client-Objekte (x = requests.Session(); x.post(...)),
+  - einfach zugewiesene Modul-String-Konstanten fuer URL-Folding.
+* Ziel-URL-Pruefung (_check_http_target) loest jetzt Variablen und
+  f-String-Koepfe auf: "requests.post(EXFIL)" mit EXFIL als
+  Modul-Konstante und f"https://evil/{path}" werden als BK004-Blocker
+  erkannt; legitimes f"{API_BASE}/bot..."-Muster (Referenz-Bot) bleibt
+  befundfrei. Nicht aufloesbare Ziele bleiben BK010 (Warning,
+  Checklisten-Punkt C4) — dokumentierte Heuristik-Grenze.
+* BK006 greift jetzt fuer JEDES tokenfoermige String-Literal
+  (visit_Constant, unverankerter Pattern): AnnAssign, Dict-Werte,
+  Call-Keyword-Argumente — die drei reproduzierten Blindstellen zu.
+* FORBIDDEN_IMPORTS erweitert um importlib (Reflexions-Backdoor fuer
+  samtliche Verbote), tempfile (Persistenz), shutil, builtins.
+* BK003 erfasst Deserialisierung/Exec auch ueber Modulpraefixe
+  (dill./marshal./builtins.)/ importlib-Wege via BK001.
 
-Tests: 9 neue Regressionstests in TestMathBoundaryAndEscaping;
-214 Tests gesamt gruen.
+Review-Prozess (B-3):
+* ReviewTicket.is_approved(): eine Ablehnung blockiert zusaetzlich
+  bestehender Freigaben — auch im Local/Git-Modus ohne Registry
+  (reproduzierter Bug: verify() blieb nach reject() durchgaengig).
+* Ledger.submit(): abgelehnte Tickets koennen nicht "ueberstimmt"
+  werden; erneutes Einreichen erzeuegt ein frisches Ticket (klarster
+  Aufhebungspfad). ticket_for() liefert das neueste Ticket zu
+  (Bot, sha).
+
+Fixture tests/fixtures/insecure_bot.py erweitert um alle vier
+Bypass-Muster (CI-Gate 'Negativbeispiel muss erkannt werden' prueft
+sie damit dauerhaft). Die Referenz minimal_bot.py bleibt ohne Befund
+(kein False-Positive-Regen).
+
+Tests: 10 neue Faelle in TestAuditBypassRegressions; 224 Tests gruen.

