@@ -57,6 +57,7 @@ darin ist ein eigenständiger Sub-Layer für das dezentrale BYOB-Modell.
 | `telegram_formatter/sender.py` | Versand einzelner `TelegramMessage`-Objekte via HTTP (`sendMessage`/`sendRichMessage`). Lazy-Import von `requests`. |
 | `telegram_formatter/cli.py` | Kommandozeilen-Einstieg (Datei/STDIN → Payloads anzeigen oder senden). |
 | `telegram_formatter/app.py` | Flask-Weboberfläche mit Editor, Live-Vorschau und den Routen `/api/convert` und `/api/send`. Templates liegen in `telegram_formatter/templates/`. |
+| `telegram_formatter/static/` + `templates/` | Selbst-gehostetes UI („Design-System tf", seit Redesign 2026-09): vier CSS-Schichten (tokens → base → layout → components), `js/theme.js` (Theme-Switcher) + `js/app.js` (Editor), Inline-SVG-Icons — **keine CDNs**, CSP strikt `'self'`. Architektur & Theme-Anleitung: [DESIGN.md](DESIGN.md). |
 | `telegram_formatter/botctl.py` | CLI für eigene Bots: `register` · `review` · `approve` · `verify` · `send` · `checklist`; pflegt den Audit-Trail `audit/reviews.json`. |
 | `telegram_formatter/botkit/` | BYOB-Baukasten (Tokens/Vaults, Privacy/Redaction, Registry, Review-Statik BK001–BK012, ephemere Sessions, Telegram-Aufrufe). Details: [DECENTRAL_BOT_ARCHITECTURE.md](DECENTRAL_BOT_ARCHITECTURE.md). |
 

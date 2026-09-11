@@ -4,7 +4,63 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
-## [2.1.0] - 2026-09-11## [2.1.0] - 2026-09-11
+## [Unreleased]
+
+### Behoben (Web-Oberfläche — Design-Bruch)
+
+- **Ungestylter Rohtext:** Die Seite hing am Tailwind-Play-CDN; dessen zur
+  Laufzeit injizierten Inline-`<style>`-Regeln blockierte die CSP
+  (`style-src` ohne `'unsafe-inline'`) — komplettes Layout fiel aus. Das UI
+  ist jetzt **vollständig selbst-gehostet** (4 CSS-Schichten + 2 JS-Module +
+  Inline-SVG-Icons unter `static/`), die CSP ist strikt `'self'` und jede
+  CDN-Whitelist ist entfallen. Damit ist die Klasse dieses Fehlers strukturell
+  ausgeschlossen; `tests/test_app.py` & `tests/test_frontend.py` erzwingen beides.
+
+### Hinzugefügt (Web-Oberfläche — Design-System „tf“ & Themes)
+
+- **Vier Themes + Auto-Modus:** Light (Standard), Dark (Telegram-Nacht),
+  Colorful (Verlauf + Glas-Karten), Minimal (monochrom/kantig); „Auto“ folgt
+  dem Betriebssystem ohne JavaScript-Anteil (reine `prefers-color-scheme`-
+  Media-Query in `tokens.css`).
+- **Theme-Switcher** im Sticky-Header (`#themeSwitcher`): `localStorage`
+  (`tf-theme`), `aria-pressed`-Status, Zustandsklasse `.is-active`,
+  Boot synchron im `<head>` (kein Flash of wrong theme), robust ohne
+  `localStorage`/`matchMedia`, No-JS-Fallback aufs Systemtheme.
+- **Selbst-gehostetes Design-System:** `static/css/tokens.css|base.css|
+  layout.css|components.css` (Token-Schicht, Reset/Typo, Responsive-Grid,
+  `.tf-*`-Komponenten) — Farbhartkodierung außerhalb der Tokens ist durch
+  Tests verboten; Themewechsel = ein Attribut, kein Markup.
+- **UX-Schmuck:** Zeichenzähler (warnend > 4096), Strg/Cmd+Enter = senden,
+  Skip-Link, `role="status"`-Live-Region, Noscript-Hinweis, Favicon (SVG),
+  reiche Live-Vorschau (Code, Durchstreichen, Links, Formel-Highlight —
+  weiterhin escaping-first, kein HTML-Injection-Weg).
+- **Dokumentation:** [docs/DESIGN.md](docs/DESIGN.md) (Architektur, Theme-
+  Rezept, Switcher-Verhalten, Teststrategie, Erweiterungs-Guide).
+
+### Geändert (Web-Oberfläche)
+
+- `telegram_formatter/templates/index.html` neu geschrieben: semantische
+  `.tf-*`-Klassen statt Tailwind-Utilities; **alle Funktions-Hooks bleiben
+  contract-getestet erhalten** (`#input`, `#preview`, `#payloads`, `#sendBtn`,
+  `#resetBtn`, `#sendStatus`, `data-convert-url`/`data-send-url`, Howto/FAQ/
+  Disclaimer/Footer). `static/app.css`/`app.js` → `static/css/*` + `static/js/*`.
+- `telegram_formatter/app.py`: CSP vereinfacht (nur `'self'`, `data:` für
+  Favicons); Header-Text accordingly. Endpunkte, Limits, Rate-Limits,
+  Auth/Guards unverändert.
+
+### Tests
+
+- `tests/test_frontend.py`: 20 Strukturverträge (Token-Vollständigkeit je
+  Theme, `var()`-Abdeckung, Asset-Existenz & Waisenfreiheit, JS↔HTML-IDs,
+  Switcher-Markup, mobile-first-Breakpoints, Kontrast-Heuristik,
+  Browser-Baseline-Verbotsliste, HTML-Wellformedness).
+- `tests/frontend/jsdom_spec.cjs` + `tests/test_jsdom_smoke.py`: funktionale
+  DOM-Tests (Theme-Boot/Klicks/Persistenz, Debounce+Fetch, Vorschau,
+  Sende-/Fehlerpfad, Reset) gegen das echt gerenderte Template — 37 Checks;
+  sauberer Skip ohne Node/jsdom.
+- Bestehende Suite unverändert grün: **259 passed** (`pytest -q`).
+
+## [2.1.0] - 2026-09-11
 
 Sicherheitshärtung und Fehlerbehebungen als Umsetzung des externen
 Code-Reviews (baut auf dem Stand des [Unreleased]-Blocks: Root-Shim + render.yaml) ([`SECURITY_AUDIT.md`](SECURITY_AUDIT.md)); die Nummern (K-*/H-*/
