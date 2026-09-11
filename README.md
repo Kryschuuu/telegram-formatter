@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -27,6 +27,9 @@ Nachrichten.
 - **Automatisches Splitting** — Nachrichten werden an Absatz-, Zeilen- und
   Wortgrenzen aufgeteilt (4096 Zeichen für klassische, 32768 für Rich
   Messages), ohne Formatierungen oder Tabellen zu zerreißen.
+- **Eigener Bot (dezentral, v1.3.0)** — BYOB über `botkit`/`botctl`:
+  eigener Bot registrieren, reviewen und in einer ephemeren Session
+  nutzen — ohne zentrale Datenspeicherung.
 - **Unicode-sicher** — NFC-Normalisierung für Diakritika wie `ì`.
 - **Komfortable Web-Oberfläche** (v1.1.0) — Live-Vorschau und Payloads in
   Echtzeit, Reset-Button („Zurücksetzen"), Sticky-Header im Karten-Layout,
@@ -148,6 +151,46 @@ for msg in build_messages("**fett** und $x^2$", chat_id="-100123456789"):
     send_message(msg, bot_token="123456:ABC")
 ```
 
+
+## Eigener Bot statt Zentral-Bot (dezentral, ab v1.3.0)
+
+Standardmäßig sendet diese Anwendung über **einen** konfigurierten Bot
+(`TELEGRAM_BOT_TOKEN`). Wer seine Nachrichten nicht über fremde Infrastruktur
+laufen lassen will, nutzt stattdessen den eigenen Bot: Registrierung, Review
+und Session laufen lokal bzw. in einer ephemeren Session — **ohne
+Datenspeicherung**.
+
+```bash
+# 1) Eigener Bot (Token von @BotFather) verifizieren — Token wird nicht gespeichert
+python botctl.py register --owner <dein-handle>
+
+# 2) Bot-Code statisch prüfen und Review-Ticket anlegen
+python botctl.py review examples/own_bot/minimal_bot.py --bot-id <deine-bot-id>
+
+# 3) Zwei Freigaben (Vier-Augen-Prinzip, mindestens eine Maintainer:in)
+python botctl.py approve <TICKET> --reviewer alice --role maintainer \
+    --checks C1,C2,C3,C4,C5,C6,C7,C8,C9
+python botctl.py approve <TICKET> --reviewer bob --role contributor \
+    --checks C1,C2,C3,C4,C5,C6,C7,C8,C9
+
+# 4) In einer Session über den eigenen Bot senden (Dry-Run ohne --send)
+python botctl.py send --chat-id -1001234567890 --file eingabe.md \
+    --bot-source examples/own_bot/minimal_bot.py --send
+```
+
+Kernpunkte des Designs:
+
+- **Keine Persistenz** — Tokens leben nur im RAM (`BotToken` + Vault mit TTL),
+  Sessions enden nach TTL/Leerlauf; es wird nichts auf die Platte geschrieben.
+- **Keine Inhalte in Logs** — geloggt werden ausschließlich Metadaten
+  (Anzahl Chunks, Zeichenlänge, Fingerprints); ein `RedactingFilter` bereinigt
+  auch Fremdlogger wie `urllib3`.
+- **Review vor Deployment** — AST-Regeln (BK001–BK012), Checkliste (C1–C9),
+  zwei Freigaben, Freigabe gebunden an die SHA-256-Prüfsumme des Codes.
+
+Details: [Dezentrale Bot-Architektur](docs/DECENTRAL_BOT_ARCHITECTURE.md) ·
+Review-Checkliste: `python botctl.py checklist`
+
 ## Tests
 
 ```bash
@@ -164,13 +207,23 @@ telegram-formatter/
 ├── utils.py                # Konvertierungs- & Splitting-Logik (pure)
 ├── sender.py               # HTTP-Versand an die Telegram-API
 ├── templates/index.html    # Editor-Seite
-├── tests/                  # Unit-Tests (utils, sender, app)
+├── botkit/                 # Dezentrale Bots (BYOB), seit v1.3.0
+│   ├── tokens.py           #   BotToken, RAM-Vaults, Formatvalidierung
+│   ├── privacy.py          #   Redaction, Fingerprints, audit()
+│   ├── registry.py         #   Registrierung ohne Token-Speicherung
+│   ├── review.py           #   BK-Regeln, Checkliste, Review-Gate
+│   ├── session.py          #   ephemere Bot-Sessions (TTL, Rate-Limit)
+│   └── telegram_api.py     #   getMe/getUpdates/setWebhook/deleteWebhook
+├── botctl.py               # CLI für eigene Bots (register/review/approve/send)
+├── examples/own_bot/       # Referenz-Bot (besteht alle Review-Regeln)
+├── tests/                  # Unit-Tests (utils, sender, app, botkit)
 ├── docs/
-│   ├── BLUEPRINT.md        # Architektur & Datenflüsse
-│   ├── DEPLOYMENT.md       # Render.com-Anleitung
-│   ├── CODE_REVIEW.md      # Review-Ergebnisse & Fixes
-│   ├── PROMPT.md           # Wiederverwendbarer Arbeitsauftrag (KI-Agent)
-│   └── PR_DESCRIPTION.md   # PR-Text für die 1.1.0-Änderungen
+│   ├── BLUEPRINT.md                  # Architektur & Datenflüsse
+│   ├── DECENTRAL_BOT_ARCHITECTURE.md # BYOB-Architektur & Review-Prozess
+│   ├── DEPLOYMENT.md                 # Render.com-Anleitung
+│   ├── CODE_REVIEW.md                # Review-Ergebnisse & Fixes
+│   ├── PROMPT.md                     # Wiederverwendbarer Arbeitsauftrag (KI-Agent)
+│   └── PR_DESCRIPTION.md             # PR-Text für die 1.1.0-Änderungen
 └── requirements.txt
 ```
 
@@ -183,10 +236,12 @@ Schritt-für-Schritt-Anleitung für [Render.com](https://render.com) in
 
 - [Technischer Blueprint](docs/BLUEPRINT.md) — Architektur, Komponenten,
   Datenflüsse, Abhängigkeiten.
+- [Dezentrale Bot-Architektur](docs/DECENTRAL_BOT_ARCHITECTURE.md) — eigene
+  Bots registrieren, reviewen und in Sessions nutzen; Peer-Review-Prozess.
 - [Code-Peer-Review](docs/CODE_REVIEW.md) — gefundene Probleme und Fixes.
 - [Changelog](CHANGELOG.md) — Versionshistorie (Semantic Versioning).
 
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **1.2.0**.
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **1.3.0**.

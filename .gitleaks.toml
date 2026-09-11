@@ -1,0 +1,42 @@
+# Gitleaks-Konfiguration für telegram-formatter
+# =============================================
+# Gitleaks sucht nach versehentlich eingecheckten Geheimnissen (Bot-Tokens,
+# API-Keys, …). Zwei Stellen enthalten **absichtlich** tokenförmige Werte —
+# sie sind hier bewusst und eng begrenzt freigegeben:
+#
+#   1. tests/fixtures/insecure_bot.py — Negativbeispiel für die botkit-Regel
+#      BK006 („hartkodiertes Geheimnis"). Ohne einen tokenförmigen Wert wäre
+#      der Regeltest wirkungslos; der Wert ist ein Dummy (Bot-ID 123456789).
+#   2. Historische Commits mit dem Dokumentations-Dummy „123456789:…". Die
+#      Dokumentation nutzt inzwischen Platzhalter
+#      (`export TELEGRAM_BOT_TOKEN="<token-von-botfather>"`), alte Commits
+#      bleiben im Verlauf aber sichtbar.
+#
+# Alles andere — insbesondere echte Tokens in neuem Code — wird weiterhin
+# gemeldet und schlägt im CI fehl.
+
+title = "telegram-formatter"
+
+[extend]
+useDefault = true
+
+# Neue Schreibweise (gitleaks >= 8.19)
+[[allowlists]]
+description = "Absichtliche Negativbeispiele (BK006) und Dokumentations-Dummy"
+paths = [
+  '''tests/fixtures/.*''',
+]
+regexes = [
+  '''123456789:[A-Za-z0-9_-]{35}''',
+]
+
+# Alte Schreibweise — bleibt zur Kompatibilität mit älteren gitleaks-Versionen
+# erhalten. Beide Listen werden von gitleaks zusammengeführt (logisches ODER).
+[allowlist]
+description = "Absichtliche Negativbeispiele (BK006) und Dokumentations-Dummy"
+paths = [
+  '''tests/fixtures/.*''',
+]
+regexes = [
+  '''123456789:[A-Za-z0-9_-]{35}''',
+]

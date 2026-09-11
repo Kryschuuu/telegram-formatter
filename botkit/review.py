@@ -1,0 +1,775 @@
+"""
+botkit/review.py
+================
+Peer-Review-Gate für Nutzer-Bots — der Teil des Designs, der verhindert,
+dass „jedermann darf einen Bot bauen" zu „jedermann darf Code ausführen" wird.
+
+Drei Ebenen, die zusammenwirken:
+
+1. **Automatische Statik** (:func:`analyze_source`) — AST-basierte Regelprüfung
+   gegen die harten No-Gos: Persistenz, Fremdnetzwerk, dynamische
+   Code-Ausführung, hartkodierte Secrets, Inhalte in Logs.
+2. **Menschliche Abnahme** (:class:`ReviewLedger`) — Tickets, zwei
+   voneinander unabhängige Freigaben (Vier-Augen-Prinzip), mindestens eine
+   davon von einem Maintainer, vollständig ausgefüllte Checkliste.
+3. **Bindung an den Code** (:class:`ReviewGate`) — die Freigabe gilt nur für
+   die exakte Prüfsumme der reviewten Datei. Eine Zeile Änderung ⇒ neues
+   Review.
+
+Das Ledger speichert ausschließlich Metadaten (Prüfsummen, Handles,
+Zeitstempel, Regel-IDs) — keine Quelltexte, keine Inhalte.
+"""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import logging
+import secrets
+import time
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from urllib.parse import urlparse
+
+from .privacy import audit
+from .registry import BotRegistry
+from .tokens import TOKEN_PATTERN
+
+__all__ = [
+    "CHECKLIST",
+    "RULES",
+    "CheckItem",
+    "Finding",
+    "ReviewDecision",
+    "ReviewError",
+    "ReviewGate",
+    "ReviewGateError",
+    "ReviewLedger",
+    "ReviewReport",
+    "ReviewRole",
+    "ReviewTicket",
+    "Reviewer",
+    "analyze_code",
+    "analyze_source",
+    "source_sha256",
+]
+
+LOGGER = logging.getLogger("botkit.review")
+
+# --------------------------------------------------------------------------- #
+# Regelwerk der statischen Analyse
+# --------------------------------------------------------------------------- #
+BLOCKER = "blocker"
+WARNING = "warning"
+INFO = "info"
+
+#: Module, die in einem Nutzer-Bot nichts verloren haben
+#: (Persistenz, Shell, Roh-Sockets, Fremd-Storage, Deserialisierung).
+FORBIDDEN_IMPORTS = frozenset(
+    {
+        "sqlite3", "shelve", "pickle", "marshal", "dill", "joblib",
+        "subprocess", "socket", "smtplib", "ftplib", "telnetlib", "paramiko",
+        "redis", "pymongo", "boto3", "botocore", "psycopg2", "pymysql",
+        "elasticsearch", "kafka", "sqlalchemy", "csv", "xlwt", "openpyxl",
+    }
+)
+
+#: Einzige erlaubte Gegenstelle für ausgehende HTTP-Aufrufe.
+ALLOWED_HTTP_HOSTS = ("api.telegram.org",)
+
+#: Methoden, die ohne Prüfung der URL kritisch sind.
+HTTP_CALL_NAMES = frozenset({"get", "post", "put", "patch", "delete", "request", "urlopen"})
+
+#: Namen, hinter denen in Logs typischerweise Nachrichteninhalte stecken.
+SENSITIVE_LOG_NAMES = frozenset(
+    {
+        "text", "message", "messages", "msg", "content", "body", "payload",
+        "markdown", "update", "chat_text", "raw", "caption", "document",
+    }
+)
+
+#: Aufrufe, die Inhalte auf ein dauerhaftes Medium schreiben.
+PERSISTENCE_CALLS = frozenset(
+    {
+        "write_text", "write_bytes", "writelines", "to_csv", "to_excel",
+        "to_json", "save", "dump", "connect", "set", "setex", "insert_one",
+        "insert_many", "put_object", "remove", "unlink", "rmtree", "makedirs",
+    }
+)
+
+#: Dynamische Code-Ausführung / Deserialisierung.
+DYNAMIC_EXEC_CALLS = frozenset({"eval", "exec", "compile", "__import__", "loads"})
+
+#: Shell- und Prozessausführung.
+SHELL_CALLS = frozenset(
+    {"system", "popen", "run", "call", "check_call", "check_output", "getoutput", "Popen"}
+)
+
+#: Logger-Methoden, deren Argumente auf Inhalte geprüft werden.
+LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "exception", "critical", "log"})
+
+
+@dataclass(frozen=True)
+class Rule:
+    """Eine statische Regel (Metadaten für Reports und Doku)."""
+
+    rule_id: str
+    severity: str
+    title: str
+    hint: str
+
+
+RULES: dict[str, Rule] = {
+    rule.rule_id: rule
+    for rule in (
+        Rule("BK001", BLOCKER, "Verbotener Import", "Modul entfernen; botkit-API nutzen."),
+        Rule("BK002", BLOCKER, "Persistenz-Schreibzugriff", "Keine Datei-/DB-/Cache-Schreibzugriffe."),
+        Rule("BK003", BLOCKER, "Dynamische Code-Ausführung", "eval/exec/pickle sind untersagt."),
+        Rule("BK004", BLOCKER, "Netzwerk zu Fremd-Host", "Nur api.telegram.org darf kontaktiert werden."),
+        Rule("BK005", BLOCKER, "Inhalte im Log", "audit() mit Metadaten statt Inhalten loggen."),
+        Rule("BK006", BLOCKER, "Hartkodiertes Geheimnis", "Token/Schlüssel nie im Quelltext."),
+        Rule("BK007", BLOCKER, "Shell-/Prozessausführung", "Keine externen Prozesse starten."),
+        Rule("BK008", BLOCKER, "Eigener Netzwerk-Server", "Webhook nur hinter geprüftem TLS-Terminator."),
+        Rule("BK010", WARNING, "URL nicht prüfbar", "Ziel-URL als Konstante übergeben."),
+        Rule("BK011", WARNING, "Ausgabe von Inhalten", "print() von Inhalten vermeiden."),
+        Rule("BK012", WARNING, "Unsicherer Zufall", "secrets statt random für Token/Noncen."),
+    )
+}
+
+
+@dataclass(frozen=True)
+class Finding:
+    """Ein Regelverstoß an einer konkreten Stelle."""
+
+    rule_id: str
+    severity: str
+    file: str
+    line: int
+    message: str
+    hint: str
+
+    def __str__(self) -> str:
+        return f"{self.file}:{self.line} [{self.rule_id}/{self.severity}] {self.message}"
+
+
+@dataclass
+class ReviewReport:
+    """Ergebnis der statischen Analyse einer Bot-Quelldatei."""
+
+    file: str
+    source_sha256: str
+    findings: list[Finding] = field(default_factory=list)
+
+    @property
+    def blocking(self) -> list[Finding]:
+        """Findings, die ein Deployment verhindern."""
+        return [f for f in self.findings if f.severity == BLOCKER]
+
+    @property
+    def warnings(self) -> list[Finding]:
+        return [f for f in self.findings if f.severity == WARNING]
+
+    @property
+    def ok(self) -> bool:
+        return not self.blocking
+
+    def as_text(self) -> str:
+        """Menschenlesbarer Report für CLI, PR-Kommentar und CI-Log."""
+        if not self.findings:
+            return f"✔ {self.file} — keine Befunde (sha256={self.source_sha256[:12]})."
+        lines = [
+            f"{'✖' if not self.ok else '⚠'} {self.file} — "
+            f"{len(self.blocking)} Blocker, {len(self.warnings)} Warnungen "
+            f"(sha256={self.source_sha256[:12]})"
+        ]
+        lines.extend(f"  {finding}" for finding in self.findings)
+        if not self.ok:
+            lines.append("  → Blocker müssen vor dem Review behoben werden.")
+        return "\n".join(lines)
+
+
+def source_sha256(path: str | Path) -> str:
+    """SHA-256 über die *Bytes* der Datei — Grundlage der Freigabebindung."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# AST-Analyse
+# --------------------------------------------------------------------------- #
+def _dotted(node: ast.AST) -> str:
+    """Baut aus ``a.b.c`` den String ``"a.b.c"`` (so weit möglich)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted(node.value)
+        return f"{base}.{node.attr}" if base else node.attr
+    return ""
+
+
+def _names_in(node: ast.AST) -> set[str]:
+    """Alle Bezeichner in einem Teilbaum (für Inhalts-Heuristiken)."""
+    return {
+        n.id.lower()
+        for n in ast.walk(node)
+        if isinstance(n, ast.Name)
+    } | {
+        n.attr.lower()
+        for n in ast.walk(node)
+        if isinstance(n, ast.Attribute)
+    }
+
+
+def _suppressed(source_lines: Sequence[str], lineno: int, rule_id: str) -> bool:
+    """
+    Prüft ``# botkit:allow BK00x[,BK00y]`` auf der Zeile selbst oder direkt
+    darüber. Suppressions sind bewusst sichtbar (Reviewer sehen sie sofort).
+    """
+    for index in (lineno - 1, lineno - 2):
+        if 0 <= index < len(source_lines):
+            line = source_lines[index]
+            if "#" not in line:
+                continue
+            marker = line.split("#", 1)[1].strip()
+            if marker.startswith("botkit:allow"):
+                rest = marker[len("botkit:allow"):].strip().lstrip(":= ")
+                allowed_ids = {part.strip() for part in rest.replace(",", " ").split()}
+                if rule_id in allowed_ids or "all" in allowed_ids:
+                    return True
+    return False
+
+
+class _SecurityVisitor(ast.NodeVisitor):
+    """Sammelt Regelverstöße in einem Modul (rein, ohne I/O)."""
+
+    def __init__(self, filename: str, source: str) -> None:
+        self.filename = filename
+        self.lines = source.splitlines()
+        self.findings: list[Finding] = []
+
+    # -- Hilfsfunktionen ----------------------------------------------------
+    def _add(self, rule_id: str, node: ast.AST, message: str) -> None:
+        rule = RULES[rule_id]
+        if _suppressed(self.lines, getattr(node, "lineno", 0), rule_id):
+            return
+        self.findings.append(
+            Finding(
+                rule_id=rule_id,
+                severity=rule.severity,
+                file=self.filename,
+                line=getattr(node, "lineno", 0),
+                message=message,
+                hint=rule.hint,
+            )
+        )
+
+    # -- Importe ------------------------------------------------------------
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            root = alias.name.split(".", 1)[0]
+            if root in FORBIDDEN_IMPORTS:
+                self._add("BK001", node, f"Import von '{alias.name}' ist nicht erlaubt.")
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        root = (node.module or "").split(".", 1)[0]
+        if root in FORBIDDEN_IMPORTS:
+            self._add("BK001", node, f"Import aus '{node.module}' ist nicht erlaubt.")
+        if root == "random":
+            self._add("BK012", node, "'random' ist kryptographisch unsicher — 'secrets' nutzen.")
+        self.generic_visit(node)
+
+    # -- Zuweisungen (hartkodierte Secrets) ---------------------------------
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            literal = node.value.value
+            if TOKEN_PATTERN.search(literal) or TOKEN_PATTERN.match(literal.strip()):
+                self._add("BK006", node, "Bot-Token im Quelltext hartkodiert.")
+            else:
+                targets = " ".join(_dotted(t).lower() for t in node.targets)
+                if any(key in targets for key in ("token", "secret", "api_key", "password")):
+                    self._add("BK006", node, f"Geheimnis als Literal an '{targets.strip()}'.")
+        self.generic_visit(node)
+
+    # -- Aufrufe ------------------------------------------------------------
+    def visit_Call(self, node: ast.Call) -> None:
+        name = _dotted(node.func)
+        short = name.split(".")[-1] if name else ""
+        root = name.split(".")[0] if name else ""
+
+        # Dynamische Ausführung / Deserialisierung
+        if name.startswith("pickle."):
+            self._add("BK003", node, f"Deserialisierung via '{name}' ist untersagt.")
+        elif short in DYNAMIC_EXEC_CALLS and not name.count("."):
+            self._add("BK003", node, f"Aufruf von '{name}' ist untersagt.")
+
+        # Shell / Prozesse
+        if root in {"os", "subprocess"} and short in SHELL_CALLS:
+            self._add("BK007", node, f"Prozess-/Shell-Aufruf '{name}' ist untersagt.")
+
+        # Persistenz
+        if short in PERSISTENCE_CALLS and not name.startswith(("audit", "logging")):
+            if short in {"connect"} and root != "sqlite3":
+                pass  # connect() allein ist kein Verstoß (z. B. signals)
+            else:
+                self._add("BK002", node, f"Schreibzugriff via '{name}' ist untersagt.")
+        if short == "open":
+            mode = ""
+            if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                mode = str(node.args[1].value)
+            for kw in node.keywords:
+                if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                    mode = str(kw.value.value)
+            if any(flag in mode for flag in ("w", "a", "x")):
+                self._add("BK002", node, f"Datei wird zum Schreiben geöffnet (mode='{mode}').")
+
+        # HTTP-Aufrufe: Ziel-Host prüfen
+        if short in HTTP_CALL_NAMES and root in {"requests", "httpx", "session", "urllib", "http"}:
+            self._check_http_target(node, name)
+
+        # Netzwerk-Server
+        if name in {"socket.socket", "socket.create_server"} or short == "serve_forever":
+            self._add("BK008", node, f"Eigener Socket-Server ('{name}') ist untersagt.")
+
+        # Logging / Ausgaben mit Inhalten
+        if short in LOG_METHODS and root in {"logging", "logger", "log", "self", ""}:
+            self._check_log_args(node, name)
+        if short == "print" and _names_in(node) & SENSITIVE_LOG_NAMES:
+            self._add("BK011", node, "print() gibt potenziell Inhalte aus.")
+
+        # Unsicherer Zufall
+        if root == "random":
+            self._add("BK012", node, "random statt secrets für sicherheitsrelevante Werte.")
+
+        self.generic_visit(node)
+
+    def _check_http_target(self, node: ast.Call, name: str) -> None:
+        """Nur api.telegram.org darf per HTTP kontaktiert werden."""
+        target = None
+        if node.args and isinstance(node.args[0], ast.Constant):
+            target = node.args[0].value
+        else:
+            for kw in node.keywords:
+                if kw.arg == "url" and isinstance(kw.value, ast.Constant):
+                    target = kw.value.value
+        if target is None:
+            self._add("BK010", node, f"Ziel-URL von '{name}' ist nicht statisch prüfbar.")
+            return
+        if not isinstance(target, str):
+            return
+        host = urlparse(target).hostname or ""
+        if not host:
+            self._add("BK010", node, f"Ziel-URL von '{name}' hat keinen erkennbaren Host.")
+            return
+        if not any(host == allowed or host.endswith(f".{allowed}") for allowed in ALLOWED_HTTP_HOSTS):
+            self._add("BK004", node, f"Ausgehender Aufruf an '{host}' ist nicht erlaubt.")
+
+    def _check_log_args(self, node: ast.Call, name: str) -> None:
+        """Inhalte dürfen nicht in Logzeilen landen."""
+        for arg in node.args:
+            if isinstance(arg, ast.Constant):
+                continue
+            if _names_in(arg) & SENSITIVE_LOG_NAMES:
+                self._add("BK005", node, f"Log-Aufruf '{name}' enthält potenziell Inhalte.")
+                return
+
+
+def analyze_code(source: str, *, filename: str = "<string>") -> ReviewReport:
+    """Führt die statische Analyse auf einem Quelltext aus (testfreundlich)."""
+    tree = ast.parse(source, filename=filename)
+    visitor = _SecurityVisitor(filename, source)
+    visitor.visit(tree)
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    findings = sorted(visitor.findings, key=lambda f: (f.line, f.rule_id))
+    return ReviewReport(file=filename, source_sha256=digest, findings=findings)
+
+
+def analyze_source(path: str | Path) -> ReviewReport:
+    """Führt die statische Analyse auf einer Datei aus."""
+    file_path = Path(path)
+    source = file_path.read_text(encoding="utf-8")
+    return analyze_code(source, filename=str(file_path))
+
+
+# --------------------------------------------------------------------------- #
+# Menschliche Abnahme: Checkliste, Ledger, Gate
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class CheckItem:
+    """Ein Prüfpunkt der Review-Checkliste (erscheint auch im PR-Template)."""
+
+    check_id: str
+    question: str
+    why: str
+
+
+CHECKLIST: tuple[CheckItem, ...] = (
+    CheckItem("C1", "Token nur über BotToken/Umgebung, nie geloggt oder gespeichert?",
+              "Tokens in Logs/Dateien sind der häufigste Leak-Weg."),
+    CheckItem("C2", "Kein Schreibzugriff auf Dateisystem, Datenbank oder Cache?",
+              "Kernanforderung: keine Nutzerdaten-Persistenz."),
+    CheckItem("C3", "Alle Eingaben validiert (Typ, Länge, Format, chat_id, Callback-Daten)?",
+              "Ungeprüfte Eingaben landen sonst 1:1 im API-Payload."),
+    CheckItem("C4", "Nur erlaubte Telegram-Methoden, keine Fremd-APIs?",
+              "Begrenzt die Angriffsfläche und den Datenabfluss."),
+    CheckItem("C5", "Fehler klassifiziert geloggt — ohne Inhalte, Token oder chat_id?",
+              "Fehlermeldungen sind der zweithäufigste Leak-Weg."),
+    CheckItem("C6", "Rate-Limits/429 mit Backoff behandelt, Retry-Budget begrenzt?",
+              "Verhindert Bot-Sperren und Endlosschleifen."),
+    CheckItem("C7", "Session-Ende räumt auf (deleteWebhook, drop_pending_updates, kein Offset)?",
+              "Nach der Session darf kein Zustand bei Telegram bleiben."),
+    CheckItem("C8", "Keine neuen Abhängigkeiten ohne Begründung, Versionen gepinnt?",
+              "Supply-Chain-Risiko; Reproduzierbarkeit."),
+    CheckItem("C9", "Tests für Konvertierung, Fehlerpfad und „keine Persistenz\" vorhanden?",
+              "Review ist nur so gut wie seine Regressionstests."),
+)
+
+CHECKLIST_IDS = frozenset(item.check_id for item in CHECKLIST)
+
+
+class ReviewError(RuntimeError):
+    """Fehler im Review-Prozess (unvollständige Checkliste, Doppelreview …)."""
+
+
+class ReviewGateError(RuntimeError):
+    """Deployment-Blockade: Bot ist nicht freigegeben oder Code hat Blocker."""
+
+
+class ReviewRole(str, Enum):
+    """Rolle der reviewenden Person (für das Vier-Augen-Prinzip)."""
+
+    CONTRIBUTOR = "contributor"
+    MAINTAINER = "maintainer"
+
+
+@dataclass(frozen=True)
+class Reviewer:
+    handle: str
+    role: ReviewRole = ReviewRole.CONTRIBUTOR
+
+    def __post_init__(self) -> None:
+        if not self.handle or len(self.handle) > 64 or not self.handle.replace("-", "").replace(".", "").isalnum():
+            raise ReviewError("Reviewer-Handle muss alphanumerisch sein (max. 64 Zeichen).")
+
+
+@dataclass(frozen=True)
+class ReviewDecision:
+    reviewer: Reviewer
+    approved: bool
+    checks: tuple[str, ...]
+    note: str
+    decided_at: float
+    source_sha256: str
+
+
+@dataclass
+class ReviewTicket:
+    """Ein Review-Vorgang für (Bot, Code-Prüfsumme)."""
+
+    ticket_id: str
+    bot_id: int
+    source_sha256: str
+    submitted_at: float
+    file: str = ""
+    static_findings: tuple[str, ...] = ()
+    decisions: list[ReviewDecision] = field(default_factory=list)
+
+    @property
+    def approvals(self) -> list[ReviewDecision]:
+        return [d for d in self.decisions if d.approved]
+
+    @property
+    def rejections(self) -> list[ReviewDecision]:
+        return [d for d in self.decisions if not d.approved]
+
+    def is_approved(self, *, min_approvals: int, require_maintainer: bool) -> bool:
+        """Vier-Augen-Prinzip: genug Freigaben, davon mindestens eine Maintainer."""
+        approvals = self.approvals
+        if len(approvals) < min_approvals:
+            return False
+        if len({d.reviewer.handle for d in approvals}) < min_approvals:
+            return False  # dieselbe Person darf nicht doppelt zählen
+        if require_maintainer and not any(
+            d.reviewer.role is ReviewRole.MAINTAINER for d in approvals
+        ):
+            return False
+        return True
+
+
+class ReviewLedger:
+    """
+    Append-only-Vorgangsspeicher für Review-Entscheidungen (nur Metadaten).
+
+    Gespeichert werden Ticket-ID, Bot-ID, Code-Prüfsumme, Regel-IDs der
+    statischen Analyse und Entscheidungen. Keine Quelltexte, keine Inhalte.
+    """
+
+    def __init__(self, *, clock: Callable[[], float] = time.time) -> None:
+        self._clock = clock
+        self._tickets: dict[str, ReviewTicket] = {}
+
+    @staticmethod
+    def _new_ticket_id() -> str:
+        return f"RV-{secrets.token_hex(4).upper()}"
+
+    def submit(self, bot_id: int, source_sha256: str, *, file: str = "",
+               static_findings: Iterable[str] = ()) -> ReviewTicket:
+        """Legt ein Ticket an (idempotent pro Bot+Prüfsumme)."""
+        existing = self.ticket_for(bot_id, source_sha256)
+        if existing is not None:
+            return existing
+        ticket = ReviewTicket(
+            ticket_id=self._new_ticket_id(),
+            bot_id=int(bot_id),
+            source_sha256=source_sha256,
+            submitted_at=self._clock(),
+            file=file,
+            static_findings=tuple(static_findings),
+        )
+        self._tickets[ticket.ticket_id] = ticket
+        audit(LOGGER, logging.INFO, "review.submitted", ticket=ticket.ticket_id, bot=bot_id,
+              source=source_sha256[:12])
+        return ticket
+
+    def decide(self, ticket_id: str, decision: ReviewDecision) -> ReviewTicket:
+        """Trägt eine Entscheidung ein (validiert: Ticket, Prüfsumme, Duplikate, Checkliste)."""
+        ticket = self._tickets.get(ticket_id)
+        if ticket is None:
+            raise ReviewError(f"Unbekanntes Review-Ticket {ticket_id}.")
+        if decision.source_sha256 != ticket.source_sha256:
+            raise ReviewError(
+                "Entscheidung bezieht sich auf eine andere Code-Fassung "
+                f"({decision.source_sha256[:12]} != {ticket.source_sha256[:12]})."
+            )
+        if any(d.reviewer.handle == decision.reviewer.handle for d in ticket.decisions):
+            raise ReviewError(f"{decision.reviewer.handle} hat dieses Ticket bereits bewertet.")
+        if decision.approved:
+            missing = CHECKLIST_IDS - set(decision.checks)
+            if missing:
+                raise ReviewError(
+                    "Checkliste unvollständig: " + ", ".join(sorted(missing))
+                )
+            unknown = set(decision.checks) - CHECKLIST_IDS
+            if unknown:
+                raise ReviewError("Unbekannte Check-IDs: " + ", ".join(sorted(unknown)))
+        ticket.decisions.append(decision)
+        audit(LOGGER, logging.INFO, "review.decided", ticket=ticket_id, bot=ticket.bot_id,
+              reviewer=decision.reviewer.handle, role=decision.reviewer.role.value,
+              approved=decision.approved)
+        return ticket
+
+    def ticket(self, ticket_id: str) -> ReviewTicket | None:
+        return self._tickets.get(ticket_id)
+
+    def ticket_for(self, bot_id: int, source_sha256: str) -> ReviewTicket | None:
+        for ticket in self._tickets.values():
+            if ticket.bot_id == int(bot_id) and ticket.source_sha256 == source_sha256:
+                return ticket
+        return None
+
+    # ------------------------------------------------------- Audit-Trail (Datei)
+    def save(self, path: str | Path) -> None:
+        """
+        Schreibt den Audit-Trail als JSON.
+
+        Erlaubt, weil hier **keine Nutzdaten** stehen: Ticket-IDs, Bot-IDs,
+        Code-Prüfsummen, Regel-IDs und Entscheidungen. Damit kann ein Review
+        (z. B. über einen PR) nachvollziehbar dokumentiert werden, ohne
+        Inhalte oder Tokens zu berühren.
+        """
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(self.audit_trail(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        audit(LOGGER, logging.INFO, "review.saved", file=str(target), tickets=len(self._tickets))
+
+    @classmethod
+    def load(cls, path: str | Path, *, clock: Callable[[], float] = time.time) -> ReviewLedger:
+        """Liest einen Audit-Trail wieder ein (z. B. im CI nach dem Checkout)."""
+        ledger = cls(clock=clock)
+        source = Path(path)
+        if not source.exists():
+            return ledger
+        for entry in json.loads(source.read_text(encoding="utf-8")):
+            ticket = ReviewTicket(
+                ticket_id=str(entry["ticket_id"]),
+                bot_id=int(entry["bot_id"]),
+                source_sha256=str(entry["source_sha256"]),
+                submitted_at=float(entry["submitted_at"]),
+                file=str(entry.get("file", "")),
+                static_findings=tuple(entry.get("static_findings", ())),
+            )
+            ticket.decisions = [
+                ReviewDecision(
+                    reviewer=Reviewer(str(d["reviewer"]), ReviewRole(str(d["role"]))),
+                    approved=bool(d["approved"]),
+                    checks=tuple(d.get("checks", ())),
+                    note=str(d.get("note", "")),
+                    decided_at=float(d["decided_at"]),
+                    source_sha256=str(entry["source_sha256"]),
+                )
+                for d in entry.get("decisions", [])
+            ]
+            ledger._tickets[ticket.ticket_id] = ticket
+        return ledger
+
+    def audit_trail(self) -> list[dict[str, object]]:
+        """Metadaten-Export für Compliance/Reporting (ohne Inhalte)."""
+        trail: list[dict[str, object]] = []
+        for ticket in self._tickets.values():
+            trail.append(
+                {
+                    "ticket_id": ticket.ticket_id,
+                    "bot_id": ticket.bot_id,
+                    "source_sha256": ticket.source_sha256,
+                    "submitted_at": round(ticket.submitted_at, 3),
+                    "static_findings": list(ticket.static_findings),
+                    "decisions": [
+                        {
+                            "reviewer": d.reviewer.handle,
+                            "role": d.reviewer.role.value,
+                            "approved": d.approved,
+                            "checks": list(d.checks),
+                            "note": d.note,
+                            "decided_at": round(d.decided_at, 3),
+                        }
+                        for d in ticket.decisions
+                    ],
+                }
+            )
+        return trail
+
+
+class ReviewGate:
+    """
+    Verbindet statische Analyse, Checkliste und Registry-Freigabe.
+
+    Nutzung::
+
+        gate = ReviewGate(ReviewLedger(), registry, min_approvals=2)
+        ticket = gate.submit(bot_id, "examples/own_bot/minimal_bot.py")   # Statik + Ticket
+        gate.approve(ticket.ticket_id, Reviewer("alice", ReviewRole.MAINTAINER), checks=("C1", …))
+        gate.approve(ticket.ticket_id, Reviewer("bob"), checks=…)
+        gate.verify(bot_id, "examples/own_bot/minimal_bot.py")            # vor jeder Session
+    """
+
+    def __init__(
+        self,
+        ledger: ReviewLedger,
+        registry: BotRegistry | None = None,
+        *,
+        min_approvals: int = 2,
+        require_maintainer: bool = True,
+    ) -> None:
+        # ``registry=None`` = lokaler/Git-Modus: das Ledger (Audit-Trail) ist
+        # autoritativ, Registry-Prüfungen entfallen. Im gehosteten Betrieb
+        # ist die Registry immer gesetzt.
+        self._ledger = ledger
+        self._registry = registry
+        self.min_approvals = max(1, int(min_approvals))
+        self.require_maintainer = require_maintainer
+
+    # -------------------------------------------------------------- Analyse
+    def analyze(self, path: str | Path) -> ReviewReport:
+        """Statische Analyse ohne Nebenwirkungen (Report, kein Raise)."""
+        return analyze_source(path)
+
+    def submit(self, bot_id: int, path: str | Path) -> ReviewTicket:
+        """
+        Reicht eine Bot-Datei zum Review ein.
+
+        Blocker der statischen Analyse stoppen den Vorgang sofort — es gibt
+        keinen „Trotzdem freigeben"-Pfad (stattdessen gezielte
+        ``# botkit:allow``-Suppressions mit Begründung im Code).
+        """
+        report = self.analyze(path)
+        if not report.ok:
+            raise ReviewGateError(report.as_text())
+        return self._ledger.submit(
+            bot_id,
+            report.source_sha256,
+            file=str(path),
+            static_findings=[f"{f.rule_id}@{f.line}" for f in report.findings],
+        )
+
+    # ----------------------------------------------------------- Entscheidungen
+    def approve(
+        self,
+        ticket_id: str,
+        reviewer: Reviewer,
+        *,
+        checks: Sequence[str],
+        note: str = "",
+    ) -> ReviewTicket:
+        """Trägt eine Freigabe ein; erreicht das Ticket die Schwelle, wird der Bot aktiviert."""
+        ticket = self._require_ticket(ticket_id)
+        decision = ReviewDecision(
+            reviewer=reviewer,
+            approved=True,
+            checks=tuple(checks),
+            note=note,
+            decided_at=time.time(),
+            source_sha256=ticket.source_sha256,
+        )
+        ticket = self._ledger.decide(ticket_id, decision)
+        if ticket.is_approved(min_approvals=self.min_approvals, require_maintainer=self.require_maintainer):
+            if self._registry is not None:
+                self._registry.mark_approved(ticket.bot_id, ticket.source_sha256)
+            audit(LOGGER, logging.INFO, "review.approved", ticket=ticket_id, bot=ticket.bot_id,
+                  approvals=len(ticket.approvals))
+        return ticket
+
+    def reject(self, ticket_id: str, reviewer: Reviewer, *, note: str) -> ReviewTicket:
+        """Lehnt ab; eine einzige Ablehnung invalidiert bestehende Freigaben."""
+        ticket = self._require_ticket(ticket_id)
+        decision = ReviewDecision(
+            reviewer=reviewer,
+            approved=False,
+            checks=(),
+            note=note,
+            decided_at=time.time(),
+            source_sha256=ticket.source_sha256,
+        )
+        self._ledger.decide(ticket_id, decision)
+        if self._registry is not None:
+            self._registry.mark_rejected(ticket.bot_id, note[:200])
+        return ticket
+
+    # ---------------------------------------------------------------- Verifikation
+    def verify(self, bot_id: int, path: str | Path, *, check_registry: bool = True) -> None:
+        """
+        Prüft unmittelbar vor dem Session-Start, ob Bot *und* Code freigegeben sind.
+
+        :raises ReviewGateError: bei fehlendem Ticket, fehlenden Freigaben,
+            abweichender Prüfsumme oder nicht freigegebener Registry.
+        """
+        sha = source_sha256(path)
+        ticket = self._ledger.ticket_for(int(bot_id), sha)
+        if ticket is None:
+            raise ReviewGateError(
+                f"Kein Review-Ticket für Bot {bot_id} mit sha256={sha[:12]}. "
+                "Bitte 'botctl review' ausführen."
+            )
+        if not ticket.is_approved(min_approvals=self.min_approvals, require_maintainer=self.require_maintainer):
+            raise ReviewGateError(
+                f"Ticket {ticket.ticket_id}: {len(ticket.approvals)}/{self.min_approvals} "
+                "Freigaben — Bot noch nicht freigegeben."
+            )
+        if not check_registry or self._registry is None:
+            return
+        record = self._registry.get(int(bot_id))
+        if record is None or record.approved_source_sha256 != sha:
+            raise ReviewGateError(
+                f"Bot {bot_id} ist in der Registry nicht für sha256={sha[:12]} freigegeben."
+            )
+        audit(LOGGER, logging.INFO, "review.verified", bot=bot_id, ticket=ticket.ticket_id,
+              source=sha[:12])
+
+    def _require_ticket(self, ticket_id: str) -> ReviewTicket:
+        ticket = self._ledger.ticket(ticket_id)
+        if ticket is None:
+            raise ReviewError(f"Unbekanntes Review-Ticket {ticket_id}.")
+        return ticket
