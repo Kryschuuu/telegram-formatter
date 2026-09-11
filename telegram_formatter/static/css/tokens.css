@@ -1,0 +1,284 @@
+/* =====================================================================
+   telegram_formatter — Design-System „tf“
+   Ebene 1/4: TOKENS — Design-Variablen & Theme-Definitionen
+   =====================================================================
+   Schicht-Architektur (wird in index.html in dieser Reihenfolge geladen):
+
+     tokens.css      Design-Tokens + Themes (diese Datei — enthält kein Layout)
+     base.css        Reset, Typografie, globale Elemente
+     layout.css      Seitenstruktur & Responsive-Breakpoints
+     components.css  wiederverwendbare Bausteine (.tf-*)
+
+   Theme-Prinzip
+   -------------
+   * Das Attribut <html data-theme="…"> steuert *alle* Farben, Rundungen und
+     Schatten. Gültige Werte: light | dark | colorful | minimal | auto.
+   * „light“ ist zugleich der Default (im :root-Block) — ohne JS und ohne
+     gesetztes Attribut sieht die Seite also bereits vollständig aus.
+   * „auto“ folgt dem System: hell → Default-Tokens, dunkel →
+     prefers-color-scheme-Block am Dateiende. Das funktioniert reines CSS,
+     ohne dass JavaScript den Systemwechsel beobachten muss.
+   * Ein neues Theme = GENAU EIN neuer Selector-Block, der alle Tokens aus
+     dem :root-Block definiert (außer den als „global“ markierten). Keine
+     andere Datei darf Farben hartkodieren — sonst ist sie nicht thembar.
+   * Abgesichert durch tests/test_frontend.py (Vollständigkeits-Check).
+   ===================================================================== */
+
+:root {
+    /* --- globale Konstanten (themeunabhängig, für alle Themes identisch) --- */
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+        "Liberation Mono", monospace;
+    --container: 72rem;
+    --transition: 160ms ease;
+
+    /* --- Theme „Light“ (Standard): ruhiges Tageslicht, Telegram-Blaue --- */
+    color-scheme: light;
+    --bg: #eef2f7;
+    --bg-image: none;
+    --surface: #ffffff;
+    --surface-2: #f1f5f9;
+    --bubble: #ffffff;
+    --bubble-text: #1f2937;
+    --code-bg: #0f172a;
+    --code-text: #d8e3f5;
+    --border: #dbe3ee;
+    --border-strong: #b9c6d8;
+    --text: #334155;
+    --text-muted: #5b6b84;
+    --text-faint: #8496ad;
+    --heading: #0f1f38;
+    --accent: #0b66c2;
+    --accent-hover: #084d92;
+    --accent-soft: #dbeafe;
+    --accent-2: #38bdf8;
+    --on-accent: #ffffff;
+    --btn-grad: none;
+    --ok: #067647;
+    --warn: #b54708;
+    --err: #b42318;
+    --note-bg: #fffbeb;
+    --note-border: #f3d094;
+    --note-text: #7c4a03;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 4px 16px rgba(16, 24, 40, .07);
+    --shadow-lg: 0 10px 32px rgba(16, 24, 40, .14);
+    --ring: rgba(11, 102, 194, .45);
+    --radius: .75rem;
+    --radius-lg: 1.125rem;
+    --header-bg: rgba(255, 255, 255, .88);
+    --header-text: #0f1f38;
+    --header-muted: #5b6b84;
+    --header-border: #dbe3ee;
+    --footer-bg: #0f1f38;
+    --footer-text: #cbd5e1;
+    --footer-muted: #93a3ba;
+    --footer-heading: #ffffff;
+    --footer-border: transparent;
+    --footer-link: #fcd34d;
+    --footer-link-hover: #fde68a;
+}
+
+/* ---------------------------------------------------------------------
+   Theme „Dark“: Nachtmodus im Stil der Telegram-Desktop-App — tiefes
+   Blaugrau, helle Schrift, chatblaue Sprechblase.
+   --------------------------------------------------------------------- */
+[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0e1621;
+    --bg-image: none;
+    --surface: #17212b;
+    --surface-2: #1e2a38;
+    --bubble: #215781;
+    --bubble-text: #f2f7fc;
+    --code-bg: #0a111b;
+    --code-text: #c9d8ec;
+    --border: #253546;
+    --border-strong: #35495e;
+    --text: #c3cfdd;
+    --text-muted: #8fa1b5;
+    --text-faint: #6d8199;
+    --heading: #f2f7fc;
+    --accent: #59b0ff;
+    --accent-hover: #85c4ff;
+    --accent-soft: #1d3b56;
+    --accent-2: #7cc4ff;
+    --on-accent: #06121f;
+    --btn-grad: none;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --note-bg: #241f10;
+    --note-border: #5c4a16;
+    --note-text: #f3d9a4;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 20px rgba(0, 0, 0, .35);
+    --shadow-lg: 0 12px 36px rgba(0, 0, 0, .55);
+    --ring: rgba(89, 176, 255, .5);
+    --radius: .75rem;
+    --radius-lg: 1.125rem;
+    --header-bg: rgba(23, 33, 43, .88);
+    --header-text: #f2f7fc;
+    --header-muted: #8fa1b5;
+    --header-border: #253546;
+    --footer-bg: #0a111b;
+    --footer-text: #aebccb;
+    --footer-muted: #7e91a6;
+    --footer-heading: #f2f7fc;
+    --footer-border: #253546;
+    --footer-link: #fbbf24;
+    --footer-link-hover: #fde68a;
+}
+
+/* ---------------------------------------------------------------------
+   Theme „Colorful“: tiefe Nachtverläufe (Indigo → Blau → Petrol),
+   Glas- Karten, Lila→Cyan-Buttons, extra runde Ecken.
+   --------------------------------------------------------------------- */
+[data-theme="colorful"] {
+    color-scheme: dark;
+    --bg: #17123a;
+    --bg-image: linear-gradient(155deg, #241653 0%, #172554 48%, #083344 100%);
+    --surface: rgba(255, 255, 255, .075);
+    --surface-2: rgba(255, 255, 255, .05);
+    --bubble: rgba(139, 92, 246, .18);
+    --bubble-text: #f5f3ff;
+    --code-bg: rgba(4, 6, 24, .55);
+    --code-text: #ddd6fe;
+    --border: rgba(255, 255, 255, .16);
+    --border-strong: rgba(255, 255, 255, .3);
+    --text: #dbe3ff;
+    --text-muted: #aab4e0;
+    --text-faint: #8390c2;
+    --heading: #ffffff;
+    --accent: #a78bfa;
+    --accent-hover: #c4b5fd;
+    --accent-soft: rgba(167, 139, 250, .22);
+    --accent-2: #22d3ee;
+    --on-accent: #1e1147;
+    --btn-grad: linear-gradient(135deg, #8b5cf6 0%, #6366f1 55%, #06b6d4 100%);
+    --ok: #6ee7b7;
+    --warn: #fcd34d;
+    --err: #fda4af;
+    --note-bg: rgba(251, 191, 36, .1);
+    --note-border: rgba(251, 191, 36, .38);
+    --note-text: #fde9b8;
+    --shadow: 0 2px 6px rgba(6, 3, 32, .35), 0 10px 40px rgba(99, 60, 220, .22);
+    --shadow-lg: 0 16px 48px rgba(99, 60, 220, .35);
+    --ring: rgba(167, 139, 250, .6);
+    --radius: 1.125rem;
+    --radius-lg: 1.625rem;
+    --header-bg: rgba(23, 18, 58, .72);
+    --header-text: #ffffff;
+    --header-muted: #c3cbf2;
+    --header-border: rgba(255, 255, 255, .14);
+    --footer-bg: rgba(6, 3, 24, .45);
+    --footer-text: #c3cbf2;
+    --footer-muted: #8f9ccd;
+    --footer-heading: #ffffff;
+    --footer-border: rgba(255, 255, 255, .12);
+    --footer-link: #f0abfc;
+    --footer-link-hover: #f9d5ff;
+}
+
+/* ---------------------------------------------------------------------
+   Theme „Minimal“: redaktionell, monochrom, keine Schatten,
+   hairline Rahmen, kantige Ecken. Akzent = Tiefschwarz.
+   --------------------------------------------------------------------- */
+[data-theme="minimal"] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --bg-image: none;
+    --surface: #ffffff;
+    --surface-2: #f7f7f6;
+    --bubble: #f7f7f6;
+    --bubble-text: #16161a;
+    --code-bg: #16161a;
+    --code-text: #e8e8e6;
+    --border: #e4e4e2;
+    --border-strong: #c9c9c6;
+    --text: #3c3c41;
+    --text-muted: #62626a;
+    --text-faint: #9a9aa1;
+    --heading: #0c0c0e;
+    --accent: #16161a;
+    --accent-hover: #000000;
+    --accent-soft: #ececea;
+    --accent-2: #16161a;
+    --on-accent: #ffffff;
+    --btn-grad: none;
+    --ok: #17690c;
+    --warn: #8a5800;
+    --err: #a11b1b;
+    --note-bg: #fbfbf8;
+    --note-border: #d9d9d4;
+    --note-text: #4c4c45;
+    --shadow: none;
+    --shadow-lg: none;
+    --ring: rgba(22, 22, 26, .4);
+    --radius: .3125rem;
+    --radius-lg: .4375rem;
+    --header-bg: rgba(255, 255, 255, .94);
+    --header-text: #0c0c0e;
+    --header-muted: #62626a;
+    --header-border: #e4e4e2;
+    --footer-bg: #0c0c0e;
+    --footer-text: #c9c9c6;
+    --footer-muted: #9a9aa1;
+    --footer-heading: #ffffff;
+    --footer-border: transparent;
+    --footer-link: #ffffff;
+    --footer-link-hover: #d4d4d0;
+}
+
+/* ---------------------------------------------------------------------
+   „Auto“ ohne JavaScript (und beim allerersten First Paint): folgt dem
+   System. Der Block *muss* inhaltlich dem Dark-Theme entsprechen — der
+   Vollständigkeits-Test in tests/test_frontend.py vergleicht beide.
+   --------------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]),
+    :root[data-theme="auto"] {
+        color-scheme: dark;
+        --bg: #0e1621;
+        --bg-image: none;
+        --surface: #17212b;
+        --surface-2: #1e2a38;
+        --bubble: #215781;
+        --bubble-text: #f2f7fc;
+        --code-bg: #0a111b;
+        --code-text: #c9d8ec;
+        --border: #253546;
+        --border-strong: #35495e;
+        --text: #c3cfdd;
+        --text-muted: #8fa1b5;
+        --text-faint: #6d8199;
+        --heading: #f2f7fc;
+        --accent: #59b0ff;
+        --accent-hover: #85c4ff;
+        --accent-soft: #1d3b56;
+        --accent-2: #7cc4ff;
+        --on-accent: #06121f;
+        --btn-grad: none;
+        --ok: #4ade80;
+        --warn: #fbbf24;
+        --err: #f87171;
+        --note-bg: #241f10;
+        --note-border: #5c4a16;
+        --note-text: #f3d9a4;
+        --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 20px rgba(0, 0, 0, .35);
+        --shadow-lg: 0 12px 36px rgba(0, 0, 0, .55);
+        --ring: rgba(89, 176, 255, .5);
+        --radius: .75rem;
+        --radius-lg: 1.125rem;
+        --header-bg: rgba(23, 33, 43, .88);
+        --header-text: #f2f7fc;
+        --header-muted: #8fa1b5;
+        --header-border: #253546;
+        --footer-bg: #0a111b;
+        --footer-text: #aebccb;
+        --footer-muted: #7e91a6;
+        --footer-heading: #f2f7fc;
+        --footer-border: #253546;
+        --footer-link: #fbbf24;
+        --footer-link-hover: #fde68a;
+    }
+}

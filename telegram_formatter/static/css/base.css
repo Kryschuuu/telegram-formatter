@@ -1,0 +1,163 @@
+/* =====================================================================
+   telegram_formatter — Design-System „tf“
+   Ebene 2/4: BASE — Reset, Typografie, globale Elemente
+   ---------------------------------------------------------------------
+   Enthält ausschließlich Element-Defaults (ohne .tf-Klassen). Alle
+   Farben kommen als var(--token) aus tokens.css — keine Hartkodierung.
+   ===================================================================== */
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    min-height: 100svh;
+    display: flex;
+    flex-direction: column;
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.55;
+    color: var(--text);
+    background-color: var(--bg);
+    background-image: var(--bg-image);
+    background-attachment: fixed;
+    transition: color var(--transition), background-color var(--transition);
+}
+
+h1,
+h2,
+h3,
+h4 {
+    margin: 0 0 .5em;
+    color: var(--heading);
+    line-height: 1.25;
+    text-wrap: balance;
+}
+
+h1 {
+    font-size: clamp(1.55rem, 1rem + 2vw, 2.25rem);
+    font-weight: 850;
+    letter-spacing: -.02em;
+}
+
+h2 {
+    font-size: clamp(1.15rem, .95rem + .8vw, 1.4rem);
+    font-weight: 800;
+    letter-spacing: -.01em;
+}
+
+p {
+    margin: 0 0 1em;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--accent-hover);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+code,
+kbd,
+samp,
+pre {
+    font-family: var(--font-mono);
+    font-size: .87em;
+}
+
+code {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: .35em;
+    padding: .08em .35em;
+}
+
+pre {
+    margin: 0;
+}
+
+textarea,
+input,
+button,
+select {
+    font: inherit;
+    color: inherit;
+}
+
+textarea {
+    resize: vertical;
+}
+
+img,
+svg {
+    vertical-align: middle;
+}
+
+::selection {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+/* Einheitlicher, sichtbarer Fokus — Tastaturnutzer sehen ihn in jedem Theme. */
+:focus-visible {
+    outline: 3px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Icons: folgen der Schriftfarbe und -größe; Deko-Icons heißen .tf-icon. */
+.tf-icon {
+    width: 1.15em;
+    height: 1.15em;
+    flex: none;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* Screenreader-only Inhalt (Beschriftungen, Live-Regionen). */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+/* Bewegungskonvention respektieren: keine Übergänge, sanftes Scrollen aus. */
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+    }
+}

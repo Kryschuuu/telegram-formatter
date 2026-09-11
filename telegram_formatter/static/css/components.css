@@ -1,0 +1,670 @@
+/* =====================================================================
+   telegram_formatter — Design-System „tf“
+   Ebene 4/4: COMPONENTS — wiederverwendbare Bausteine
+   ---------------------------------------------------------------------
+   Namenskonvention (modifiziertes BEM, Prefix „tf-“):
+     .tf-card                 Block — eigenständiger Baustein
+     .tf-card__title          Element — Unterteil des Blocks (genau ein __)
+     .tf-btn--primary         Modifikator — Variante des Blocks
+     .is-active / .is-over    Zustand — von JS gesetzt, nie im Markup hart
+   Regel: Alle Bausteine sind theme-fähig — sie verwenden NUR var(--token)
+   aus tokens.css. Neue Komponente? Hier definieren, nicht im Template.
+   ===================================================================== */
+
+/* --- Marke / Kopfzeile ------------------------------------------------- */
+.tf-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: .6rem;
+    color: var(--header-text);
+    font-weight: 850;
+    font-size: 1.06rem;
+    letter-spacing: -.01em;
+    text-decoration: none;
+}
+
+.tf-brand:hover {
+    color: var(--header-text);
+    text-decoration: none;
+}
+
+.tf-brand__logo {
+    display: grid;
+    place-items: center;
+    width: 2.35rem;
+    height: 2.35rem;
+    border-radius: .7rem;
+    background-color: var(--accent);
+    background-image: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: var(--on-accent);
+    box-shadow: var(--shadow);
+}
+
+.tf-brand__logo .tf-icon {
+    width: 1.15rem;
+    height: 1.15rem;
+}
+
+.tf-brand__tagline {
+    display: none;
+    color: var(--header-muted);
+    font-size: .72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+}
+
+@media (min-width: 64rem) {
+    .tf-brand__tagline {
+        display: inline;
+    }
+}
+
+/* Status-Badge „Bot konfiguriert / kein Token“ (id=status von app.js belegt). */
+.tf-status {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    padding: .28rem .7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    font-size: .74rem;
+    font-weight: 750;
+    white-space: nowrap;
+}
+
+.tf-status::before {
+    content: "";
+    width: .5rem;
+    height: .5rem;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.tf-status--ok {
+    color: var(--ok);
+    border-color: var(--ok);
+}
+
+.tf-status--warn {
+    color: var(--warn);
+    border-color: var(--warn);
+}
+
+/* --- Theme-Switcher ----------------------------------------------------- */
+.tf-theme-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: .15rem;
+    padding: .22rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+}
+
+.tf-theme-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    padding: .3rem .6rem;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: .74rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
+}
+
+.tf-theme-btn:hover {
+    color: var(--heading);
+    background: var(--surface);
+}
+
+.tf-theme-btn.is-active {
+    background: var(--surface);
+    color: var(--accent);
+    box-shadow: var(--shadow);
+}
+
+.tf-theme-btn__label {
+    display: none;
+}
+
+.tf-theme-switcher.is-rich .tf-theme-btn__label {
+    display: inline;
+}
+
+/* Farb-Kleckse: kleine Vorschau, was das Theme tut (hartkodiert = Absicht,
+   sie *sind* das Farbmuster des Themes und dürfen sich nicht mitfärben). */
+.tf-theme-btn__swatch {
+    width: .85rem;
+    height: .85rem;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    flex: none;
+}
+
+.tf-theme-btn[data-theme-choice="auto"] .tf-theme-btn__swatch {
+    background: linear-gradient(135deg, #ffffff 50%, #16202e 50%);
+}
+
+.tf-theme-btn[data-theme-choice="light"] .tf-theme-btn__swatch {
+    background: #ffffff;
+}
+
+.tf-theme-btn[data-theme-choice="dark"] .tf-theme-btn__swatch {
+    background: #16202e;
+}
+
+.tf-theme-btn[data-theme-choice="colorful"] .tf-theme-btn__swatch {
+    background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+}
+
+.tf-theme-btn[data-theme-choice="minimal"] .tf-theme-btn__swatch {
+    background: repeating-linear-gradient(135deg, #0c0c0e 0 3px, #ffffff 3px 6px);
+}
+
+@media (min-width: 48rem) {
+    .tf-theme-switcher.is-rich .tf-theme-btn {
+        padding-inline: .7rem;
+    }
+}
+
+/* --- Buttons ------------------------------------------------------------ */
+.tf-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .45rem;
+    padding: .78rem 1.15rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    font-weight: 750;
+    font-size: .95rem;
+    cursor: pointer;
+    transition: background-color var(--transition), color var(--transition),
+        border-color var(--transition), transform var(--transition);
+}
+
+.tf-btn:active {
+    transform: translateY(1px);
+}
+
+.tf-btn--primary {
+    flex: 1 1 auto;
+    background-color: var(--accent);
+    background-image: var(--btn-grad);
+    color: var(--on-accent);
+    box-shadow: var(--shadow);
+}
+
+.tf-btn--primary:hover:not(:disabled) {
+    background-image: none;
+    background-color: var(--accent-hover);
+    color: var(--on-accent);
+}
+
+.tf-btn--ghost {
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--text-muted);
+}
+
+.tf-btn--ghost:hover {
+    background: var(--surface);
+    border-color: var(--border-strong);
+    color: var(--heading);
+}
+
+.tf-btn:disabled {
+    opacity: .6;
+    cursor: progress;
+}
+
+.tf-btn--coffee {
+    padding: .5rem .9rem;
+    border-radius: var(--radius);
+    background: #fbbf24;
+    border-color: #f59e0b;
+    color: #432800;
+    font-size: .84rem;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.tf-btn--coffee:hover {
+    background: #f59e0b;
+    color: #2c1a00;
+    text-decoration: none;
+}
+
+/* --- Karten --------------------------------------------------------------- */
+.tf-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    padding: 1.4rem;
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+    transition: background-color var(--transition), border-color var(--transition);
+}
+
+@supports (backdrop-filter: blur(8px)) {
+    /* „Colorful“: Glas-Karten leben vom Blur auf dem Farbverlauf. */
+    .tf-card {
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+    }
+}
+
+.tf-card__title {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    margin: 0;
+    font-size: .92rem;
+    font-weight: 800;
+    letter-spacing: .01em;
+    color: var(--heading);
+}
+
+.tf-card__title .tf-icon {
+    color: var(--accent);
+}
+
+.tf-card__hint {
+    margin: 0;
+    font-size: .8rem;
+    color: var(--text-faint);
+}
+
+.tf-card__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+/* --- Editor --------------------------------------------------------------- */
+.tf-editor {
+    width: 100%;
+    min-height: 17rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    color: var(--heading);
+    font-family: var(--font-mono);
+    font-size: .88rem;
+    line-height: 1.6;
+    tab-size: 4;
+    transition: border-color var(--transition), background-color var(--transition);
+}
+
+.tf-editor::placeholder {
+    color: var(--text-faint);
+}
+
+.tf-editor:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--ring);
+    background: var(--surface);
+}
+
+.tf-btn-row {
+    display: flex;
+    gap: .7rem;
+    flex-wrap: wrap;
+}
+
+.tf-btn-row .tf-btn--primary {
+    flex: 2 1 14rem;
+}
+
+.tf-editor-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    font-size: .78rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-faint);
+}
+
+.tf-editor-meta.is-over {
+    color: var(--warn);
+    font-weight: 800;
+}
+
+/* Statuszeile unter dem Senden-Button (von app.js beschrieben). */
+.tf-send-status {
+    margin: 0;
+    min-height: 1.35em;
+    font-size: .88rem;
+    font-weight: 650;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.tf-send-status.is-ok {
+    color: var(--ok);
+}
+
+.tf-send-status.is-error {
+    color: var(--err);
+}
+
+/* --- Telegram-Sprechblase (Live-Vorschau) ----------------------------------
+   Der Hook .tg-bubble stammt aus v1.x (Payload-Vorschau als Chat-Nachricht)
+   und bleibt aus Kompatibilitätsgründen Namen-tragend. */
+.tf-preview-frame {
+    padding: 1.1rem;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-lg);
+    background:
+        radial-gradient(circle at 20% 15%, var(--accent-soft), transparent 55%),
+        var(--surface-2);
+}
+
+.tg-bubble {
+    max-width: 32rem;
+    margin-inline: auto;
+    padding: .9rem 1.05rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    border-bottom-right-radius: .35rem;
+    background: var(--bubble);
+    color: var(--bubble-text);
+    box-shadow: var(--shadow);
+    font-size: .9rem;
+    line-height: 1.6;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.tg-bubble b,
+.tg-bubble strong {
+    font-weight: 750;
+}
+
+.tg-bubble i,
+.tg-bubble em {
+    font-style: italic;
+}
+
+.tg-bubble u {
+    text-decoration: underline;
+}
+
+.tg-bubble s {
+    text-decoration: line-through;
+}
+
+.tg-bubble code {
+    background: rgba(127, 127, 127, .18);
+    border-color: transparent;
+}
+
+.tg-bubble a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* von app.js erzeugt: Hervorhebung für $…$-Formeln in der Vorschau */
+.tf-preview-math {
+    font-family: var(--font-mono);
+    font-size: .95em;
+    color: var(--accent);
+}
+
+/* von app.js erzeugt: fence-code Blöcke in der Vorschau */
+.tf-preview-code {
+    display: block;
+    margin: .45rem 0;
+    padding: .6rem .8rem;
+    border-radius: .5rem;
+    background: rgba(127, 127, 127, .14);
+    overflow-x: auto;
+    white-space: pre;
+    font-size: .84em;
+}
+
+.tf-preview-code code {
+    background: transparent;
+    padding: 0;
+    border: 0;
+}
+
+.tf-bubble__tail {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: .4rem;
+    margin-top: .5rem;
+    font-size: .68rem;
+    font-weight: 600;
+    color: var(--text-faint);
+}
+
+/* --- Payloads ------------------------------------------------------------- */
+.tf-payloads {
+    max-height: 24rem;
+    overflow: auto;
+    padding: 1rem 1.1rem;
+    border-radius: var(--radius);
+    background: var(--code-bg);
+    color: var(--code-text);
+    font-size: .78rem;
+    line-height: 1.6;
+    white-space: pre;
+    tab-size: 2;
+}
+
+/* --- Howto-Schritte --------------------------------------------------------- */
+.tf-step {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    gap: .75rem;
+    align-items: start;
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+}
+
+.tf-step__num {
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    background-color: var(--accent);
+    background-image: var(--btn-grad);
+    color: var(--on-accent);
+    font-weight: 800;
+    font-size: .9rem;
+}
+
+.tf-step__title {
+    margin: 0 0 .25rem;
+    font-size: .92rem;
+    font-weight: 800;
+    color: var(--heading);
+}
+
+.tf-step__text {
+    margin: 0;
+    font-size: .84rem;
+    line-height: 1.6;
+    color: var(--text-muted);
+}
+
+.tf-step__text code {
+    font-size: .82rem;
+}
+
+/* --- Disclaimer-Hinweisbox --------------------------------------------------- */
+.tf-note {
+    padding: .95rem 1.1rem;
+    border: 1px solid var(--note-border);
+    border-radius: var(--radius);
+    background: var(--note-bg);
+    color: var(--note-text);
+    font-size: .84rem;
+    line-height: 1.65;
+}
+
+.tf-note__title {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin: 0 0 .3rem;
+    font-size: .9rem;
+    font-weight: 800;
+}
+
+.tf-note p {
+    margin: 0;
+}
+
+/* --- FAQ-Akkordeons ------------------------------------------------------------ */
+.tf-faq-list {
+    display: grid;
+    gap: .75rem;
+}
+
+.tf-faq__item {
+    padding: .85rem 1.1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+}
+
+.tf-faq__item[open] {
+    border-color: var(--border-strong);
+    background: var(--surface);
+}
+
+.tf-faq__item summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    cursor: pointer;
+    list-style: none;
+    font-size: .9rem;
+    font-weight: 800;
+    color: var(--heading);
+}
+
+.tf-faq__item summary::-webkit-details-marker {
+    display: none;
+}
+
+.tf-faq__chevron {
+    color: var(--text-faint);
+    transition: transform .2s ease;
+    flex: none;
+}
+
+.tf-faq__item[open] .tf-faq__chevron {
+    transform: rotate(180deg);
+}
+
+.tf-faq__answer {
+    margin: .6rem 0 0;
+    font-size: .86rem;
+    line-height: 1.65;
+    color: var(--text-muted);
+}
+
+.tf-faq__answer ul {
+    margin: .5rem 0 0;
+    padding-left: 1.1rem;
+}
+
+.tf-faq__answer li {
+    margin-bottom: .3rem;
+}
+
+/* --- Footer ---------------------------------------------------------------------- */
+.tf-footer {
+    margin-top: auto;
+    background: var(--footer-bg);
+    color: var(--footer-text);
+    border-top: 1px solid var(--footer-border);
+}
+
+.tf-footer h3,
+.tf-footer__title {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin: 0 0 .5rem;
+    font-size: .95rem;
+    font-weight: 800;
+    color: var(--footer-heading);
+}
+
+.tf-footer p {
+    margin: 0;
+    color: var(--footer-text);
+    line-height: 1.6;
+}
+
+.tf-footer p.tf-footer__small {
+    font-size: .78rem;
+    color: var(--footer-muted);
+}
+
+.tf-footer a {
+    color: var(--footer-link);
+    font-weight: 700;
+}
+
+.tf-footer a:hover {
+    color: var(--footer-link-hover);
+}
+
+.tf-footer__muted {
+    color: var(--footer-muted);
+}
+
+/* --- Noscript-Hinweis (JS-freier Betrieb) ------------------------------------------ */
+.tf-noscript {
+    margin: 1rem auto 0;
+    padding: .7rem 1rem;
+    border: 1px solid var(--note-border);
+    border-radius: var(--radius);
+    background: var(--note-bg);
+    color: var(--note-text);
+    font-size: .85rem;
+    font-weight: 600;
+}
+
+/* --- Sprungmarke für Tastaturnutzer --------------------------------------------------- */
+.tf-skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: .6rem 1rem;
+    border-radius: 0 0 var(--radius) 0;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 700;
+}
+
+.tf-skip-link:focus {
+    left: 0;
+    color: var(--on-accent);
+}
