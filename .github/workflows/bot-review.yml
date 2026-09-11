@@ -3,17 +3,19 @@ name: Bot-Review
 # Tor für Nutzer-Bots: Statik, Secret-Scan, Abhängigkeiten, Tests.
 # Menschliche Freigaben (2, davon ≥1 Maintainer) erzwingt die
 # Branch-Protection zusammen mit .github/CODEOWNERS.
+# Pfade gemäß Paketstruktur ab v2.0.0 (siehe MIGRATION.md).
 
 on:
   pull_request:
     paths:
-      - "botkit/**"
+      - "telegram_formatter/botkit/**"
+      - "telegram_formatter/botctl.py"
       - "bots/**"
       - "examples/own_bot/**"
-      - ".botkit/**"
+      - "audit/**"
       - ".gitleaks.toml"
-      - "botctl.py"
       - "requirements*.txt"
+      - "pyproject.toml"
       - ".github/workflows/bot-review.yml"
   push:
     branches: [main]
@@ -45,10 +47,10 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Ruff (Stil & Fehler)
-        run: ruff check botkit botctl.py examples/own_bot conftest.py tests
+        run: ruff check telegram_formatter examples tests
 
       - name: Bandit (Sicherheits-Scan)
-        run: bandit -r botkit botctl.py examples/own_bot -ll
+        run: bandit -c pyproject.toml -r telegram_formatter examples/own_bot -ll
 
       - name: pip-audit (Laufzeit-Abhängigkeiten)
         run: pip-audit -r requirements.txt
@@ -109,19 +111,26 @@ jobs:
           status=0
           for file in $files; do
             echo "::group::review $file"
-            python botctl.py review "$file" --bot-id 0 --check || status=1
+            python -m telegram_formatter.botctl review "$file" --bot-id 0 --check || status=1
             echo "::endgroup::"
           done
           exit $status
 
       - name: Referenz-Bot muss sauber bleiben
-        run: python botctl.py review examples/own_bot/minimal_bot.py --bot-id 0 --check
+        run: python -m telegram_formatter.botctl review examples/own_bot/minimal_bot.py --bot-id 0 --check
 
       - name: Negativbeispiel muss erkannt werden (Regressionstest der Regeln)
         run: |
-          if python botctl.py review tests/fixtures/insecure_bot.py --bot-id 0 --check; then
+          if python -m telegram_formatter.botctl review tests/fixtures/insecure_bot.py --bot-id 0 --check; then
             echo "::error::Negativbeispiel wurde nicht erkannt — Regelwerk defekt!"
             exit 1
+          fi
+
+      - name: Audit-Trail darf keine Geheimnisse enthalten
+        run: |
+          if [ -f audit/reviews.json ]; then
+            ! grep -qE '[0-9]{5,16}:[A-Za-z0-9_-]{35}' audit/reviews.json \
+              || { echo "::error::Tokenförmiger Wert im Audit-Trail!"; exit 1; }
           fi
 
       - name: Unit-Tests
@@ -129,4 +138,4 @@ jobs:
 
       # Optional, wenn die Bot-ID bekannt ist (z. B. als Repository-Variable):
       # - name: Freigabe prüfen (Audit-Trail)
-      #   run: python botctl.py verify bots/<name>.py --bot-id ${{ vars.BOT_ID }}
+      #   run: python -m telegram_formatter.botctl verify bots/<name>.py --bot-id ${{ vars.BOT_ID }}

@@ -1,5 +1,11 @@
 # Code-Peer-Review
 
+> **Hinweis (Stand 2026-09-11):** Dieser Bericht wurde nach
+> `peer-review/CODE_REVIEW.md` überführt (vorher `docs/CODE_REVIEW.md`).
+> Datums- und Dateiangaben im Text beschreiben den **Damals-Zustand** der
+> Codebasis (prä-2.0.0, z. B. `utils.py` statt `telegram_formatter/utils.py`).
+> Die Fixes sind in `CHANGELOG.md` [1.0.0]/[1.1.0] nachvollzogen.
+
 Dokumentiert die im Rahmen der Überarbeitung gefundenen Probleme der
 ursprünglichen Codebasis, jeweils mit Begründung und konkreter Lösung. Der
 Ausgangszustand bestand aus einer Flask-App mit einer großen, teils toten

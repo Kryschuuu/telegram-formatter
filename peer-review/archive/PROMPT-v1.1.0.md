@@ -1,5 +1,10 @@
 # Wiederverwendbarer Prompt — Telegram Formatter v1.1.0 (Web-UI-Features)
 
+> **Archiviert:** abgeschlossenes Vorgangs-Artefakt (Arbeitsauftrag zur Web-UI-Version 1.1.0) — enthalten im
+> Review-Verlauf `peer-review/archive/`. Die Pfad-/Kommandoangaben entsprechen
+> dem Stand zum Zeitpunkt des Vorgangs und wurden bewusst nicht nachgeführt
+> (historischer Quelltext; aktuelle Kommandos: siehe README).
+
 > Dieser Prompt ist ein fertig formulierter, unverändert übergebbarer
 > Arbeitsauftrag. Er beschreibt die Aufgabe vollständig, die zu Version
 > 1.1.0 dieses Repositories geführt hat. Einfach kopieren und an einen

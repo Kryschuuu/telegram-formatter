@@ -36,7 +36,7 @@ Setze im Formular die folgenden Werte:
 | **Name** | `telegram-formatter` (frei wählbar) |
 | **Environment** | `Python` |
 | **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `gunicorn app:app --bind 0.0.0.0:$PORT` |
+| **Start Command** | `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT` |
 | **Plan** | Free (oder größer) |
 
 > Der `Start Command` ist wichtig: Die App muss auf `0.0.0.0` und dem von
@@ -73,8 +73,8 @@ startet die App. Nach kurzer Zeit erscheint eine URL der Form
 Alternativ per Kommandozeile (Dry-Run zeigt nur die Payloads):
 
 ```bash
-python cli.py beispiel_input.txt                     # Dry-Run
-python cli.py beispiel_input.txt --send --token <TOKEN> --chat-id <CHAT_ID>
+python -m telegram_formatter.cli beispiel_input.txt  # Dry-Run
+python -m telegram_formatter.cli beispiel_input.txt --send --token <TOKEN> --chat-id <CHAT_ID>
 ```
 
 ## Lokale Entwicklung (optional)
@@ -83,7 +83,7 @@ python cli.py beispiel_input.txt --send --token <TOKEN> --chat-id <CHAT_ID>
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
-flask --app app run                # http://127.0.0.1:5000
+flask --app telegram_formatter.app run   # http://127.0.0.1:5000
 pytest -q                          # Tests ausführen
 ```
 

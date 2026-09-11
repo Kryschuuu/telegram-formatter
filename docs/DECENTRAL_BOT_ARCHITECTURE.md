@@ -3,8 +3,9 @@
 > **Ziel:** Jeder Nutzer kann seinen eigenen Telegram-Bot erstellen, reviewen
 > lassen und in einer Session nutzen — ohne dass Nachrichteninhalte,
 > Tokens oder Nutzerdaten zentral gespeichert werden.
-> **Status:** Design + lauffähiges Referenz-Paket `botkit/` (Stand: v1.3.0,
-> 175 Unit-Tests grün).
+> **Status:** Design + lauffähiges Referenz-Paket
+> `telegram_formatter/botkit/` (eingeführt in v1.3.0; Pfade mit v2.0.0 an die
+> Paketstruktur angepasst, 175 Unit-Tests grün).
 
 ---
 
@@ -64,13 +65,13 @@
 
 | Modul | Verantwortung | Speichert |
 |---|---|---|
-| `botkit/tokens.py` | `BotToken`-Umschlag, Formatvalidierung, RAM-Vaults mit TTL | Token (RAM, TTL) — oder nichts (`PassthroughTokenVault`) |
-| `botkit/privacy.py` | Redaction aller Logzeilen, `audit()` (nur Metadaten), Fingerprints, Environment-Scrubbing | nichts |
-| `botkit/registry.py` | `getMe`-Verifikation, Identität + Status, Chat-ID-Validierung | Identität, Pseudonym-Fingerprint, Freigabe-Prüfsumme (RAM) |
-| `botkit/review.py` | AST-Regeln BK001–BK012, Checkliste C1–C9, Ledger, Vier-Augen-Gate | Metadaten (Prüfsummen, Entscheidungen) |
-| `botkit/session.py` | `BotSession`/`SessionManager`: TTL, Leerlauf, Rate-Limit, Versand | Token-Referenz (RAM, bis `close()`) |
-| `botkit/telegram_api.py` | Die vier erlaubten API-Aufrufe | nichts |
-| `botctl.py` | CLI: `register`, `review`, `approve`, `verify`, `send`, `checklist` | Audit-Trail-Datei (Metadaten) |
+| `telegram_formatter/botkit/tokens.py` | `BotToken`-Umschlag, Formatvalidierung, RAM-Vaults mit TTL | Token (RAM, TTL) — oder nichts (`PassthroughTokenVault`) |
+| `telegram_formatter/botkit/privacy.py` | Redaction aller Logzeilen, `audit()` (nur Metadaten), Fingerprints, Environment-Scrubbing | nichts |
+| `telegram_formatter/botkit/registry.py` | `getMe`-Verifikation, Identität + Status, Chat-ID-Validierung | Identität, Pseudonym-Fingerprint, Freigabe-Prüfsumme (RAM) |
+| `telegram_formatter/botkit/review.py` | AST-Regeln BK001–BK012, Checkliste C1–C9, Ledger, Vier-Augen-Gate | Metadaten (Prüfsummen, Entscheidungen) |
+| `telegram_formatter/botkit/session.py` | `BotSession`/`SessionManager`: TTL, Leerlauf, Rate-Limit, Versand | Token-Referenz (RAM, bis `close()`) |
+| `telegram_formatter/botkit/telegram_api.py` | Die vier erlaubten API-Aufrufe | nichts |
+| `telegram_formatter/botctl.py` | CLI: `register`, `review`, `approve`, `verify`, `send`, `checklist` | Audit-Trail-Datei (Metadaten) |
 
 ### 1.4 Datenfluss — Registrierung und Session
 
@@ -111,7 +112,7 @@ Nutzer                     botkit                          Telegram
 |---|---|---|---|
 | **A — Lokal / Self-Host** (`botctl`, eigener Server) | Nutzer | `PassthroughTokenVault` (nur im Session-Objekt) | Selbstreview oder PR (`--local-trust` macht den Verzicht explizit) |
 | **B — Gehostete Session** (Web-Wizard) | Projekt-Infrastruktur | `InMemoryTokenVault`, TTL 15 min, Handle im HttpOnly-Cookie | **Ja**, Gate vor jedem `open()` |
-| **C — Nur-Konvertierung** (wie heute, per `cli.py`) | Nutzer | Environment | nein (kein Bot nötig) |
+| **C — Nur-Konvertierung** (wie heute, per `telegram_formatter/cli.py`) | Nutzer | Environment | nein (kein Bot nötig) |
 
 Modus B ist der einzige, in dem fremde Infrastruktur das Token sieht. Deshalb
 gilt dort: Token wird pro Request nur im RAM gehalten, keine Persistenz, und
@@ -169,18 +170,18 @@ beim Dritten, geteilte Rate-Limits und fehlende Kontrolle über den Code.
 ### 2.3 Minimale Integration in bestehenden Code
 
 ```python
-from botkit.privacy import install_privacy_filters
-from botkit.registry import BotRegistry
-from botkit.review import ReviewGate, ReviewLedger
-from botkit.session import SessionConfig, SessionManager
-from botkit.telegram_api import get_me
-from botkit.tokens import BotToken
+from telegram_formatter.botkit.privacy import install_privacy_filters
+from telegram_formatter.botkit.registry import BotRegistry
+from telegram_formatter.botkit.review import ReviewGate, ReviewLedger
+from telegram_formatter.botkit.session import SessionConfig, SessionManager
+from telegram_formatter.botkit.telegram_api import get_me
+from telegram_formatter.botkit.tokens import BotToken
 
 install_privacy_filters()                                  # 1. Logs absichern
 registry = BotRegistry(verify=lambda secret: get_me(secret))  # 2. Verifikation
 registry.register(BotToken.from_getpass(), owner_ref="alice")
 
-gate = ReviewGate(ReviewLedger.load(".botkit/reviews.json"))  # 3. Review-Stand
+gate = ReviewGate(ReviewLedger.load("audit/reviews.json"))  # 3. Review-Stand
 manager = SessionManager(registry=registry, review_gate=gate,
                          config=SessionConfig(require_review=True))
 
@@ -189,8 +190,8 @@ with manager.open(BotToken.from_getpass(), "-1001234567890",
     session.send("**Fett** und $E=mc^2$")                 # 4. Session-Sendeweg
 ```
 
-Die Konvertierungslogik (`utils.build_messages`) und der Versand
-(`sender.send_message`) bleiben unverändert — `botkit` ergänzt nur
+Die Konvertierungslogik (`telegram_formatter.utils`) und der Versand
+(`telegram_formatter.sender`) bleiben unverändert — `botkit` ergänzt nur
 Identität, Grenzen und Review.
 
 ---
@@ -200,15 +201,16 @@ Identität, Grenzen und Review.
 ### 3.1 Modulbaum
 
 ```
-botkit/
-├── __init__.py          # Öffentliche Fassade, Version
+telegram_formatter/botkit/
+├── __init__.py          # Öffentliche Fassade
 ├── privacy.py           # Redaction, Fingerprints, audit(), scrub_environment()
 ├── tokens.py            # BotToken, InMemoryTokenVault, PassthroughTokenVault
 ├── registry.py          # BotIdentity, RegistrationStatus, BotRegistry
 ├── review.py            # BK-Regeln, Checkliste, ReviewLedger, ReviewGate
 ├── session.py           # BotSession, SessionManager, SessionConfig
 └── telegram_api.py      # getMe, getUpdates, setWebhook, deleteWebhook
-botctl.py                # CLI-Einstieg
+telegram_formatter/botctl.py      # CLI-Einstieg (Audit-Trail: audit/reviews.json)
+bots/                             # Ablage für eigene Nutzer-Bots (CI-Gate)
 examples/own_bot/minimal_bot.py   # Referenz-Bot (besteht alle BK-Regeln)
 tests/fixtures/insecure_bot.py    # Negativbeispiel (löst BK001–BK012 aus)
 tests/test_{tokens,privacy,registry,review,session}.py
@@ -313,7 +315,7 @@ class BotSession:
 * Es existiert **keine** Schreibschnittstelle im Paket: keine Datei, keine DB,
   kein Cache. Der `PassthroughTokenVault` wirft bei `store()` absichtlich.
 * Einzige Datei, die entsteht, ist der **Audit-Trail**
-  (`.botkit/reviews.json`) — er enthält ausschließlich Ticket-IDs, Bot-IDs,
+  (`audit/reviews.json`) — er enthält ausschließlich Ticket-IDs, Bot-IDs,
   SHA-256-Prüfsummen, Regel-IDs und Entscheidungen.
 * Telegram-seitig: `deleteWebhook(drop_pending_updates=True)`, keine
   Offset-Datei, keine Update-Historie im RAM beyond Verarbeitung.
@@ -475,7 +477,7 @@ Preis echter Dezentralisierung.
 **Nächste Schritte:**
 
 1. Web-Wizard (Modus B): Token-Eingabe im Browser, `InMemoryTokenVault`,
-   HttpOnly-Session-Cookie, Integration in `app.py` als Blueprint.
+   HttpOnly-Session-Cookie, Integration in `telegram_formatter/app.py` als Blueprint.
 2. Signierte Review-Entscheidungen (GPG/Sigstore), damit der Audit-Trail
    manipulationssicher wird.
 3. Sandbox-Laufzeit für User-Bots im gehosteten Modus (Container mit

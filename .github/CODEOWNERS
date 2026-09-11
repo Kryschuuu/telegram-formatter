@@ -2,17 +2,30 @@
 #
 # Ohne Maintainer-Approval darf hier nichts gemergt werden
 # (Branch-Protection: "Require review from Code Owners" aktivieren).
+# Pfade gemäß Paketstruktur ab v2.0.0.
 
-# Baukasten: Token-Handling, Registry, Session, Privacy
-/botkit/                            @Kryschuuu
-/botctl.py                          @Kryschuuu
+# Baukasten: Token-Handling, Registry, Session, Privacy, Review-Gate
+/telegram_formatter/botkit/         @Kryschuuu
+/telegram_formatter/botctl.py       @Kryschuuu
 
 # Nutzer-Bots und Vorlagen
-/examples/own_bot/                  @Kryschuuu
 /bots/                              @Kryschuuu
+/examples/own_bot/                  @Kryschuuu
 
-# Review-Infrastruktur
-/.botkit/                           @Kryschuuu
+# Review-, Audit- & Sicherheitsinfrastruktur
+/audit/                             @Kryschuuu
+/security/                          @Kryschuuu
+/peer-review/                       @Kryschuuu
+/.gitleaks.toml                     @Kryschuuu
+/.github/SECURITY.md                @Kryschuuu
 /.github/workflows/bot-review.yml   @Kryschuuu
 /.github/CODEOWNERS                 @Kryschuuu
+/.github/pull_request_template.md   @Kryschuuu
+
+# Abhängigkeits- & Werkzeugkonfiguration (Supply-Chain)
+/pyproject.toml                     @Kryschuuu
+/requirements.txt                   @Kryschuuu
+/requirements-dev.txt               @Kryschuuu
+
+# BYOB-Architektur-Doku (regelpflichtig, weil sie das Gate beschreibt)
 /docs/DECENTRAL_BOT_ARCHITECTURE.md @Kryschuuu

@@ -1,5 +1,10 @@
 # PR: Dezentrale Bots (BYOB) — `botkit`, `botctl`, Review-Gate
 
+> **Archiviert:** abgeschlossenes Vorgangs-Artefakt (PR-Beschreibung v1.3.0 (BYOB/botkit)) — enthalten im
+> Review-Verlauf `peer-review/archive/`. Die Pfad-/Kommandoangaben entsprechen
+> dem Stand zum Zeitpunkt des Vorgangs und wurden bewusst nicht nachgeführt
+> (historischer Quelltext; aktuelle Kommandos: siehe README).
+
 ## Überblick
 
 Bisher sendet das Projekt über **einen** zentral konfigurierten Bot

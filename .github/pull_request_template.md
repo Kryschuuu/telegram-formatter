@@ -7,19 +7,19 @@
 ## Typ
 
 - [ ] Nutzer-Bot (neu/geändert) → **Review-Pflicht, siehe unten**
-- [ ] `botkit`-Baukasten
+- [ ] `telegram_formatter/botkit`-Baukasten
 - [ ] Doku / CI
-- [ ] Bestehende Konvertierung (`utils.py`, `sender.py`, `app.py`, `cli.py`)
+- [ ] Bestehende Konvertierung (in `telegram_formatter/`: `utils.py`, `sender.py`, `app.py`, `cli.py`)
 
 ---
 
 ## Pflichtteil für Nutzer-Bots (vor dem Anhaken ausführen!)
 
 ```bash
-python botctl.py review <bot-datei> --bot-id <id>        # Statik + Ticket
-python botctl.py approve <TICKET> --reviewer <handle> --role maintainer \
+python -m telegram_formatter.botctl review <bot-datei> --bot-id <id>        # Statik + Ticket
+python -m telegram_formatter.botctl approve <TICKET> --reviewer <handle> --role maintainer \
     --checks C1,C2,C3,C4,C5,C6,C7,C8,C9
-python botctl.py verify <bot-datei> --bot-id <id>        # Tor vor dem Deployment
+python -m telegram_formatter.botctl verify <bot-datei> --bot-id <id>        # Tor vor dem Deployment
 ```
 
 ### Review-Checkliste (C1–C9)
@@ -46,7 +46,7 @@ python botctl.py verify <bot-datei> --bot-id <id>        # Tor vor dem Deploymen
 
 - [ ] Keine Personendaten, Inhalte oder Tokens im Log/Code/Commit
 - [ ] Keine Persistenz (auch keine „temporären" Dateien/Caches)
-- [ ] Audit-Trail (`.botkit/reviews.json`) enthält nur Metadaten
+- [ ] Audit-Trail (`audit/reviews.json`) enthält nur Metadaten
 
 ## Tests
 
