@@ -103,7 +103,8 @@ jobs:
             base="origin/main"
           fi
           files=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD \
-                  -- 'bots/**' 'examples/own_bot/**' || true)
+                  -- 'bots/**' 'examples/own_bot/**' \
+                  | grep -E '\.py$' || true)
           if [ -z "$files" ]; then
             echo "Keine Bot-Dateien geändert — Gate übersprungen."
             exit 0

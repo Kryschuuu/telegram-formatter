@@ -133,7 +133,18 @@ def cmd_review(args: argparse.Namespace) -> int:
 
     ledger = _load_ledger(args.ledger)
     gate = _gate(ledger)
-    report = gate.analyze(path)
+    try:
+        report = gate.analyze(path)
+    except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
+        # Das Review-Tor prüft Python-Quellcode. Nicht-parsbare Eingaben
+        # (z. B. Markdown-READMEs im bots/-Ordner, Binärdateien) werden als
+        # Eingabefehler gemeldet — nicht als Traceback und ohne Ticket.
+        ort = f" in Zeile {exc.lineno}" if isinstance(exc, SyntaxError) else ""
+        print(
+            f"✖ {path}: nicht als Python-Quelltext lesbar{ort} "
+            f"({exc.__class__.__name__}) — nur *.py-Dateien zum Review einreichen."
+        )
+        return 2
 
     print(report.as_text())
     if not report.ok:

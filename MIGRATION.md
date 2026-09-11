@@ -125,8 +125,9 @@ from telegram_formatter.botkit.session import BotSession
 
 Ausgeführt am 2026-09-11 unter `python -m venv` (Python 3.11.2):
 
-- `pytest -q` → **175 passed** (exakt die Baseline vor der Reorganisation —
-  keine Test verloren, keiner angepasst außer den Importpfaden)
+- `pytest -q` → **178 passed** — 175 Baseline-Tests unverändert grün (kein
+  Test verloren, keiner angepasst außer den Importpfaden) plus 3
+  Regressionstests für das gehärtete Review-Tor (`tests/test_botctl.py`)
 - `ruff check .` → All checks passed
 - CLI-Dry-Run, Flask-Routen (`/`, `/api/convert`, `/api/send`),
   `botctl`-Durchlauf `review → approve×2 → verify → ledger` gegen

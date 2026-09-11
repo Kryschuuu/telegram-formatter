@@ -127,6 +127,8 @@ Entwicklung: `pytest` (siehe `requirements-dev.txt`).
 - `tests/test_tokens.py`, `test_privacy.py`, `test_registry.py`,
   `test_review.py`, `test_session.py` — BYOB-Layer (Vault-TTL, Redaction,
   getMe-Gegenprobe, BK-Regeln + Vier-Augen-Gate, Session-Grenzen).
+- `tests/test_botctl.py` — CLI-Einstieg: Eingabe-Guard des Review-Tors
+  (Nicht-Code-Datei → sauberer Fehler, Exit 2, kein Ticket/Audit-Trail).
 - `tests/fixtures/insecure_bot.py` — absichtliches Negativbeispiel; muss von
   BK001–BK012 erkannt werden (Regressionstest des Regelwerks).
 

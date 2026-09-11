@@ -58,10 +58,21 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 - Veraltete README-Doppelungen (Strukturbaum vs. Doku-Index führten
   verschiedene, teils inkonsistente Dateilisten) — konsolidiert.
 
+### Behoben (Review-Gate-Härtung nach erstem CI-Lauf)
+
+- **CI `bot-gate`:** Die Diff-Schleife zieht jetzt nur noch `*.py`-Dateien
+  durch `botctl review` (`grep -E '\.py$'`). Zuvor stürzte das Gate ab, weil
+  das neue `bots/README.md` vom `bots/**`-Filter erfasst und in den
+  AST-Parser gefüttert wurde.
+- **`botctl review`:** nicht-parsbare Eingaben (Markdown, Binärdateien,
+  Nullbytes) werden als Eingabefehler gemeldet — Exit-Code 2, klare Meldung,
+  **kein** Ticket und **kein** Audit-Trail — statt mit rohem Python-Traceback.
+  Regressionstests: `tests/test_botctl.py` (3).
+
 ### Verifiziert
 
-- `pytest -q`: **175 passed** (identisch zur Baseline vor der Umstellung);
-  `ruff check .` sauber; Bandit `-ll` ohne Befund.
+- `pytest -q` → **178 passed** (175 aus v1.3.0 unverändert + 3 Regressionstests
+  für `botctl review`); `ruff check .` sauber; Bandit `-ll` ohne Befund.
 - End-to-End-Rauchtests: CLI-Dry-Run, Flask-Testclient (`/`,
   `/api/convert`, `/api/send`), `botctl`-Umlauf `review → approve×2 →
   verify` inkl. Ledger-Roundtrip gegen `examples/own_bot/minimal_bot.py`.
