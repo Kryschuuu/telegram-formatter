@@ -27,3 +27,4 @@ BAK/
 
 # Betriebssysteme
 .DS_Store
+audit/*.lock
