@@ -20,7 +20,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from telegram_formatter.sender import validate_api_base
+
 __all__ = ["API_BASE", "TelegramAPIError", "delete_webhook", "get_me", "get_updates", "set_webhook"]
+
+
+def _validate_base(api_base: str) -> None:
+    """HTTPS-Pflicht (Audit M-3) — TelegramAPIError statt ApiBaseError."""
+    validate_api_base(api_base, error_cls=TelegramAPIError)
 
 #: Öffentlicher API-Endpunkt. Für Tests/Private-Instanzen überschreibbar.
 API_BASE = "https://api.telegram.org"
@@ -33,6 +40,7 @@ class TelegramAPIError(RuntimeError):
 
 
 def _post(secret: str, method: str, payload: Mapping[str, Any], *, timeout: float, api_base: str) -> dict:
+    _validate_base(api_base)
     try:
         import requests  # lazy: Konvertierung/Tests brauchen keine Netzwerk-Lib
     except ImportError as exc:  # pragma: no cover - defensiv
