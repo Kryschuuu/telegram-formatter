@@ -50,7 +50,8 @@ __all__ = [
 TOKEN_PATTERN = re.compile(r"^\d{5,16}:[A-Za-z0-9_-]{35}$")
 
 #: Standard-Env-Variable (kompatibel zum restlichen Projekt).
-DEFAULT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
+# B105: gemeldeter String ist der NAME der Umgebungsvariable, kein Geheimnis.
+DEFAULT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"  # nosec B105  # noqa: S105
 
 
 class TokenError(ValueError):

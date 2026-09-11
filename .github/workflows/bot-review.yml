@@ -54,7 +54,9 @@ jobs:
         run: ruff check app.py telegram_formatter examples tests
 
       - name: Bandit (Sicherheits-Scan)
-        run: bandit -c pyproject.toml -r telegram_formatter examples/own_bot -ll
+        # Volles Niveau (kein -ll): LOW-Funde müssen begründet nosec-getaggt
+        # sein — so rutscht nichts durchs Severity-Filter (Audit O-10).
+        run: bandit -c pyproject.toml -r telegram_formatter examples/own_bot
 
       - name: pip-audit (Laufzeit-Abhängigkeiten)
         run: pip-audit -r requirements.txt
@@ -141,6 +143,11 @@ jobs:
       - name: Unit-Tests
         run: pytest -q
 
-      # Optional, wenn die Bot-ID bekannt ist (z. B. als Repository-Variable):
-      # - name: Freigabe prüfen (Audit-Trail)
-      #   run: python -m telegram_formatter.botctl verify bots/<name>.py --bot-id ${{ vars.BOT_ID }}
+      # Audit M-4: Der Vier-Augen-Trail war als CI-Tor nur "optional" und
+      # auskommentiert — damit erzwang die Pipeline nur die Statik, nicht die
+      # Freigaben. Aktiviert, sobald Repository-Variablen gesetzt sind
+      # (settings → secrets and variables → actions → variables):
+      #   BOT_ID=<numerische Bot-ID>   BOT_PATH=<reviewter Bot-Code, z. B. bots/x.py>
+      - name: Freigabe prüfen (Audit-Trail, falls BOT_ID/BOT_PATH gesetzt)
+        if: ${{ vars.BOT_ID != '' && vars.BOT_PATH != '' }}
+        run: python -m telegram_formatter.botctl verify "${{ vars.BOT_PATH }}" --bot-id "${{ vars.BOT_ID }}"
