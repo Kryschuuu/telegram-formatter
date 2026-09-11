@@ -1,10 +1,10 @@
-"""Unit-Tests für die Konvertierungslogik in ``utils``."""
+"""Unit-Tests für die Konvertierungslogik in ``telegram_formatter.utils``."""
 
 from __future__ import annotations
 
 import pytest
 
-from utils import (
+from telegram_formatter.utils import (
     REGULAR_MESSAGE_MAX_CHARS,
     RICH_MESSAGE_MAX_CHARS,
     build_messages,

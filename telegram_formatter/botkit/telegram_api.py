@@ -1,6 +1,6 @@
 """
-botkit/telegram_api.py
-======================
+telegram_formatter/botkit/telegram_api.py
+=========================================
 Schmale Netzwerkschicht zur Telegram-Bot-API.
 
 Nur diese drei Operationen werden für Registrierung und Session-Betrieb

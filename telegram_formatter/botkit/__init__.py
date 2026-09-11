@@ -1,6 +1,6 @@
 """
-botkit
-======
+telegram_formatter/botkit
+=========================
 Baukasten für **eigene, dezentrale Telegram-Bots** im Umfeld von
 ``telegram-formatter`` — als Alternative zum zentralen Bot
 (``@mdtotxt_bot``), bei dem alle Nachrichten über fremde Infrastruktur
@@ -15,18 +15,18 @@ Leitprinzipien:
 * **Keine Inhalte in Logs.** Geloggt werden ausschließlich Metadaten
   (Zähler, Längen, Fingerprints) über :func:`botkit.privacy.audit`.
 * **Review vor Deployment.** Statische Regeln, Checkliste und
-  Vier-Augen-Prinzip (:mod:`botkit.review`) sind Teil des Ablaufs, kein
+  Vier-Augen-Prinzip (:mod:`telegram_formatter.botkit.review`) sind Teil des Ablaufs, kein
   nachgelagerter Prozess.
 
 Öffentliche Fassade:
 
 ===========================  ==================================================
-:mod:`botkit.tokens`         ``BotToken``, Token-Vaults (RAM-only)
-:mod:`botkit.privacy`        Redaction, Fingerprints, ``audit()``
-:mod:`botkit.registry`       Registrierung ohne Token-Speicherung
-:mod:`botkit.review`         Statik, Checkliste, Review-Gate
-:mod:`botkit.session`        ephemere Bot-Sessions
-:mod:`botkit.telegram_api`   getMe / setWebhook / deleteWebhook
+:mod:`telegram_formatter.botkit.tokens`         ``BotToken``, Token-Vaults (RAM-only)
+:mod:`telegram_formatter.botkit.privacy`        Redaction, Fingerprints, ``audit()``
+:mod:`telegram_formatter.botkit.registry`       Registrierung ohne Token-Speicherung
+:mod:`telegram_formatter.botkit.review`         Statik, Checkliste, Review-Gate
+:mod:`telegram_formatter.botkit.session`        ephemere Bot-Sessions
+:mod:`telegram_formatter.botkit.telegram_api`   getMe / setWebhook / deleteWebhook
 ===========================  ==================================================
 """
 
@@ -37,8 +37,6 @@ from .registry import BotRegistry, RegistrationStatus, validate_chat_id
 from .review import Reviewer, ReviewGate, ReviewLedger, ReviewRole, analyze_source
 from .session import BotSession, SessionConfig, SessionError, SessionManager
 from .tokens import BotToken, InMemoryTokenVault, PassthroughTokenVault
-
-__version__ = "1.3.0"
 
 __all__ = [
     "BotRegistry",
@@ -54,7 +52,6 @@ __all__ = [
     "SessionConfig",
     "SessionError",
     "SessionManager",
-    "__version__",
     "analyze_source",
     "audit",
     "fingerprint",

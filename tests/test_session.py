@@ -1,4 +1,4 @@
-"""Tests für :mod:`botkit.session` — Ephemeralität, Grenzen, keine Inhalte in Logs."""
+"""Tests für :mod:`telegram_formatter.botkit.session` — Ephemeralität, Grenzen, keine Inhalte in Logs."""
 
 from __future__ import annotations
 
@@ -7,9 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from botkit.registry import BotRegistry
-from botkit.review import CHECKLIST_IDS, Reviewer, ReviewGate, ReviewLedger, ReviewRole
-from botkit.session import (
+from telegram_formatter.botkit.registry import BotRegistry
+from telegram_formatter.botkit.review import (
+    CHECKLIST_IDS,
+    Reviewer,
+    ReviewGate,
+    ReviewLedger,
+    ReviewRole,
+)
+from telegram_formatter.botkit.session import (
     BotSession,
     RateLimitExceeded,
     SessionConfig,
@@ -17,7 +23,7 @@ from botkit.session import (
     SessionExpired,
     SessionManager,
 )
-from botkit.tokens import BotToken
+from telegram_formatter.botkit.tokens import BotToken
 
 ROOT = Path(__file__).resolve().parents[1]
 CLEAN_BOT = ROOT / "examples" / "own_bot" / "minimal_bot.py"
@@ -198,7 +204,7 @@ def test_empty_input_sends_nothing():
 
 
 def test_send_errors_are_counted_and_reraised():
-    from sender import SendError
+    from telegram_formatter.sender import SendError
 
     def failing_sender(message, secret, *, timeout=None, api_base=None):
         raise SendError("Telegram-API-Fehler 429")

@@ -1,6 +1,6 @@
 """
-botkit/review.py
-================
+telegram_formatter/botkit/review.py
+===================================
 Peer-Review-Gate für Nutzer-Bots — der Teil des Designs, der verhindert,
 dass „jedermann darf einen Bot bauen" zu „jedermann darf Code ausführen" wird.
 
@@ -64,7 +64,6 @@ LOGGER = logging.getLogger("botkit.review")
 # --------------------------------------------------------------------------- #
 BLOCKER = "blocker"
 WARNING = "warning"
-INFO = "info"
 
 #: Module, die in einem Nutzer-Bot nichts verloren haben
 #: (Persistenz, Shell, Roh-Sockets, Fremd-Storage, Deserialisierung).

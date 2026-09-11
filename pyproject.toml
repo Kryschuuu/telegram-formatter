@@ -1,0 +1,87 @@
+# Projekt- und Werkzeugkonfiguration (PEP 621)
+# =============================================
+# Diese Datei ist die zentrale Konfigurationsquelle für Paketierung, Lint
+# (Ruff), Tests (pytest) und statische Sicherheitsanalyse (Bandit).
+# Frühere Einzelkonfigurationen (`ruff.toml`, `conftest.py`-sys.path-Hack)
+# sind hier konsolidiert — siehe MIGRATION.md.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-formatter"
+description = "Markdown + LaTeX -> sendefertige Telegram-Nachrichten (Rich Messages), plus BYOB-Baukasten für eigene Bots"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Kryschuuu" }]
+keywords = ["telegram", "markdown", "latex", "bot", "formatter", "rich-messages"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: Flask",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup :: Markdown",
+]
+# Version und Laufzeit-Abhängigkeiten werden dynamisch aus den bestehenden
+# Single-Source-of-Truth-Dateien gelesen (keine duplizierten Pin-Listen).
+dynamic = ["version", "dependencies"]
+
+[project.scripts]
+telegram-formatter = "telegram_formatter.cli:main"
+botctl = "telegram_formatter.botctl:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "telegram_formatter.__version__" }
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["telegram_formatter*"]
+
+[tool.setuptools.package-data]
+telegram_formatter = ["templates/*.html"]
+
+# ---------------------------------------------------------------------------
+# Ruff — bewusst explizit, damit CI-Ergebnisse reproduzierbar sind
+# (unabhängig von der Ruff-Version und ihren Standardregeln).
+#
+# Regelsatz:
+#   E4/E7/E9  Fehler und offensichtliche Stilprobleme
+#   F         Pyflakes (unbenutzte Importe/Variablen, ...)
+#   I         Import-Sortierung
+#   UP        Modernisierung (pyupgrade)
+#   B         flake8-bugbear (typische Fehlerfallen)
+#
+# Ausgenommen: tests/fixtures — dort liegt das absichtlich unsichere
+# Negativbeispiel für das Regelwerk von telegram_formatter.botkit.review.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["tests/fixtures", ".venv", "venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+# UP042 (StrEnum) bleibt ignoriert: das Projekt unterstützt Python 3.10+.
+ignore = ["UP042"]
+
+# ---------------------------------------------------------------------------
+# pytest — Projekt-Root in den Importpfad, damit die Tests ohne
+# Installation/venv-Trick aus jedem Arbeitsverzeichnis laufen (lokal, CI,
+# Container). Ersetzt den früheren conftest.py-Sys.path-Hack.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+# ---------------------------------------------------------------------------
+# Bandit — Sicherheits-Scan (CI: `bandit -c pyproject.toml -r telegram_formatter`)
+# tests/ ausnehmen: dort liegt das absichtliche Negativbeispiel
+# tests/fixtures/insecure_bot.py (und Beispiel-Code wird separat gescannt).
+# ---------------------------------------------------------------------------
+[tool.bandit]
+exclude_dirs = ["tests"]

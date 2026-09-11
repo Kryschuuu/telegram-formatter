@@ -1,6 +1,6 @@
 """
-botkit/session.py
-=================
+telegram_formatter/botkit/session.py
+====================================
 Ephemere Bot-Sessions — der Kern des dezentralen Modells.
 
 Eine Session ist: **ein Bot + ein Ziel-Chat + ein Zeitfenster**, gehalten
@@ -34,8 +34,8 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from sender import SendError, send_message
-from utils import TelegramMessage, build_messages
+from telegram_formatter.sender import SendError, send_message
+from telegram_formatter.utils import TelegramMessage, build_messages
 
 from .privacy import audit, fingerprint
 from .registry import BotRegistry, RegistrationError, validate_chat_id

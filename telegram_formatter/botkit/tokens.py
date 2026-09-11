@@ -1,6 +1,6 @@
 """
-botkit/tokens.py
-================
+telegram_formatter/botkit/tokens.py
+===================================
 Sicheres Handling von Telegram-Bot-Tokens.
 
 Regeln, die dieses Modul erzwingt:

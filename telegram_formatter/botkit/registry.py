@@ -1,6 +1,6 @@
 """
-botkit/registry.py
-==================
+telegram_formatter/botkit/registry.py
+=====================================
 Registrierung eigener Bots — **ohne** Speicherung des Tokens.
 
 Der Registry-Eintrag beschreibt *wer* einen Bot besitzt und *welchen Status*

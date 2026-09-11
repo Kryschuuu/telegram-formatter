@@ -1,18 +1,18 @@
 """
-app.py
-======
-Kleine Flask-Weboberfläche, die die Konvertierung aus :mod:`utils`
+telegram_formatter/app.py
+=========================
+Kleine Flask-Weboberfläche, die die Konvertierung aus :mod:`telegram_formatter.utils`
 demonstriert: links Markdown/LaTeX eingeben, rechts die gebaute Telegram-
 Nachricht (HTML-Payload für ``sendMessage`` bzw. Rich-Markdown-Payload für
 ``sendRichMessage``) betrachten. Optional kann direkt gesendet werden.
 
-Die eigentliche Logik liegt in ``utils``/``sender``; dieses Modul ist nur
+Die eigentliche Logik liegt in ``telegram_formatter/utils``/``telegram_formatter/sender``; dieses Modul ist nur
 eine dünne HTTP-Schicht darüber.
 
 Starten::
 
-    flask --app app run            # Entwicklung
-    gunicorn app:app               # Produktion (z. B. Render.com)
+    flask --app telegram_formatter.app run            # Entwicklung
+    gunicorn "telegram_formatter.app:app"               # Produktion (z. B. Render.com)
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ import os
 
 from flask import Flask, jsonify, render_template, request
 
-from sender import SendError, send_message
-from utils import build_messages
+from telegram_formatter.sender import SendError, send_message
+from telegram_formatter.utils import build_messages
 
 app = Flask(__name__)
 
@@ -86,5 +86,7 @@ def send() -> tuple:
 
 
 if __name__ == "__main__":
-    # Nur für lokale Entwicklung. In Produktion: gunicorn app:app.
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # Nur für lokale Entwicklung. In Produktion: gunicorn "telegram_formatter.app:app".
+    # 0.0.0.0 ist hier Absicht (Container-/Dev-Zugriff); der Produktions-
+    # Einstieg ist Gunicorn hinter dem Plattform-Proxy.
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))  # nosec B104
