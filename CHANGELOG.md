@@ -4,6 +4,58 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [1.3.0] - 2026-09-11
+
+### Hinzugefügt
+
+- **Dezentrales Bot-Konzept (BYOB — Bring Your Own Bot)**: Neues Paket
+  `botkit/` als Alternative zum zentralen Bot. Nutzer registrieren ihren
+  eigenen Bot, lassen den Code reviewen und nutzen ihn in einer ephemeren
+  Session — ohne zentrale Datenspeicherung.
+- **`botkit/tokens.py`**: `BotToken`-Umschlag (Klartext nur über `reveal()`,
+  `repr` redacted), `InMemoryTokenVault` (RAM + TTL) und
+  `PassthroughTokenVault` (strengster Modus, speichert nichts).
+- **`botkit/privacy.py`**: `RedactingFilter` für alle Logger (inkl. urllib3),
+  `audit()` als einzige Log-Schnittstelle (nur Metadaten), prozesslokale
+  HMAC-Fingerprints, `scrub_environment()` gegen Token-Vererbung.
+- **`botkit/registry.py`**: Registrierung mit `getMe`-Verifikation
+  (`is_bot`, ID-Gegenprobe) — speichert Identität und Status, **niemals** das
+  Token; Validierung für `chat_id` und Besitzer-Pseudonym.
+- **`botkit/review.py`**: AST-basierte Regeln BK001–BK012 (Persistenz,
+  Fremdnetzwerk, dynamische Ausführung, hartkodierte Secrets, Inhalte im
+  Log), Checkliste C1–C9, `ReviewLedger` (Append-only, Metadaten) und
+  `ReviewGate` mit Vier-Augen-Prinzip (2 Freigaben, ≥1 Maintainer:in,
+  Freigabe an die SHA-256-Prüfsumme des Codes gebunden).
+- **`botkit/session.py`**: `BotSession`/`SessionManager` mit TTL,
+  Leerlauf-Timeout, Rate-Limit-Fenster und Eingabevalidierung; Versand über
+  die bestehenden Module `utils.build_messages` + `sender.send_message`.
+- **`botkit/telegram_api.py`**: `getMe`, `getUpdates`, `setWebhook`,
+  `deleteWebhook` — die einzigen erlaubten API-Aufrufe.
+- **`botctl.py`**: CLI mit `register`, `review`, `approve`, `verify`, `send`
+  und `checklist`.
+- **Referenz-Bot** `examples/own_bot/minimal_bot.py` (besteht alle BK-Regeln)
+  und **Negativbeispiel** `tests/fixtures/insecure_bot.py` (löst BK001–BK012
+  aus).
+- **Review-Infrastruktur**: `.github/workflows/bot-review.yml`
+  (Ruff, Bandit, pip-audit, gitleaks, `botctl review`, pytest),
+  `.github/CODEOWNERS`, PR-Template mit Pflicht-Checkliste.
+- **Doku**: `docs/DECENTRAL_BOT_ARCHITECTURE.md` (Architektur, Nutzerreise,
+  Hürden-Tabelle, Security-Durchsetzung, Peer-Review-Prozess,
+  Vergleich mit dem zentralen Bot).
+
+### Geändert
+
+- `conftest.py` (neu) sorgt dafür, dass Projekt-Root und `tests/` beim Import
+  auflösbar sind.
+- Bestehende Module (`utils.py`, `sender.py`, `cli.py`, `app.py`) bleiben
+  unverändert — `botkit` ergänzt das Projekt nur.
+
+### Tests
+
+- 175 Tests gesamt (vorher 81): 94 neue Tests für Token-Handling, Redaction,
+  Registry, Review-Gate (Vier-Augen, Prüfsummen-Bindung) und Sessions
+  (TTL, Leerlauf, Rate-Limit, keine Inhalte in Logs).
+
 ## [1.2.0] - 2026-09-02
 
 ### Hinzugefügt

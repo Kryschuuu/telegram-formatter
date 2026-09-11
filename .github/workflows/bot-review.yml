@@ -1,0 +1,113 @@
+name: Bot-Review
+
+# Tor für Nutzer-Bots: Statik, Secret-Scan, Abhängigkeiten, Tests.
+# Menschliche Freigaben (2, davon ≥1 Maintainer) erzwingt die
+# Branch-Protection zusammen mit .github/CODEOWNERS.
+
+on:
+  pull_request:
+    paths:
+      - "botkit/**"
+      - "bots/**"
+      - "examples/own_bot/**"
+      - ".botkit/**"
+      - "botctl.py"
+      - ".github/workflows/bot-review.yml"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  code-quality:
+    name: Lint & Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Werkzeuge installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff bandit pip-audit
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Ruff (Stil & Fehler)
+        run: ruff check botkit botctl.py examples/own_bot
+
+      - name: Bandit (Sicherheits-Scan)
+        run: bandit -r botkit botctl.py examples/own_bot -ll
+
+      - name: pip-audit (Abhängigkeiten)
+        run: pip-audit -r requirements.txt
+
+  secrets:
+    name: Secret-Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Findet versehentlich committete Bot-Tokens, API-Keys, .env-Dateien.
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  bot-gate:
+    name: Review-Gate (botkit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Abhängigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Statische Regeln (BK001–BK012) für geänderte Bot-Dateien
+        run: |
+          set -euo pipefail
+          files=$(git diff --name-only --diff-filter=ACMR \
+                  "origin/${{ github.base_ref || 'main' }}"...HEAD \
+                  -- 'bots/**' 'examples/own_bot/**' || true)
+          if [ -z "$files" ]; then
+            echo "Keine Bot-Dateien geändert — Gate übersprungen."
+            exit 0
+          fi
+          status=0
+          for file in $files; do
+            echo "::group::review $file"
+            python botctl.py review "$file" --bot-id 0 --check || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+      - name: Referenz-Bot muss sauber bleiben
+        run: python botctl.py review examples/own_bot/minimal_bot.py --bot-id 0 --check
+
+      - name: Negativbeispiel muss erkannt werden (Regressionstest der Regeln)
+        run: |
+          if python botctl.py review tests/fixtures/insecure_bot.py --bot-id 0 --check; then
+            echo "::error::Negativbeispiel wurde nicht erkannt — Regelwerk defekt!"
+            exit 1
+          fi
+
+      - name: Unit-Tests
+        run: pytest -q
+
+      # Optional, wenn die Bot-ID bekannt ist (z. B. als Repository-Variable):
+      # - name: Freigabe prüfen (Audit-Trail)
+      #   run: python botctl.py verify bots/<name>.py --bot-id ${{ vars.BOT_ID }}

@@ -1,0 +1,18 @@
+# CODEOWNERS — Review-Pflicht für Bot-Code und Sicherheitsinfrastruktur.
+#
+# Ohne Maintainer-Approval darf hier nichts gemergt werden
+# (Branch-Protection: "Require review from Code Owners" aktivieren).
+
+# Baukasten: Token-Handling, Registry, Session, Privacy
+/botkit/                            @Kryschuuu
+/botctl.py                          @Kryschuuu
+
+# Nutzer-Bots und Vorlagen
+/examples/own_bot/                  @Kryschuuu
+/bots/                              @Kryschuuu
+
+# Review-Infrastruktur
+/.botkit/                           @Kryschuuu
+/.github/workflows/bot-review.yml   @Kryschuuu
+/.github/CODEOWNERS                 @Kryschuuu
+/docs/DECENTRAL_BOT_ARCHITECTURE.md @Kryschuuu

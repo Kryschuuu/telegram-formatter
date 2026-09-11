@@ -74,10 +74,8 @@ def test_send_api_error_raises(monkeypatch, fake_requests):
 
     fake.post = bad_post
 
-    from utils import TelegramMessage
-
-    import sender as sender_module
     from sender import SendError, send_message
+    from utils import TelegramMessage
 
     msg = TelegramMessage("regular", {"chat_id": 1, "text": "hi"})
     with pytest.raises(SendError):
