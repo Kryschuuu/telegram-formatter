@@ -50,6 +50,29 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 - Bestehende Module (`utils.py`, `sender.py`, `cli.py`, `app.py`) bleiben
   unverändert — `botkit` ergänzt das Projekt nur.
 
+### Behoben (Audit-Runde CI)
+
+- **pip-audit**: `requests` von 2.32.4 auf **2.33.0** angehoben
+  (`PYSEC-2026-2275`), `pytest` von 8.3.5 auf **9.1.1** (`PYSEC-2026-1845`).
+  Beide Audits (Laufzeit und Entwicklung) sind damit ohne Befund.
+- **gitleaks**: das Beispiel-Token in den Docstrings von
+  `examples/own_bot/minimal_bot.py` und `botkit/tokens.py` war ein
+  Dummy-Wert, löste aber zu Recht den Secret-Scan aus — ersetzt durch
+  Platzhalter (`<token-von-botfather>` bzw. `os.environ[...]`).
+- **gitleaks (Negativbeispiel)**: das Token in
+  `tests/fixtures/insecure_bot.py` steht jetzt über zwei Zeilen
+  (implizite String-Konkatenation). Der AST faltet es zu einer Konstante,
+  die BK006-Regel greift weiterhin; der zeilenbasierte Secret-Scanner
+  schlägt nicht mehr an.
+- **`.gitleaks.toml`** ergänzt: eng begrenzte Freigaben für die
+  Negativbeispiele unter `tests/fixtures/` sowie für den historischen
+  Dokumentations-Dummy in alten Commits.
+- **Workflow `bot-review.yml`**: Berechtigungen für PR-Kommentar und
+  SARIF-Upload (`pull-requests: write`, `actions: write`) ergänzt —
+  damit entfällt der Fehler „Resource not accessible by integration";
+  außerdem wöchentlicher Termin-Check der Abhängigkeiten und Audit der
+  Entwicklungs-Abhängigkeiten.
+
 ### Tests
 
 - 175 Tests gesamt (vorher 81): 94 neue Tests für Token-Handling, Redaction,

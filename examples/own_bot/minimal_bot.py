@@ -28,7 +28,7 @@ Der Code ist so geschrieben, dass er die statischen Prüfregeln von
 
 Starten::
 
-    export TELEGRAM_BOT_TOKEN="123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345"
+    export TELEGRAM_BOT_TOKEN="<token-von-botfather>"
     export TELEGRAM_CHAT_ID="-1001234567890"   # optional: nur diesen Chat bedienen
     python examples/own_bot/minimal_bot.py
 

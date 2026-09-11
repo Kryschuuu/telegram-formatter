@@ -422,10 +422,18 @@ Suppressions für Blocker brauchen die Zustimmung beider Reviewer:innen.
 
 ### 4.5 Automatisierung im CI
 
-`.github/workflows/bot-review.yml` führt aus: Ruff, Bandit, `pip-audit`,
-`pytest`, Secret-Scan (gitleaks) sowie `botctl review --check` und
-`botctl verify` für jede geänderte Bot-Datei. Branch-Protection verlangt:
-grünes CI, ≥1 Maintainer-Approval, aktueller Stand, keine Force-Pushes.
+`.github/workflows/bot-review.yml` führt aus: Ruff, Bandit, `pip-audit`
+(Laufzeit **und** Entwicklung), `pytest`, Secret-Scan (gitleaks) sowie
+`botctl review --check` und `botctl verify` für jede geänderte Bot-Datei.
+Ergänzt wird das durch einen wöchentlichen Terminlauf, damit neue CVEs auch
+ohne Pull Request auffallen. Branch-Protection verlangt: grünes CI,
+≥1 Maintainer-Approval, aktueller Stand, keine Force-Pushes.
+
+> **Erfahrungswert aus dem ersten CI-Lauf:** zwei Audit-Klassen schlugen an —
+> eine veraltete Abhängigkeit (`requests` 2.32.4, `PYSEC-2026-2275`) und ein
+> Dummy-Token in der Dokumentation (gitleaks). Beides ist behoben; die
+> Freigaben für das absichtlich unsichere Negativbeispiel liegen in
+> `.gitleaks.toml`, Dokumentations-Tokens sind durch Platzhalter ersetzt.
 
 ---
 

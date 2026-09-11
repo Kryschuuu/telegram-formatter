@@ -64,8 +64,9 @@ class BotToken:
     """
     Umschlag für ein Bot-Token.
 
-    >>> token = BotToken.parse("123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345")  # doctest: +SKIP
-    >>> token.bot_id                                                            # doctest: +SKIP
+    >>> import os
+    >>> token = BotToken.parse(os.environ["TELEGRAM_BOT_TOKEN"])  # doctest: +SKIP
+    >>> token.bot_id                                              # doctest: +SKIP
     123456789
     >>> print(token)                                                            # doctest: +SKIP
     <BotToken bot_id=123456789 fp=9f1c2b… redacted>
