@@ -37,7 +37,10 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 
 ### Hinzugefügt
 
-- `LICENSE` (MIT — README-badge behauptete MIT, die Datei fehlte),
+- `LICENSE` — fehlte trotz README-badge „MIT"; im Zuge der Reorganisation
+  angelegt und an die Lizenz-Umstellung auf `main` (`a2c3dcb`)
+  **angleichen: GNU GPL v3** (`license = "GPL-3.0-or-later"` in
+  `pyproject.toml`, README-Badge angepasst).
   `CONTRIBUTING.md`, `MIGRATION.md`, `.github/SECURITY.md`
   (Offenlegungsprozess, von GitHub erkannt), `security/README.md`
   (Schutzziel-Matrix S1–S8 mit Verifikationszuordnung), `audit/README.md`,

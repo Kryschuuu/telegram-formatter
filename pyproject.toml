@@ -6,7 +6,7 @@
 # sind hier konsolidiert — siehe MIGRATION.md.
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -14,7 +14,8 @@ name = "telegram-formatter"
 description = "Markdown + LaTeX -> sendefertige Telegram-Nachrichten (Rich Messages), plus BYOB-Baukasten für eigene Bots"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [{ name = "Kryschuuu" }]
 keywords = ["telegram", "markdown", "latex", "bot", "formatter", "rich-messages"]
 classifiers = [

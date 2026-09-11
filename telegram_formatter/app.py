@@ -21,6 +21,7 @@ import os
 
 from flask import Flask, jsonify, render_template, request
 
+from telegram_formatter import __version__
 from telegram_formatter.sender import SendError, send_message
 from telegram_formatter.utils import build_messages
 
@@ -33,7 +34,11 @@ CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 @app.route("/", methods=["GET"])
 def index() -> str:
     """Rendert die Editor-Seite (Markdown/LaTeX -> Telegram-Vorschau)."""
-    return render_template("index.html", configured=bool(BOT_TOKEN and CHAT_ID))
+    return render_template(
+        "index.html",
+        configured=bool(BOT_TOKEN and CHAT_ID),
+        version=__version__,
+    )
 
 
 @app.route("/api/convert", methods=["POST"])

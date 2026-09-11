@@ -45,7 +45,7 @@ Verhalten, Payloads und API der Telegram-Schnittstelle sind unverändert.
 | — | `security/README.md` | Neu: Schutzziel-Matrix, Injection-Hygiene, bekannte Grenzen |
 | — | `.github/SECURITY.md` | Neu: Offenlegungsprozess (von GitHub erkannt) |
 | — | `bots/README.md` | Neu: dokumentierter Ort für Nutzer-Bots (CI-Pfade existierten schon) |
-| — | `LICENSE` | Neu: MIT — im README-badge behauptet, aber nie vorhanden |
+| — | `LICENSE` | Neu; Inhalt gemäß main-Umstellung auf **GNU GPL v3** (der alte MIT-Badge behauptete eine Lizenz, ohne dass je eine Datei existierte; Badge/pyproject angepasst) |
 | — | `CONTRIBUTING.md` | Neu: Setup, Schichtregeln, PR-Prozess |
 | — | `MIGRATION.md` | Neu: dieses Dokument |
 

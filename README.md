@@ -7,7 +7,7 @@ Nachrichten.
 
 ![Version](https://img.shields.io/badge/version-2.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-lightgrey)
+![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
 ## Funktionsübersicht
 
@@ -250,7 +250,7 @@ telegram-formatter/
 ├── CHANGELOG.md                # Versionierung (Keep a Changelog)
 ├── CONTRIBUTING.md             # Setup, Schichtregeln, PR-Prozess
 ├── MIGRATION.md                # Struktur-Migration 1.3.0 → 2.0.0 (alt → neu)
-└── LICENSE                     # MIT
+└── LICENSE                     # GNU GPL v3
 ```
 
 **So nutzt du die Struktur bei Reviews/Audits:** Doku-Frage → `docs/`.
