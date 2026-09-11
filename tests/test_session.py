@@ -336,3 +336,68 @@ def test_invalid_chat_id_is_rejected_by_manager():
                              clock=clock)
     with pytest.raises(SessionError):
         manager.open(token, "keine-chat-id")
+
+
+# --------------------------------------------------------------------------- #
+# Audit-Regressionen: Session-Lebenszyklus (Akku-Bereinigung), Thread-Safety,
+# Repr-Zustand, get() entfernt Abgelaufenes
+# --------------------------------------------------------------------------- #
+def make_manager(clock: FakeClock, sender: RecordingSender | None = None):
+    reg = make_registry(clock)
+    reg.register(BotToken.parse(SECRET), owner_ref="alice")
+    cfg = SessionConfig(require_review=False)
+    mgr = SessionManager(registry=reg, config=cfg, clock=clock, sender_fn=sender)
+    return reg, mgr
+
+
+def test_context_closed_sessions_are_forgotten():
+    """Audit B-13/Akku-Test: with-Block entleert den Manager sofort."""
+    clock = FakeClock()
+    _reg, mgr = make_manager(clock)
+    for _ in range(5):
+        with mgr.open(BotToken.parse(SECRET), CHAT_ID):
+            pass
+    assert mgr.active_count == 0
+
+
+def test_get_drops_expired_session():
+    clock = FakeClock()
+    _reg, mgr = make_manager(clock)
+    session = mgr.open(BotToken.parse(SECRET), CHAT_ID)
+    sid = session.session_id
+    clock.advance(100_000)  # über TTL + Idle
+    assert mgr.get(sid) is None
+    assert mgr.active_count == 0
+
+
+def test_repr_reports_closed_state():
+    clock = FakeClock()
+    _reg, mgr = make_manager(clock)
+    session = mgr.open(BotToken.parse(SECRET), CHAT_ID)
+    session.close()
+    assert "state=closed" in repr(session)
+
+
+def test_manager_is_thread_safe_under_parallel_open_close():
+    """Audit M-7: parallele open()/close() ohne Lock -> dict-Races."""
+    import threading
+
+    clock = FakeClock()
+    _reg, mgr = make_manager(clock, sender=RecordingSender())
+    errors: list[BaseException] = []
+
+    def work() -> None:
+        try:
+            for _ in range(20):
+                with mgr.open(BotToken.parse(SECRET), CHAT_ID):
+                    pass
+        except BaseException as exc:  # noqa: BLE001 - Test erfasst alles
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert mgr.active_count == 0

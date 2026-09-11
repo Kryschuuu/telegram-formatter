@@ -29,6 +29,7 @@ Typischer Ablauf::
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -130,6 +131,10 @@ class BotSession:
         self._sent_timestamps: list[float] = []
         self.stats = SessionStats()
         self.closed = False
+        #: Wird von SessionManager gesetzt, damit close() den Registry-
+        #: Eintrag entfernt (Audit: geschlossene Sessions akkumulierten
+        #: bis zum nächsten open()).
+        self._on_close: Callable[[str], None] | None = None
 
     # ------------------------------------------------------------- Metadaten
     @property
@@ -160,7 +165,13 @@ class BotSession:
         )
 
     def __repr__(self) -> str:
-        state = "closed" if self.closed else ("expired" if self.is_expired else "active")
+        # Audit B-13: is_expired() liefert fuer geschlossene Sessions True —
+        # der Zustand muss zuerst geprueft werden, sonst zeigt der repr von
+        # close()Sessions spaeter "expired" statt "closed".
+        if self.closed:
+            state = "closed"
+        else:
+            state = "expired" if self.is_expired else "active"
         return (
             f"<BotSession id={self._id[:8]} bot={self.bot_id} state={state} "
             f"chunks={self.stats.chunks_sent}>"
@@ -256,6 +267,9 @@ class BotSession:
         self.closed = True
         self._token = None
         self._sent_timestamps.clear()
+        on_close, self._on_close = self._on_close, None
+        if on_close is not None:
+            on_close(self._id)  # Manager entfernt den Eintrag (kein Akkumulieren)
         audit(LOGGER, logging.INFO, "session.closed", session=self._id[:8], bot=bot_id,
               chunks=chunks)
 
@@ -325,6 +339,10 @@ class SessionManager:
         self._clock = clock
         self._sender_fn = sender_fn
         self._sessions: dict[str, BotSession] = {}
+        # Audit M-7: Dikt-Mutationen sind nicht atomar; unter Threads
+        # (Gunicorn --threads, eigene Timer-Reaper) ohne Lock potenziell
+        # "dictionary changed size during iteration" und Geister-Einträge.
+        self._lock = threading.RLock()
 
     # --------------------------------------------------------------- Öffnen
     def open(
@@ -373,21 +391,37 @@ class SessionManager:
             clock=self._clock,
             sender_fn=self._sender_fn,
         )
-        self._sessions[session.session_id] = session
+        session._on_close = self._forget
+        with self._lock:
+            self._sessions[session.session_id] = session
         audit(LOGGER, logging.INFO, "session.opened", session=session.session_id[:8],
               bot=token.bot_id, chat_fp=fingerprint(chat), ttl=self._config.ttl_seconds)
         return session
 
+    def _forget(self, session_id: str) -> None:
+        """Registry-Bereinigung vonseiten der Session (close-Hook)."""
+        with self._lock:
+            current = self._sessions.get(session_id)
+            if current is not None and current.closed:
+                del self._sessions[session_id]
+
     # -------------------------------------------------------------- Verwaltung
     def get(self, session_id: str) -> BotSession | None:
-        session = self._sessions.get(session_id)
-        if session is None or session.is_expired:
-            return None
-        return session
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+            if session.is_expired:
+                # Abgelaufene Session nicht nur melden, sondern sofort
+                # rausnehmen (Token- und Eintrag-Aufräumung, Audit-Befund).
+                del self._sessions[session_id]
+                return None
+            return session
 
     def close(self, session_id: str) -> bool:
         """Schließt eine Session. ``True``, wenn sie existierte."""
-        session = self._sessions.pop(session_id, None)
+        with self._lock:
+            session = self._sessions.pop(session_id, None)
         if session is None:
             return False
         session.close()
@@ -395,9 +429,10 @@ class SessionManager:
 
     def reap_expired(self) -> int:
         """Schließt alle abgelaufenen Sessions, liefert die Anzahl."""
-        expired = [sid for sid, session in self._sessions.items() if session.is_expired]
-        for session_id in expired:
-            session = self._sessions.pop(session_id)
+        with self._lock:
+            expired = [sid for sid, session in self._sessions.items() if session.is_expired]
+            doomed = [self._sessions.pop(sid) for sid in expired if sid in self._sessions]
+        for session in doomed:
             session.close()
         if expired:
             audit(LOGGER, logging.INFO, "session.reaped", count=len(expired))
@@ -405,4 +440,5 @@ class SessionManager:
 
     @property
     def active_count(self) -> int:
-        return len(self._sessions)
+        with self._lock:
+            return len(self._sessions)

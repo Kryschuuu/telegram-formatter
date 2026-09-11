@@ -265,7 +265,16 @@ def cmd_send(args: argparse.Namespace) -> int:
         timeout=args.timeout,
         api_base=args.api_base,
     )
-    manager = SessionManager(registry=registry, review_gate=gate, config=config)
+    # Audit B-2: Der --local-trust-Pfad darf dem Manager keinen ReviewGate
+    # geben — sonst verlangt SessionManager.open einen Registry-Status
+    # "approved", den im Selbstbetrieb niemand setzt, und jede Session
+    # scheitert ("Bot ist nicht freigegeben"). Ohne Gate gilt: verifizierter
+    # Bot + ausdrücklicher Lokalvertrauen des Nutzers genügen.
+    manager = SessionManager(
+        registry=registry,
+        review_gate=None if args.local_trust else gate,
+        config=config,
+    )
     text = _read_input(args.file)
 
     try:
