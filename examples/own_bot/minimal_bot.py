@@ -1,6 +1,6 @@
 """
-minimal_bot.py — Referenz-Implementierung eines eigenen, dezentralen Bots
-=========================================================================
+examples/own_bot/minimal_bot.py — Referenz-Implementierung eines dezentralen Bots
+====================================================================================
 
 Dieser Bot ist das Gegenstück zum zentralen Dienst (``@mdtotxt_bot``):
 Er läuft **beim Nutzer**, mit dem **Token des Nutzers**, und speichert
@@ -12,19 +12,19 @@ Funktionsweise:
 2. Beim Start gegen Telegram verifizieren (``getMe``) und registrieren.
 3. Updates per Long-Polling holen (``getUpdates``) — der Offset liegt nur im
    RAM, nach einem Neustart beginnt der Bot neu; es gibt kein Archiv.
-4. Eingehenden Text über ``utils.build_messages`` konvertieren und über eine
-   kurze :class:`botkit.session.BotSession` **in denselben Chat** zurücksenden.
+4. Eingehenden Text über ``telegram_formatter.utils.build_messages`` konvertieren und über eine
+   kurze :class:`telegram_formatter.botkit.session.BotSession` **in denselben Chat** zurücksenden.
 5. Beim Beenden alle Sessions schließen und einen eventuellen Webhook
    löschen (``deleteWebhook``) — kein Zustand bleibt bei Telegram.
 
 Der Code ist so geschrieben, dass er die statischen Prüfregeln von
-``botkit.review`` (BK001–BK012) erfüllt:
+``telegram_formatter.botkit.review`` (BK001–BK012) erfüllt:
 
 * keine Importe mit Persistenz-, Shell- oder Roh-Socket-Funktion;
 * keine Schreibzugriffe, keine Datenbank, kein Cache;
 * keine Ausgaben von Nachrichteninhalten (weder ``print`` noch Logging);
 * ausgehende Aufrufe ausschließlich über die vetted Clients
-  (``botkit.telegram_api``, ``sender``) an ``api.telegram.org``.
+  (``telegram_formatter.botkit.telegram_api``, ``sender``) an ``api.telegram.org``.
 
 Starten::
 
@@ -34,7 +34,7 @@ Starten::
 
 Review vor dem Deployment (gehosteter Betrieb)::
 
-    python botctl.py review examples/own_bot/minimal_bot.py --bot-id 123456789
+    python -m telegram_formatter.botctl review examples/own_bot/minimal_bot.py --bot-id 123456789
 """
 
 from __future__ import annotations
@@ -46,17 +46,17 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
-from botkit.privacy import (
+from telegram_formatter.botkit.privacy import (
     audit,
     fingerprint,
     install_privacy_filters,
     scrub_environment,
 )
-from botkit.registry import BotRegistry
-from botkit.session import BotSession, SessionConfig, SessionManager
-from botkit.telegram_api import delete_webhook, get_me, get_updates
-from botkit.tokens import BotToken
-from utils import TelegramMessage, build_messages
+from telegram_formatter.botkit.registry import BotRegistry
+from telegram_formatter.botkit.session import BotSession, SessionConfig, SessionManager
+from telegram_formatter.botkit.telegram_api import delete_webhook, get_me, get_updates
+from telegram_formatter.botkit.tokens import BotToken
+from telegram_formatter.utils import TelegramMessage, build_messages
 
 LOGGER = logging.getLogger("own_bot")
 

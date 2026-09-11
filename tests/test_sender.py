@@ -37,10 +37,10 @@ def fake_requests(monkeypatch):
 
 
 def test_send_regular_uses_sendmessage(fake_requests):
-    from utils import TelegramMessage
+    from telegram_formatter.utils import TelegramMessage
 
     fake, calls = fake_requests
-    from sender import send_message
+    from telegram_formatter.sender import send_message
 
     msg = TelegramMessage("regular", {"chat_id": 1, "text": "hi", "parse_mode": "HTML"})
     result = send_message(msg, "TOKEN")
@@ -49,10 +49,10 @@ def test_send_regular_uses_sendmessage(fake_requests):
 
 
 def test_send_rich_uses_sendrichmessage(fake_requests):
-    from utils import TelegramMessage
+    from telegram_formatter.utils import TelegramMessage
 
     fake, calls = fake_requests
-    from sender import send_message
+    from telegram_formatter.sender import send_message
 
     msg = TelegramMessage("rich", {"chat_id": 1, "rich_message": {"markdown": "$x$"}})
     send_message(msg, "TOKEN")
@@ -74,8 +74,8 @@ def test_send_api_error_raises(monkeypatch, fake_requests):
 
     fake.post = bad_post
 
-    from sender import SendError, send_message
-    from utils import TelegramMessage
+    from telegram_formatter.sender import SendError, send_message
+    from telegram_formatter.utils import TelegramMessage
 
     msg = TelegramMessage("regular", {"chat_id": 1, "text": "hi"})
     with pytest.raises(SendError):

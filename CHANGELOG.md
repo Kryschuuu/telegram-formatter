@@ -4,6 +4,84 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.0.0] - 2026-09-11
+
+### Geändert (Repository-Reorganisation — verhaltensneutral)
+
+- **Paketstruktur:** `utils.py`, `sender.py`, `cli.py`, `app.py`, `botctl.py`,
+  `botkit/` und `templates/` in das Python-Paket `telegram_formatter/`
+  überführt; zentrale Fassade `telegram_formatter/__init__.py` mit
+  `__version__` und bequemen Re-Exports (`build_messages`, `send_message`).
+  Imports: `from utils import …` → `from telegram_formatter.utils import …`;
+  CLI-Aufrufe: `python cli.py …` → `python -m telegram_formatter.cli …`,
+  analog `botctl`. Deployment: `gunicorn "telegram_formatter.app:app"`.
+  Vollständige Alt→Neu-Mappe: [MIGRATION.md](MIGRATION.md).
+- **Doku nach Zweck getrennt:** `docs/` (aktuelle Architektur/Doku),
+  `peer-review/` (Review-Berichte + Verlauf inkl. `archive/` für
+  abgeschlossene Artefakte), `audit/` (Prüf-Matrix, Audit-Trail), `security/`
+  (Schutzziel-Matrix). `docs/BLUEPRINT.md` → `docs/ARCHITECTURE.md`;
+  `docs/CODE_REVIEW.md` → `peer-review/CODE_REVIEW.md`; `docs/PROMPT.md` und
+  beide `docs/PR_DESCRIPTION*.md` (abgeschlossene Task-Artefakte zu
+  v1.1.0/v1.3.0) → `peer-review/archive/`.
+- **Konfiguration konsolidiert:** `ruff.toml` und der `conftest.py`-Sys.path-
+  Hack aufgelöst in eine `pyproject.toml` (PEP 621: Paket-Metadaten,
+  Konsolen-Skripte `telegram-formatter`/`botctl`, Ruff-, pytest- und
+  Bandit-Konfiguration; Laufzeit-Deps dynamisch aus `requirements.txt` —
+  keine duplizierten Pin-Listen).
+- **Audit-Trail umgezogen:** Standardpfad `botctl` von `.botkit/reviews.json`
+  → `audit/reviews.json` (versionierbarer, dokumentierter Ort; Verhalten
+  identisch).
+- **Alle Verlinkungen aktualisiert:** README-Strukturbaum & -kommandos,
+  `docs/*`, CI-Workflow (`paths`-Filter, Lint-/Scan-Ziele, `botctl`-Aufrufe),
+  `.github/CODEOWNERS`, PR-Template, Docstrings und Beispiel-Code.
+
+### Hinzugefügt
+
+- `LICENSE` — fehlte trotz README-badge „MIT"; im Zuge der Reorganisation
+  angelegt und an die Lizenz-Umstellung auf `main` (`a2c3dcb`)
+  **angleichen: GNU GPL v3** (`license = "GPL-3.0-or-later"` in
+  `pyproject.toml`, README-Badge angepasst).
+  `CONTRIBUTING.md`, `MIGRATION.md`, `.github/SECURITY.md`
+  (Offenlegungsprozess, von GitHub erkannt), `security/README.md`
+  (Schutzziel-Matrix S1–S8 mit Verifikationszuordnung), `audit/README.md`,
+  `peer-review/README.md` (Konventionen) + `peer-review/TEMPLATE.md`
+  (Review-Berichtsvorlage), `bots/README.md` (dokumentierter Ort für
+  Nutzer-Bots — die CI/CODEOWNERS-Pfade `bots/**` existierten bereits ohne
+  Ordner).
+
+### Entfernt (toter Code & Redundanz)
+
+- `utils.RICH_MESSAGE_MAX_BLOCKS` — definiert, im gesamten Repo ungenutzt.
+- `botkit.review.INFO` — dritter Severity-Wert ohne jede Referenz
+  (RULES kennen nur `BLOCKER`/`WARNING`).
+- `botkit.__version__` — duplizierte die Projektversion und driftete bereits;
+  einzige Quelle ist jetzt `telegram_formatter.__version__`.
+- `conftest.py` (17 Zeilen sys.path-Manipulation) — ersetzt durch deklarativen
+  `pythonpath`-Eintrag in `pyproject.toml`.
+- Veraltete README-Doppelungen (Strukturbaum vs. Doku-Index führten
+  verschiedene, teils inkonsistente Dateilisten) — konsolidiert.
+
+### Behoben (Review-Gate-Härtung nach erstem CI-Lauf)
+
+- **CI `bot-gate`:** Die Diff-Schleife zieht jetzt nur noch `*.py`-Dateien
+  durch `botctl review` (`grep -E '\.py$'`). Zuvor stürzte das Gate ab, weil
+  das neue `bots/README.md` vom `bots/**`-Filter erfasst und in den
+  AST-Parser gefüttert wurde.
+- **`botctl review`:** nicht-parsbare Eingaben (Markdown, Binärdateien,
+  Nullbytes) werden als Eingabefehler gemeldet — Exit-Code 2, klare Meldung,
+  **kein** Ticket und **kein** Audit-Trail — statt mit rohem Python-Traceback.
+  Regressionstests: `tests/test_botctl.py` (3).
+
+### Verifiziert
+
+- `pytest -q` → **178 passed** (175 aus v1.3.0 unverändert + 3 Regressionstests
+  für `botctl review`); `ruff check .` sauber; Bandit `-ll` ohne Befund.
+- End-to-End-Rauchtests: CLI-Dry-Run, Flask-Testclient (`/`,
+  `/api/convert`, `/api/send`), `botctl`-Umlauf `review → approve×2 →
+  verify` inkl. Ledger-Roundtrip gegen `examples/own_bot/minimal_bot.py`.
+- Alle internen Markdown-/Quelltext-Links und relativen Pfade skriptgeprüft
+  (0 defekte Referenzen nach der Migration).
+
 ## [1.3.0] - 2026-09-11
 
 ### Hinzugefügt

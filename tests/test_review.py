@@ -1,4 +1,4 @@
-"""Tests für :mod:`botkit.review` — Statik, Checkliste, Vier-Augen-Prinzip."""
+"""Tests für :mod:`telegram_formatter.botkit.review` — Statik, Checkliste, Vier-Augen-Prinzip."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from botkit.registry import BotRegistry
-from botkit.review import (
+from telegram_formatter.botkit.registry import BotRegistry
+from telegram_formatter.botkit.review import (
     CHECKLIST_IDS,
     Reviewer,
     ReviewError,
@@ -19,7 +19,7 @@ from botkit.review import (
     analyze_source,
     source_sha256,
 )
-from botkit.tokens import BotToken
+from telegram_formatter.botkit.tokens import BotToken
 
 ROOT = Path(__file__).resolve().parents[1]
 SECRET = "123456789:" + "A" * 35
@@ -200,7 +200,7 @@ def test_decision_must_match_the_ticket_hash():
     ledger = ReviewLedger(clock=FakeClock())
     ticket = ledger.submit(123456789, "a" * 64)
     other = Reviewer("alice", ReviewRole.MAINTAINER)
-    from botkit.review import ReviewDecision
+    from telegram_formatter.botkit.review import ReviewDecision
 
     with pytest.raises(ReviewError):
         ledger.decide(ticket.ticket_id,
@@ -208,7 +208,7 @@ def test_decision_must_match_the_ticket_hash():
 
 
 def test_ledger_roundtrip_contains_metadata_only(tmp_path):
-    from botkit.review import ReviewDecision
+    from telegram_formatter.botkit.review import ReviewDecision
 
     ledger = ReviewLedger(clock=FakeClock())
     ticket = ledger.submit(123456789, "c" * 64, file="bot.py", static_findings=["BK010@3"])

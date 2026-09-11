@@ -1,6 +1,6 @@
 """
-botkit/privacy.py
-=================
+telegram_formatter/botkit/privacy.py
+====================================
 Datenschutz-Grundlagen des ``botkit``-Pakets. Dieses Modul ist die
 technische Durchsetzung der wichtigsten Anforderung: **Es werden keine
 Nutzerdaten gespeichert, geloggt oder weitergegeben.**

@@ -1,12 +1,12 @@
 r"""
-utils.py
-========
+telegram_formatter/utils.py
+===========================
 Reine, I/O-freie Konvertierungs- und Aufteilungslogik für
 "Markdown + LaTeX -> Telegram".
 
 Dieses Modul enthält KEINE Netzwerk- oder Flask-Abhängigkeiten und ist
 dadurch isoliert testbar (siehe ``tests/test_utils.py``). Die eigentlichen
-Versandaufrufe liegen in :mod:`sender`, die Web-Oberfläche in :mod:`app`.
+Versandaufrufe liegen in :mod:`telegram_formatter.sender`, die Web-Oberfläche in :mod:`telegram_formatter.app`.
 
 Übersicht der Verarbeitungskette
 --------------------------------
@@ -50,8 +50,6 @@ from dataclasses import dataclass
 REGULAR_MESSAGE_MAX_CHARS = 4_096
 #: Maximale Zeichenlänge einer Rich Message (sendRichMessage, UTF-8).
 RICH_MESSAGE_MAX_CHARS = 32_768
-#: Maximale Block-Anzahl einer Rich Message (Listeneinträge, Tabellenzeilen ...).
-RICH_MESSAGE_MAX_BLOCKS = 500
 
 
 @dataclass

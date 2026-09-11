@@ -1,17 +1,17 @@
-"""Tests für :mod:`botkit.registry` — Registrierung ohne Token-Speicherung."""
+"""Tests für :mod:`telegram_formatter.botkit.registry` — Registrierung ohne Token-Speicherung."""
 
 from __future__ import annotations
 
 import pytest
 
-from botkit.registry import (
+from telegram_formatter.botkit.registry import (
     BotRegistry,
     RegistrationError,
     RegistrationStatus,
     validate_chat_id,
     validate_owner_ref,
 )
-from botkit.tokens import BotToken
+from telegram_formatter.botkit.tokens import BotToken
 
 SECRET = "123456789:" + "A" * 35
 

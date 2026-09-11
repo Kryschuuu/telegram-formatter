@@ -1,5 +1,10 @@
 # PR-Beschreibung — Telegram Formatter v1.1.0
 
+> **Archiviert:** abgeschlossenes Vorgangs-Artefakt (PR-Beschreibung v1.1.0) — enthalten im
+> Review-Verlauf `peer-review/archive/`. Die Pfad-/Kommandoangaben entsprechen
+> dem Stand zum Zeitpunkt des Vorgangs und wurden bewusst nicht nachgeführt
+> (historischer Quelltext; aktuelle Kommandos: siehe README).
+
 > Bereits verwendbarer Text für den Pull Request (Titel + Body unten
 > ab der Markierung kopieren).
 

@@ -1,6 +1,6 @@
 """
-botctl.py
-=========
+telegram_formatter/botctl.py
+============================
 Kommandozeilen-Werkzeug für eigene, dezentrale Telegram-Bots.
 
 Anders als ``cli.py`` (das nur konvertiert und mit *einem* zentral konfigurierten
@@ -11,25 +11,26 @@ senden — ohne dass ein Token oder Nachrichteninhalt gespeichert wird.
 Befehle::
 
     # 1) Eigener Bot: Token gegen Telegram prüfen (nichts wird gespeichert)
-    python botctl.py register --token-env TELEGRAM_BOT_TOKEN --owner alice
+    python -m telegram_formatter.botctl register --token-env TELEGRAM_BOT_TOKEN --owner alice
 
     # 2) Bot-Code statisch prüfen und Review-Ticket anlegen
-    python botctl.py review examples/own_bot/minimal_bot.py --bot-id 123456789
+    python -m telegram_formatter.botctl review examples/own_bot/minimal_bot.py --bot-id 123456789
 
     # 3) Zwei Freigaben (Vier-Augen-Prinzip, mindestens eine von Maintainer:in)
-    python botctl.py approve RV-1A2B3C4D --reviewer alice --role maintainer \\
+    python -m telegram_formatter.botctl approve RV-1A2B3C4D --reviewer alice --role maintainer \\
         --checks C1,C2,C3,C4,C5,C6,C7,C8,C9
-    python botctl.py approve RV-1A2B3C4D --reviewer bob --role contributor \\
+    python -m telegram_formatter.botctl approve RV-1A2B3C4D --reviewer bob --role contributor \\
         --checks C1,C2,C3,C4,C5,C6,C7,C8,C9
 
     # 4) In einer Session senden (Token nur für diese Session im RAM)
-    python botctl.py send --chat-id -1001234567890 --file beispiel_input.txt \\
+    python -m telegram_formatter.botctl send --chat-id -1001234567890 --file beispiel_input.txt \\
         --bot-source examples/own_bot/minimal_bot.py --send
 
 Der Review-Stand liegt in einer Metadaten-Datei (Standard:
-``.botkit/reviews.json``) — dort stehen ausschließlich Ticket-IDs, Bot-IDs,
+``audit/reviews.json``) — dort stehen ausschließlich Ticket-IDs, Bot-IDs,
 Prüfsummen, Regel-IDs und Entscheidungen, **keine** Inhalte und **keine**
-Tokens. Diese Datei gehört ins Repository; sie ist der Audit-Trail.
+Tokens. Diese Datei gehört ins Repository (Ordner ``audit/``); sie ist der
+Audit-Trail. Details: ``audit/README.md``.
 """
 
 from __future__ import annotations
@@ -40,9 +41,9 @@ import os
 import sys
 from pathlib import Path
 
-from botkit.privacy import install_privacy_filters, scrub_environment
-from botkit.registry import BotRegistry, RegistrationError
-from botkit.review import (
+from telegram_formatter.botkit.privacy import install_privacy_filters, scrub_environment
+from telegram_formatter.botkit.registry import BotRegistry, RegistrationError
+from telegram_formatter.botkit.review import (
     CHECKLIST,
     CHECKLIST_IDS,
     Reviewer,
@@ -53,11 +54,11 @@ from botkit.review import (
     ReviewRole,
     source_sha256,
 )
-from botkit.session import SessionConfig, SessionError, SessionManager
-from botkit.telegram_api import TelegramAPIError, get_me
-from botkit.tokens import BotToken, TokenError
+from telegram_formatter.botkit.session import SessionConfig, SessionError, SessionManager
+from telegram_formatter.botkit.telegram_api import TelegramAPIError, get_me
+from telegram_formatter.botkit.tokens import BotToken, TokenError
 
-DEFAULT_LEDGER = ".botkit/reviews.json"
+DEFAULT_LEDGER = "audit/reviews.json"
 
 LOGGER = logging.getLogger("botctl")
 
@@ -119,7 +120,7 @@ def cmd_register(args: argparse.Namespace) -> int:
     if removed:
         print(f"    Hinweis  : ${args.token_env} wurde aus dem Environment entfernt.")
     print("\nNächster Schritt: Bot-Code reviewen lassen")
-    print(f"    python botctl.py review <bot-code.py> --bot-id {record.identity.bot_id}")
+    print(f"    python -m telegram_formatter.botctl review <bot-code.py> --bot-id {record.identity.bot_id}")
     return 0
 
 
@@ -132,7 +133,18 @@ def cmd_review(args: argparse.Namespace) -> int:
 
     ledger = _load_ledger(args.ledger)
     gate = _gate(ledger)
-    report = gate.analyze(path)
+    try:
+        report = gate.analyze(path)
+    except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
+        # Das Review-Tor prüft Python-Quellcode. Nicht-parsbare Eingaben
+        # (z. B. Markdown-READMEs im bots/-Ordner, Binärdateien) werden als
+        # Eingabefehler gemeldet — nicht als Traceback und ohne Ticket.
+        ort = f" in Zeile {exc.lineno}" if isinstance(exc, SyntaxError) else ""
+        print(
+            f"✖ {path}: nicht als Python-Quelltext lesbar{ort} "
+            f"({exc.__class__.__name__}) — nur *.py-Dateien zum Review einreichen."
+        )
+        return 2
 
     print(report.as_text())
     if not report.ok:
@@ -153,7 +165,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     print(f"\n✔ Ticket {ticket.ticket_id} angelegt (sha256={ticket.source_sha256[:12]}).")
     print(f"    Audit-Trail: {args.ledger}")
     print("    Freigabe durch zwei Personen, davon mindestens eine Maintainer:in:")
-    print(f"    python botctl.py approve {ticket.ticket_id} --reviewer <handle> "
+    print(f"    python -m telegram_formatter.botctl approve {ticket.ticket_id} --reviewer <handle> "
           f"--role maintainer --checks {','.join(sorted(CHECKLIST_IDS))}")
     return 0
 
@@ -265,7 +277,7 @@ def cmd_send(args: argparse.Namespace) -> int:
     try:
         with session:
             if not args.send:
-                from utils import build_messages
+                from telegram_formatter.utils import build_messages
 
                 messages = build_messages(text, session.chat_id)
                 print(f"Dry-Run: {len(messages)} Nachricht(en) gebaut "

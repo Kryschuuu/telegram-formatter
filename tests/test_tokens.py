@@ -1,10 +1,10 @@
-"""Tests für :mod:`botkit.tokens` — Formatvalidierung, Redaction, Vault-TTL."""
+"""Tests für :mod:`telegram_formatter.botkit.tokens` — Formatvalidierung, Redaction, Vault-TTL."""
 
 from __future__ import annotations
 
 import pytest
 
-from botkit.tokens import (
+from telegram_formatter.botkit.tokens import (
     BotToken,
     InMemoryTokenVault,
     PassthroughTokenVault,

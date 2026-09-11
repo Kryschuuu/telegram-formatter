@@ -1,8 +1,29 @@
+# Git-Ausschlüsse — Artefakte, die nicht ins Repository gehören.
+# (Struktur-Referenz für Audits: README „Projektstruktur“.)
+
+# Umgebungen & Secrets
 .env
 .venv/
 venv/
-BAK/
+
+# Python-Artefakte
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+
+# Tool-Caches & Reports
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Altlasten: lokaler Kram & Vorgänger des Audit-Trails
+# (Review-Trail liegt seit v2.0.0 versioniert in audit/reviews.json)
+BAK/
+.botkit/
+
+# Betriebssysteme
 .DS_Store

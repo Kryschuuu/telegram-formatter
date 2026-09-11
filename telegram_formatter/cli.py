@@ -1,18 +1,18 @@
 """
-cli.py
-======
+telegram_formatter/cli.py
+=========================
 Kommandozeilen-Einstieg für die Konvertierung und den Versand ohne Browser.
 
 Beispiele::
 
     # Dry-Run: zeigt nur die gebauten API-Payloads an (kein Token nötig)
-    python cli.py beispiel_input.txt
+    python -m telegram_formatter.cli beispiel_input.txt
 
     # Aus STDIN lesen
-    echo "**fett** und $x^2$" | python cli.py
+    echo "**fett** und $x^2$" | python -m telegram_formatter.cli
 
     # Wirklich senden
-    python cli.py beispiel_input.txt --chat-id -100123456789 --send --token 123:ABC
+    python -m telegram_formatter.cli beispiel_input.txt --chat-id -100123456789 --send --token 123:ABC
 
 Umgebungsvariablen: ``TELEGRAM_BOT_TOKEN``, ``TELEGRAM_CHAT_ID``.
 """
@@ -24,8 +24,8 @@ import json
 import os
 import sys
 
-from sender import SendError, send_message
-from utils import build_messages
+from telegram_formatter.sender import SendError, send_message
+from telegram_formatter.utils import build_messages
 
 
 def _build_parser() -> argparse.ArgumentParser:

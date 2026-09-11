@@ -1,4 +1,4 @@
-"""Tests für :mod:`botkit.privacy` — Redaction, Fingerprints, audit()."""
+"""Tests für :mod:`telegram_formatter.botkit.privacy` — Redaction, Fingerprints, audit()."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from botkit.privacy import (
+from telegram_formatter.botkit.privacy import (
     REDACTED,
     RedactingFilter,
     audit,

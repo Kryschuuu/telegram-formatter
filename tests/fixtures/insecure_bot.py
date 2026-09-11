@@ -3,7 +3,7 @@ insecure_bot.py — **Negativbeispiel, niemals ausführen!**
 =========================================================
 
 Diese Datei existiert ausschließlich als Test-Fixture für
-``botkit.review.analyze_source``. Sie enthält absichtlich fast jeden
+``telegram_formatter.botkit.review.analyze_source``. Sie enthält absichtlich fast jeden
 Verstoß, den die statischen Regeln (BK001–BK012) erkennen müssen:
 
 ===================  ======================================================

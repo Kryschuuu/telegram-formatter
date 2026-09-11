@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-import app as app_module
+from telegram_formatter import app as app_module
 
 
 @pytest.fixture()

@@ -1,10 +1,10 @@
 """
-sender.py
-=========
-Netzwerkversand der in :mod:`utils` gebauten Nachrichten an die
+telegram_formatter/sender.py
+============================
+Netzwerkversand der in :mod:`telegram_formatter.utils` gebauten Nachrichten an die
 Telegram-Bot-API.
 
-Bewusst von der reinen Konvertierungslogik getrennt, damit ``utils`` ohne
+Bewusst von der reinen Konvertierungslogik getrennt, damit ``telegram_formatter.utils`` ohne
 Netzwerkzugriff testbar bleibt. ``requests`` wird erst beim tatsächlichen
 Versand importiert (lazy), damit Konvertierung + Tests ohne die Bibliothek
 funktionieren.
@@ -12,7 +12,7 @@ funktionieren.
 
 from __future__ import annotations
 
-from utils import TelegramMessage
+from telegram_formatter.utils import TelegramMessage
 
 
 class SendError(RuntimeError):
