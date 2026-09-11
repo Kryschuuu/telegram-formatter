@@ -36,7 +36,7 @@ Setze im Formular die folgenden Werte:
 | **Name** | `telegram-formatter` (frei wählbar) |
 | **Environment** | `Python` |
 | **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT` |
+| **Start Command** | `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT --workers 2 --timeout 120` |
 | **Plan** | Free (oder größer) |
 
 > Der `Start Command` ist wichtig: Die App muss auf `0.0.0.0` und dem von
@@ -70,10 +70,11 @@ aus dem Blueprint entstanden sind. Für den bestehenden Dienst gilt deshalb:
 
 Unter **Environment → Environment Variables** diese Einträge hinzufügen:
 
-| Key | Wert |
+| Variable | Wert |
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Dein Token von BotFather, z. B. `123456:ABC-...` |
-| `TELEGRAM_CHAT_ID` | (optional) Standard-Ziel-Chat, z. B. `-100123456789` |
+| `TELEGRAM_CHAT_ID` | **empfohlen & sicherheitsrelevant:** pinnt den Zielchat von `/api/send`; ohne sie akzeptiert die API nur eine gültige numerische `chat_id` pro Request |
+| `TELEGRAM_FORMATTER_API_TOKEN` | (optional, seit v2.1.0) gesetzt ⇒ `POST /api/*` verlangt passenden `X-Auth-Token`-Header — sinnvoll, wenn die Instanz öffentlich erreichbar ist |
 | `PYTHON_VERSION` | (optional) z. B. `3.11` |
 
 Mit **Add Variable** speichern.

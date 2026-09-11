@@ -26,6 +26,7 @@ import ast
 import hashlib
 import json
 import logging
+import re
 import secrets
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -36,7 +37,6 @@ from urllib.parse import urlparse
 
 from .privacy import audit
 from .registry import BotRegistry
-from .tokens import TOKEN_PATTERN
 
 __all__ = [
     "CHECKLIST",
@@ -66,13 +66,16 @@ BLOCKER = "blocker"
 WARNING = "warning"
 
 #: Module, die in einem Nutzer-Bot nichts verloren haben
-#: (Persistenz, Shell, Roh-Sockets, Fremd-Storage, Deserialisierung).
+#: (Persistenz, Shell, Roh-Sockets, Fremd-Storage, Deserialisierung,
+#: Reflektion — importlib/tempfile/shutil/builtins wurden in den
+#: Bypass-Reproduktionen des Audits H-1 als Einfallstore bestätigt).
 FORBIDDEN_IMPORTS = frozenset(
     {
         "sqlite3", "shelve", "pickle", "marshal", "dill", "joblib",
         "subprocess", "socket", "smtplib", "ftplib", "telnetlib", "paramiko",
         "redis", "pymongo", "boto3", "botocore", "psycopg2", "pymysql",
         "elasticsearch", "kafka", "sqlalchemy", "csv", "xlwt", "openpyxl",
+        "tempfile", "importlib", "shutil", "builtins",
     }
 )
 
@@ -81,6 +84,9 @@ ALLOWED_HTTP_HOSTS = ("api.telegram.org",)
 
 #: Methoden, die ohne Prüfung der URL kritisch sind.
 HTTP_CALL_NAMES = frozenset({"get", "post", "put", "patch", "delete", "request", "urlopen"})
+
+#: Modulwurzeln, deren HTTP-Aufrufe URL-geprüft werden müssen (nach Alias-Auflösung).
+HTTP_MODULE_ROOTS = frozenset({"requests", "httpx", "urllib", "http", "aiohttp"})
 
 #: Namen, hinter denen in Logs typischerweise Nachrichteninhalte stecken.
 SENSITIVE_LOG_NAMES = frozenset(
@@ -240,13 +246,83 @@ def _suppressed(source_lines: Sequence[str], lineno: int, rule_id: str) -> bool:
     return False
 
 
+#: Token-artige Literal überall im Text (unverankert — fängt auch
+#: eingebettete und ann_assignierte Secrets; Audit H-1/C).
+_TOKEN_EMBEDDED = re.compile(r"\d{5,16}:[A-Za-z0-9_-]{35}")
+
+
+@dataclass
+class _ModuleFacts:
+    """
+    Kontextwissen aus dem Modul, damit Alias-Imports die Regeln nicht hebeln.
+
+    Audit H-1 reproduzierte Bypasses via ``import requests as rq``,
+    ``from os import system`` und variablen URLs; alle drei laufen über
+    diese Zuordnungen.
+    """
+
+    #: lokaler Name → Modulwurzel (``rq`` → ``requests``, ``sock`` → ``socket``)
+    root_aliases: dict[str, str] = field(default_factory=dict)
+    #: from-import-Name → punktierter Pfad (``system`` → ``os.system``)
+    name_paths: dict[str, str] = field(default_factory=dict)
+    #: einfach zugewiesene Modul-Konstanten (Name → Stringwert)
+    str_consts: dict[str, str] = field(default_factory=dict)
+
+
+def collect_facts(tree: ast.Module) -> _ModuleFacts:
+    """1-Pass-Vorlauf: Imports, Session-Objekte, eindeutige String-Konstanten."""
+    facts = _ModuleFacts()
+
+    store_counts: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            store_counts[node.id] = store_counts.get(node.id, 0) + 1
+
+    # Imports auf allen Ebenen (auch funktionslokal — Nutzer bots importieren gern späät).
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".", 1)[0]
+                facts.root_aliases[alias.asname or top] = top
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            root = (node.module or "").split(".", 1)[0]
+            for alias in node.names:
+                facts.name_paths[alias.asname or alias.name] = (
+                    f"{node.module}.{alias.name}" if node.module else alias.name
+                )
+            if root:
+                facts.root_aliases.setdefault(root, root)
+
+    # Modul-Ebene: String-Konstanten (Assign + AnnAssign) und Session-Objekte.
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                for t in node.targets:
+                    if isinstance(t, ast.Name) and store_counts.get(t.id, 0) == 1:
+                        facts.str_consts[t.id] = node.value.value
+            elif isinstance(node.value, ast.Call):
+                dotted = _dotted(node.value.func)
+                tail = dotted.rsplit(".", 1)[-1]
+                if tail in {"Session", "Client", "AsyncClient"} and "." in dotted:
+                    root = facts.root_aliases.get(dotted.split(".", 1)[0], dotted.split(".", 1)[0])
+                    for t in node.targets:
+                        if isinstance(t, ast.Name):
+                            facts.root_aliases[t.id] = root
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, str) and isinstance(node.target, ast.Name):
+            if store_counts.get(node.target.id, 0) == 1:
+                facts.str_consts[node.target.id] = node.value.value
+    return facts
+
+
 class _SecurityVisitor(ast.NodeVisitor):
     """Sammelt Regelverstöße in einem Modul (rein, ohne I/O)."""
 
-    def __init__(self, filename: str, source: str) -> None:
+    def __init__(self, filename: str, source: str, facts: _ModuleFacts | None = None) -> None:
         self.filename = filename
         self.lines = source.splitlines()
         self.findings: list[Finding] = []
+        self.facts = facts or _ModuleFacts()
 
     # -- Hilfsfunktionen ----------------------------------------------------
     def _add(self, rule_id: str, node: ast.AST, message: str) -> None:
@@ -281,28 +357,63 @@ class _SecurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     # -- Zuweisungen (hartkodierte Secrets) ---------------------------------
+    def _check_secret_literal(self, node: ast.AST, literal: str, targets: str) -> None:
+        if _TOKEN_EMBEDDED.search(literal):
+            self._add("BK006", node, "Bot-Token im Quelltext hartkodiert.")
+        elif any(key in targets for key in ("token", "secret", "api_key", "password")):
+            self._add("BK006", node, f"Geheimnis als Literal an '{targets.strip()}'.")
+
     def visit_Assign(self, node: ast.Assign) -> None:
         if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-            literal = node.value.value
-            if TOKEN_PATTERN.search(literal) or TOKEN_PATTERN.match(literal.strip()):
-                self._add("BK006", node, "Bot-Token im Quelltext hartkodiert.")
-            else:
-                targets = " ".join(_dotted(t).lower() for t in node.targets)
-                if any(key in targets for key in ("token", "secret", "api_key", "password")):
-                    self._add("BK006", node, f"Geheimnis als Literal an '{targets.strip()}'.")
+            targets = " ".join(_dotted(t).lower() for t in node.targets)
+            self._check_secret_literal(node, node.value.value, targets)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        # `API_TOKEN: str = "123456:AA…"` — Audit H-1/C: früher unbemerkt,
+        # weil nur ast.Assign geprüft wurde.
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            self._check_secret_literal(node, node.value.value, _dotted(node.target).lower())
+        self.generic_visit(node)
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        # Jedes tokenförmige Literal überall (Dict-Werte, Call-Argumente,
+        # Listen, Rückgaben) — Assignment-Formen können nicht einzeln
+        # abgedeckt werden, das Literal selbst ist das Signal (H-1/C).
+        if isinstance(node.value, str) and _TOKEN_EMBEDDED.search(node.value):
+            self._add("BK006", node, "Token-förmiges Literal im Quelltext.")
         self.generic_visit(node)
 
     # -- Aufrufe ------------------------------------------------------------
+    def _resolve_call_name(self, raw_name: str) -> str:
+        """Bildet Aliases/from-Imports auf echte Modulpfade ab (Audit H-1).
+
+        ``rq.get`` → ``requests.get``; ``system(...)`` mit
+        ``from os import system`` → ``os.system``; ``s.post`` mit
+        ``s = requests.Session()`` → ``requests.post``.
+        """
+        if not raw_name:
+            return ""
+        head, _, rest = raw_name.partition(".")
+        mapped = self.facts.name_paths.get(head) or self.facts.root_aliases.get(head)
+        if mapped is None:
+            if "." not in raw_name and head in self.facts.name_paths:
+                return self.facts.name_paths[head]
+            return raw_name
+        return f"{mapped}.{rest}" if rest else mapped
+
     def visit_Call(self, node: ast.Call) -> None:
-        name = _dotted(node.func)
+        name = self._resolve_call_name(_dotted(node.func))
         short = name.split(".")[-1] if name else ""
         root = name.split(".")[0] if name else ""
 
         # Dynamische Ausführung / Deserialisierung
-        if name.startswith("pickle."):
+        if name.startswith("pickle.") or name.startswith("dill.") or name.startswith("marshal."):
             self._add("BK003", node, f"Deserialisierung via '{name}' ist untersagt.")
         elif short in DYNAMIC_EXEC_CALLS and not name.count("."):
             self._add("BK003", node, f"Aufruf von '{name}' ist untersagt.")
+        elif short in DYNAMIC_EXEC_CALLS and root in {"builtins", "importlib"}:
+            self._add("BK003", node, f"Deserialisierung/Exec über '{name}' ist untersagt.")
 
         # Shell / Prozesse
         if root in {"os", "subprocess"} and short in SHELL_CALLS:
@@ -324,13 +435,13 @@ class _SecurityVisitor(ast.NodeVisitor):
             if any(flag in mode for flag in ("w", "a", "x")):
                 self._add("BK002", node, f"Datei wird zum Schreiben geöffnet (mode='{mode}').")
 
-        # HTTP-Aufrufe: Ziel-Host prüfen
-        if short in HTTP_CALL_NAMES and root in {"requests", "httpx", "session", "urllib", "http"}:
-            self._check_http_target(node, name)
-
         # Netzwerk-Server
         if name in {"socket.socket", "socket.create_server"} or short == "serve_forever":
             self._add("BK008", node, f"Eigener Socket-Server ('{name}') ist untersagt.")
+
+        # HTTP-Aufrufe: Ziel-Host prüfen (nach Alias-Auflösung, H-1)
+        if short in HTTP_CALL_NAMES and root in HTTP_MODULE_ROOTS:
+            self._check_http_target(node, name)
 
         # Logging / Ausgaben mit Inhalten
         if short in LOG_METHODS and root in {"logging", "logger", "log", "self", ""}:
@@ -344,23 +455,52 @@ class _SecurityVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
+    # -- Ziel-URL-Auflösung ---------------------------------------------------
+    def _fold_string(self, expr: ast.expr) -> str | None:
+        """Löst einfache String-Ziele auf: Literal, Modul-Konstante, f-String-Kopf."""
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+            return expr.value
+        if isinstance(expr, ast.Name) and expr.id in self.facts.str_consts:
+            return self.facts.str_consts[expr.id]
+        if isinstance(expr, ast.JoinedStr):
+            # f"api.telegram.org/bot{token}/x" → konstanter Präfix reicht
+            # zur Host-Bestimmung; sonst None (nicht prüfbar → BK010).
+            prefix: list[str] = []
+            for part in expr.values:
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    prefix.append(part.value)
+                else:
+                    break
+            return "".join(prefix) if prefix else None
+        return None
+
     def _check_http_target(self, node: ast.Call, name: str) -> None:
-        """Nur api.telegram.org darf per HTTP kontaktiert werden."""
+        """Nur api.telegram.org darf per HTTP kontaktiert werden.
+
+        Audit H-1: Vorher zählten nur Literal-Argumente — eine URL in einer
+        Variable oder einem f-String hebelte BK004 vollständig aus. Jetzt
+        werden Modul-Konstanten gefaltet und f-String-Köpfe ausgewertet;
+        wirklich unauflösbare Ziele bleiben BK010 (Warning, Checkliste C4).
+        """
         target = None
-        if node.args and isinstance(node.args[0], ast.Constant):
-            target = node.args[0].value
-        else:
+        if node.args:
+            target = self._fold_string(node.args[0])
+        if target is None:
             for kw in node.keywords:
-                if kw.arg == "url" and isinstance(kw.value, ast.Constant):
-                    target = kw.value.value
+                if kw.arg == "url":
+                    target = self._fold_string(kw.value)
+                    break
         if target is None:
             self._add("BK010", node, f"Ziel-URL von '{name}' ist nicht statisch prüfbar.")
             return
-        if not isinstance(target, str):
-            return
         host = urlparse(target).hostname or ""
         if not host:
-            self._add("BK010", node, f"Ziel-URL von '{name}' hat keinen erkennbaren Host.")
+            # Konstanter Präfix ohne Host (z. B. f"https://{var}/…") oder
+            # relatives Ziel: prüfbar nur, wenn der Host Teil des Präfix war.
+            if "://" in target:
+                self._add("BK010", node, f"Ziel-URL von '{name}' hat keinen erkennbaren Host.")
+            else:
+                self._add("BK010", node, f"Ziel-URL von '{name}' ist nicht vollständig auflösbar.")
             return
         if not any(host == allowed or host.endswith(f".{allowed}") for allowed in ALLOWED_HTTP_HOSTS):
             self._add("BK004", node, f"Ausgehender Aufruf an '{host}' ist nicht erlaubt.")
@@ -376,9 +516,15 @@ class _SecurityVisitor(ast.NodeVisitor):
 
 
 def analyze_code(source: str, *, filename: str = "<string>") -> ReviewReport:
-    """Führt die statische Analyse auf einem Quelltext aus (testfreundlich)."""
+    """Führt die statische Analyse auf einem Quelltext aus (testfreundlich).
+
+    Bewusst Heuristik, kein Sandboxing: die Regeln fangen die dokumentierten
+    typischen Verstöße (auch gegen Alias-/Konstanten-Tricks aus Audit H-1),
+    die menschliche Abnahme bleibt zweite Pflichtebene.
+    """
     tree = ast.parse(source, filename=filename)
-    visitor = _SecurityVisitor(filename, source)
+    facts = collect_facts(tree)
+    visitor = _SecurityVisitor(filename, source, facts)
     visitor.visit(tree)
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
     findings = sorted(visitor.findings, key=lambda f: (f.line, f.rule_id))
@@ -484,7 +630,15 @@ class ReviewTicket:
         return [d for d in self.decisions if not d.approved]
 
     def is_approved(self, *, min_approvals: int, require_maintainer: bool) -> bool:
-        """Vier-Augen-Prinzip: genug Freigaben, davon mindestens eine Maintainer."""
+        """Vier-Augen-Prinzip: genug Freigaben, davon mindestens eine Maintainer.
+
+        Audit B-3: Eine einzige Ablehnung invalidiert den Ticket-Stand —
+        unabhängig davon, wie viele Freigaben bereits eingetragen waren.
+        Der Aufhebungspfad ist ein *neues* Ticket nach Codeänderung
+        (:meth:`ReviewLedger.submit` legt bei abgelehntem Vorgang eines an).
+        """
+        if self.rejections:
+            return False
         approvals = self.approvals
         if len(approvals) < min_approvals:
             return False
@@ -515,9 +669,15 @@ class ReviewLedger:
 
     def submit(self, bot_id: int, source_sha256: str, *, file: str = "",
                static_findings: Iterable[str] = ()) -> ReviewTicket:
-        """Legt ein Ticket an (idempotent pro Bot+Prüfsumme)."""
+        """Legt ein Ticket an (idempotent pro Bot+Prüfsumme).
+
+        Ausnahme (Audit B-3): War das bisherige Ticket zu dieser Prüfsumme
+        abgelehnt, entsteht ein **neues** Ticket — eine einmal ausgesprochene
+        Ablehnung kann nicht durch weitere approve-Aufrufe überstimmt werden,
+        der Bot muss erneut vollständig freigegeben werden.
+        """
         existing = self.ticket_for(bot_id, source_sha256)
-        if existing is not None:
+        if existing is not None and not existing.rejections:
             return existing
         ticket = ReviewTicket(
             ticket_id=self._new_ticket_id(),
@@ -563,10 +723,12 @@ class ReviewLedger:
         return self._tickets.get(ticket_id)
 
     def ticket_for(self, bot_id: int, source_sha256: str) -> ReviewTicket | None:
-        for ticket in self._tickets.values():
+        """Neuestes Ticket zu (Bot, Prüfsumme) — nach Re-Submit zählt dieses."""
+        found: ReviewTicket | None = None
+        for ticket in self._tickets.values():  # Einfügereihenfolge = chronologisch
             if ticket.bot_id == int(bot_id) and ticket.source_sha256 == source_sha256:
-                return ticket
-        return None
+                found = ticket
+        return found
 
     # ------------------------------------------------------- Audit-Trail (Datei)
     def save(self, path: str | Path) -> None:

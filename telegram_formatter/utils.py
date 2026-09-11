@@ -81,8 +81,14 @@ def normalize_text(text: str) -> str:
     ``ì`` in mehrere Codepoints (``i`` + COMBINING GRAVE ACCENT). Das
     verschiebt nachgelagerte Offsets und Längenberechnungen. NFC stellt
     sicher, dass ein Zeichen immer EIN Codepoint ist.
+
+    NUL-Zeichen werden entfernt: ``_PlaceholderStore`` markiert geschützte
+    Bereiche mit ``\\x00…\\x00``; Nutzer-NULs (via JSON ``\\u0000`` möglich)
+    würden sonst Platzhalter kollidieren lassen und von Telegram ohnehin
+    abgelehnt (Audit N-1).
     """
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\x00", "")
     return unicodedata.normalize("NFC", text)
 
 
@@ -147,7 +153,7 @@ def split_formulas(text: str) -> list[Segment]:
         if text[i:i+2] == "$$":
             start = i + 2
             end = text.find("$$", start)
-            if end != -1:
+            if end != -1 and text[start:end].strip() and "\n\n" not in text[start:end]:
                 formula = text[start:end]
                 flush_text()
                 segments.append(Segment("display_math", formula))
@@ -184,10 +190,17 @@ def split_formulas(text: str) -> list[Segment]:
                 i += 1
                 continue
 
-            # Einzelnes $ suchen (nicht $$)
+            # Einzelnes $ suchen (nicht $$). GFM-Grenzregeln (Audit B-4):
+            # ""$100 und $200"" ist eine Preisangabe, keine Formel —
+            # schließendes $ darf nicht auf Leerzeichen treffen und nicht
+            # direkt vor einer Ziffer stehen.
             start = i + 1
             end = text.find("$", start)
-            if end != -1 and (end == start or text[end - 1] != "$"):
+            if (
+                end != -1
+                and (end == start or text[end - 1] != "$")
+                and _math_bounds_ok(text, start, end)
+            ):
                 formula = text[start:end]
                 flush_text()
                 segments.append(Segment("inline_math", formula))
@@ -241,16 +254,22 @@ def convert_deepseek_latex_syntax(text: str) -> str:
         # 1. Bestehende $$...$$-Formel unverändert übernehmen.
         if pair == "$$":
             end = text.find("$$", i + 2)
-            if end != -1:
+            if end != -1 and text[i + 2 : end].strip() and "\n\n" not in text[i + 2 : end]:
                 out.append(text[i : end + 2])
                 i = end + 2
                 continue
 
-        # 2. Bestehende $...$-Formel unverändert übernehmen
-        #    ("$ 20" ist eine Preisangabe, kein Formelbeginn).
+        # 2. Bestehende $...$-Formel unverändert übernehmen — mit denselben
+        #    GFM-Grenzregeln wie split_formulas ("$ 20"/"$100 und $200" sind
+        #    Preise; Audit B-4), damit Routing und Konversion dieselben
+        #    Bereiche als Mathematik ansehen.
         if text[i] == "$" and not (i + 1 < n and text[i + 1].isspace()):
             end = text.find("$", i + 1)
-            if end != -1 and (end == i + 1 or text[end - 1] != "$"):
+            if (
+                end != -1
+                and (end == i + 1 or text[end - 1] != "$")
+                and _math_bounds_ok(text, i + 1, end)
+            ):
                 out.append(text[i : end + 1])
                 i = end + 1
                 continue
@@ -378,8 +397,31 @@ class _PlaceholderStore:
 
 
 def _escape_html(text: str) -> str:
-    """Escaped die drei in Telegram-HTML bedeutungstragenden Zeichen."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    """
+    Escaped die in Telegram-HTML bedeutungstragenden Zeichen.
+
+    Das Anführungszeichen wird zusätzlich escaped (Audit M-1): unsere
+    Erzeuger schreiben Textanteile in Attributkontexte (``<a href="…">``,
+    ``<pre language="…">``), wo ein rohes ``"`` das Attribut aufbrechen und
+    Payload-Injection ermöglichen würde.
+    """
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+#: Zulässiges Alphabet für Info-Strings von Codefences (``language="…"``).
+#: Unbekannte Sprachen führen zu leerem Attribut statt Attribut-Injection.
+_FENCE_LANG_RE = re.compile(r"^[A-Za-z0-9_+#.-]{1,40}$")
+
+
+def _safe_fence_lang(raw: str) -> str:
+    """Normalisiert die Fence-Sprache auf ein Attribut-sicheres Token."""
+    lang = raw.strip().split()[0] if raw.strip() else ""
+    return lang if _FENCE_LANG_RE.match(lang) else ""
 
 
 # ---------------------------------------------------------------------------
@@ -399,8 +441,10 @@ def markdown_to_html(text: str) -> str:
     store = _PlaceholderStore()
 
     # 1. Fenced-Code-Blöcke (```...```) und Inline-Code schützen.
+    #    Die Sprache läuft durch eine Allowlist — sie landet sonst roh im
+    #    Attribut language="…" (Audit M-1: Attribut-Injection verhindern).
     def fenced(m: re.Match) -> str:
-        lang = m.group(1).strip()
+        lang = _safe_fence_lang(m.group(1))
         content = m.group(2).rstrip("\n")
         if lang:
             return store(f'<pre language="{lang}">{_escape_html(content)}</pre>')
@@ -442,9 +486,10 @@ def markdown_to_html(text: str) -> str:
         r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text
     )
 
-    # 9. Listenpunkte.
-    text = re.sub(r"^\s*[-*+]\s+", "• ", text, flags=re.M)
-    text = re.sub(r"^\s*\d+[.)]\s+", "• ", text, flags=re.M)
+    # 9. Listenpunkte — Einrückung bleibt erhalten (Audit B-12), sonst
+    #    kollabieren verschachtelte Listen auf eine Ebene.
+    text = re.sub(r"^(\s*)[-*+]\s+", r"\1• ", text, flags=re.M)
+    text = re.sub(r"^(\s*)\d+[.)]\s+", r"\1• ", text, flags=re.M)
 
     # 10. Inline-Formatierung (Reihenfolge wichtig: fett vor kursiv,
     #     Unterstreichen vor Kursiv-_).
@@ -475,7 +520,7 @@ def _protect_math(text: str, store: _PlaceholderStore) -> str:
         if text[i:i+2] == "$$":
             start = i + 2
             end = text.find("$$", start)
-            if end != -1:
+            if end != -1 and text[start:end].strip() and "\n\n" not in text[start:end]:
                 formula = text[start:end]
                 if validate_latex_braces(formula):
                     out.append(store(_escape_html(formula)))
@@ -523,7 +568,11 @@ def _protect_math(text: str, store: _PlaceholderStore) -> str:
 
             start = i + 1
             end = text.find("$", start)
-            if end != -1 and (end == start or text[end - 1] != "$"):
+            if (
+                end != -1
+                and (end == start or text[end - 1] != "$")
+                and _math_bounds_ok(text, start, end)  # GFM-Grenzregeln (B-4)
+            ):
                 formula = text[start:end]
                 if validate_latex_braces(formula):
                     out.append(store(_escape_html(formula)))
@@ -602,8 +651,11 @@ def markdown_to_rich_markdown(text: str) -> str:
     store = _PlaceholderStore()
 
     # 1. Code schützen, damit "$" und "__" darin unangetastet bleiben.
+    #    Sprache nur, wenn sie das erlaubte Alphabet trifft (Audit M-1);
+    #    unbekannte Info-Strings werden verworfen, der Block bleibt ``` ohne
+    #    Sprachangabe.
     def fenced(m: re.Match) -> str:
-        lang = m.group(1).strip()
+        lang = _safe_fence_lang(m.group(1))
         content = m.group(2).rstrip("\n")
         return store(f"```{lang}\n{content}\n```")
 
@@ -635,6 +687,241 @@ def needs_rich_message(text: str) -> bool:
     return has_latex(text) or has_table(text)
 
 
+# ---------------------------------------------------------------------------
+# Syntaxbewusste Aufteilung (Audit B-1): Formatierungen, Formeln und Code-
+# fences dürfen an Chunk-Grenzen nicht zerrissen werden — Telegram lehnt
+# unbalanciertes HTML mit 400 ab und Render-Markdown-Blöcke sonst falsch.
+# ---------------------------------------------------------------------------
+#: Reserve pro Chunk für nachgetragene Öffner + angehängte Schließer, damit
+#: die harte 4096-Grenze nie gerissen wird (4 Tags × ~28 Zeichen, gerundet).
+_HTML_BALANCE_RESERVE = 224
+#: Max. Tiefe, die über Chunk-Grenzen hinweg nachgetragen (reopened) wird.
+_HTML_MAX_CARRY = 4
+_TAG_SCAN_RE = re.compile(r"<(/?)(b|i|u|s|code|pre|blockquote|a)(\s[^<>]*)?>", re.I)
+#: Tags, die beim nächsten Chunk wieder geöffnet werden (Links ausgenommen:
+#: deren href-Länge wäre nicht kalkulierbar — sie werden nur sauber geschlossen).
+_CARRYABLE_TAGS = frozenset({"b", "i", "u", "s", "code", "pre", "blockquote"})
+
+
+def _dangling_tail(chunk: str) -> str:
+    """Fragment am Chunk-Ende, das einen unvollständigen Tag/Entity anzeigt.
+
+    Der Chunker kann (bei harten Schnitten) genau vor dem ``>`` eines Tags oder
+    mitten in einer Entity ``&amp;`` enden. Solche Fragmente wandern komplett
+    in den nächsten Chunk — dort sind sie wieder wohlgeformt.
+    """
+    tail_from = -1
+    lt = chunk.rfind("<")
+    if lt != -1 and ">" not in chunk[lt:]:
+        tail_from = lt
+    ent = re.search(r"&[#A-Za-z0-9]{1,7}$", chunk)
+    if ent is not None and (tail_from == -1 or ent.start() < tail_from):
+        tail_from = ent.start()
+    return chunk[tail_from:] if tail_from != -1 else ""
+
+
+def _rebalance_html_chunks(chunks: list[str]) -> list[str]:
+    """Schließt über Chunk-Grenzen offene Formatierungs-Tags sauber und trägt
+    sie im nächsten Chunk nach (Telegram-HTML-Pfad).
+
+    Regeln:
+    * Überzählige schließende Tags am Chunk-Anfang (deren Öffner im Vorgänger
+      schon balanciert wurde) werden entfernt — ihr Inhalt bleibt stehen.
+    * Am Chunk-Ende offene Tags werden geschlossen; ihre öffnende Variante
+      (bis auf ``<a>``, s. o.) wird dem nächsten Chunk vorangestellt, sodass
+      die Formatierung über Chunk-Grenzen hinweg erhalten bleibt.
+    * Dangling-Tag/Entity-Fragmente wandern an den Anfang des nächsten Chunks.
+    """
+    result: list[str] = []
+    prepend = ""
+    last_index = len(chunks) - 1
+    for index, raw in enumerate(chunks):
+        chunk = prepend + raw
+        prepend = ""
+        # 1) Fragmente, die den nächsten Tag/Entity anfangen, rüberschieben.
+        tail = _dangling_tail(chunk) if index < last_index else ""
+        if tail:
+            chunk = chunk[: len(chunk) - len(tail)]
+        # 2) Tags scannen: Stack führen, verwaiste Schließungen entfernen.
+        parts: list[str] = []
+        stack: list[tuple[str, str]] = []
+        pos = 0
+        for match in _TAG_SCAN_RE.finditer(chunk):
+            parts.append(chunk[pos:match.start()])
+            pos = match.end()
+            tag = match.group(2).lower()
+            if match.group(1) == "/":
+                for k in range(len(stack) - 1, -1, -1):
+                    if stack[k][0] == tag:
+                        del stack[k]
+                        parts.append(match.group(0))
+                        break
+                # else: verwaistes </tag> -> Tag verwerfen, Inhalt behalten
+            else:
+                stack.append((tag, match.group(0)))
+                parts.append(match.group(0))
+        parts.append(chunk[pos:])
+        chunk = "".join(parts)
+        # 3) Offene Tags schließen und (falls sinnvoll) nachtragen.
+        for tag, _opener in reversed(stack):
+            chunk += f"</{tag}>"
+        if index < last_index:
+            carry = "".join(
+                opener
+                for tag, opener in stack[-_HTML_MAX_CARRY:]
+                if tag in _CARRYABLE_TAGS
+            )
+            prepend = carry + tail  # Öffner zuerst, dann das Tail-Fragment
+        else:
+            chunk += tail  # letzter Chunk: Fragment verbleibt (defekter Eingangstext)
+        result.append(chunk)
+    return result
+
+
+def _math_bounds_ok(text: str, start: int, end: int) -> bool:
+    """Telegram/GFM-Regeln für Inline-Math: nicht leer, keine Leerzeichen an
+    den Rändern, kein Leerabsatz innen, keine Ziffer direkt nach dem ``$``."""
+    if end <= start:
+        return False
+    inner = text[start:end]
+    if inner[:1].isspace() or inner[-1:].isspace() or "\n\n" in inner:
+        return False
+    following = text[end + 1 : end + 2]
+    return not following.isdigit()
+
+
+def _atomic_ranges(text: str) -> list[tuple[int, int]]:
+    """Indivisble Bereiche des Rich-Textes: Fenced Code, ``$$…$$``, ``$…$``.
+
+    Liefert sortierte, nicht überlappende ``(start, end)``-Paare. Ein Chunk-
+    schnitt darf nie *in* einem dieser Bereiche landen (B-1).
+    """
+    ranges: list[tuple[int, int]] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text.startswith("```", i):
+            close = text.find("```", i + 3)
+            if close != -1:
+                ranges.append((i, close + 3))
+                i = close + 3
+                continue
+        if text.startswith("$$", i):
+            close = text.find("$$", i + 2)
+            if close != -1 and text[i + 2 : close].strip():
+                ranges.append((i, close + 2))
+                i = close + 2
+                continue
+        if text[i] == "$" and not (i + 1 < n and text[i + 1].isspace()):
+            close = text.find("$", i + 1)
+            if (
+                close != -1
+                and (close == i + 1 or text[close - 1] != "$")
+                and _math_bounds_ok(text, i + 1, close)
+            ):
+                ranges.append((i, close + 1))
+                i = close + 1
+                continue
+        i += 1
+    return ranges
+
+
+def _split_guarded_unit(unit: str, max_chars: int) -> list[str]:
+    """Zerlegt eine das Limit überschreitende Atom-Einheit in wohlgeformte Teile.
+
+    Die ``$$…$$``/``` ```…``` ``/``$…$``-Delimiters werden je Fragment neu
+    gesetzt, damit jedes Stück für Telegram eine vollständige Formel bzw. ein
+    vollständiger Code-Block bleibt (nur die *Inhalte* teilen sich auf).
+    """
+    for delim in ("$$", "```", "$"):
+        if len(unit) > 2 * len(delim) and unit.startswith(delim) and unit.endswith(delim):
+            inner = unit[len(delim) : -len(delim)]
+            head = ""
+            if delim == "```":
+                nl = inner.find("\n")
+                if 0 < nl <= 64:
+                    head, inner = inner[: nl + 1], inner[nl + 1 :]
+            budget = max(max_chars - 2 * len(delim) - len(head) - 2, 16)
+            lines = inner.split("\n")
+            parts = _group([ln + "\n" for ln in lines if ln != ""], budget, "") or [""]
+            fragments: list[str] = []
+            for index, part in enumerate(parts):
+                if delim == "```":
+                    body = part if part.endswith("\n") else part + "\n"
+                    fragments.append(f"```{head}{body}```" if index == 0 else f"```\n{body}```")
+                elif delim == "$$":
+                    fragments.append(f"$${part.strip()}$$")
+                else:
+                    fragments.append(f"${part.strip()}$")
+            return [f for f in fragments if f]
+    return [unit]
+
+
+def _safe_chunk(text: str, max_chars: int) -> list[str]:
+    """Teilt Rich-Markdown in Chunks, ohne geschützte Bereiche (Formeln,
+    Code-Fences) zu durchschneiden; nutzt exakte Original-Slices.
+
+    - Atomare Einheiten bleiben unantastbar, solange sie ins Limit passen.
+    - Über große Einheiten werden per :func:`_split_guarded_unit` in
+      selbst-ständige Blöcke zerlegt (jedes Chunk bleibt syntaktisch gültig).
+    - Lückentext wird an Zeilengrenzen gruppiert; ein harter Schnitt ist nur
+      bei pathologisch langen Einzelzeilen möglich.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: list[str] = []
+    buf: list[str] = []
+    size = 0
+
+    def flush() -> None:
+        nonlocal size
+        if buf:
+            joined = "".join(buf).strip()
+            if joined:
+                chunks.append(joined)
+            buf.clear()
+            size = 0
+
+    def emit_unit(unit: str) -> None:
+        nonlocal size
+        if not unit:
+            return
+        if len(unit) > max_chars:
+            flush()
+            for frag in _split_guarded_unit(unit, max_chars):
+                frag = frag.strip()
+                if frag:
+                    chunks.append(frag)
+            return
+        if size + len(unit) > max_chars and buf:
+            flush()
+        buf.append(unit)
+        size += len(unit)
+
+    def emit_gap(seg: str) -> None:
+        if not seg:
+            return
+        if len(seg) <= max_chars:
+            emit_unit(seg)
+        else:
+            for piece in _split_oversized_paragraph(seg, max_chars):
+                emit_unit(piece)
+
+    last = 0
+    for start, end in _atomic_ranges(text):
+        if start > last:
+            emit_gap(text[last:start])
+        emit_unit(text[start:end])
+        last = end
+    if last < len(text):
+        emit_gap(text[last:])
+    flush()
+    return chunks
+
+
 def build_messages(raw_text: str, chat_id: int | str) -> list[TelegramMessage]:
     """
     Baut aus Rohtext sendefertige Telegram-Nachrichten.
@@ -646,7 +933,10 @@ def build_messages(raw_text: str, chat_id: int | str) -> list[TelegramMessage]:
 
     In beiden Fällen wird an den jeweiligen Zeichenlimits aufgeteilt
     (4096 bzw. 32768), wobei die Aufteilung an Absatz-/Zeilen-/Wortgrenzen
-    erfolgt und Formatierungen so weit wie möglich intakt bleiben.
+    erfolgt. Seit dem Security-Audit bleiben dabei Formatierungs-Tags
+    (Regular-Pfad, ``</x>``-Balance pro Chunk) sowie Formeln und Code-Blöcke
+    (Rich-Pfad, atomare Bereiche) intakt — Telegram verwirft sonst die ganze
+    Nachricht mit ``400 Can't parse entities``.
     """
     text = normalize_text(raw_text).strip()
     if not text:
@@ -654,7 +944,7 @@ def build_messages(raw_text: str, chat_id: int | str) -> list[TelegramMessage]:
 
     if needs_rich_message(text):
         rich_text = markdown_to_rich_markdown(text)
-        chunks = chunk_text(rich_text, RICH_MESSAGE_MAX_CHARS)
+        chunks = _safe_chunk(rich_text, RICH_MESSAGE_MAX_CHARS)
         return [
             TelegramMessage(
                 kind="rich",
@@ -664,7 +954,8 @@ def build_messages(raw_text: str, chat_id: int | str) -> list[TelegramMessage]:
         ]
 
     html = markdown_to_html(text)
-    chunks = chunk_text(html, REGULAR_MESSAGE_MAX_CHARS)
+    chunks = chunk_text(html, REGULAR_MESSAGE_MAX_CHARS - _HTML_BALANCE_RESERVE)
+    chunks = _rebalance_html_chunks(chunks)
     return [
         TelegramMessage(
             kind="regular",
@@ -680,19 +971,26 @@ def _group(items: list[str], max_chars: int, joiner: str) -> list[str]:
     ``max_chars`` nicht überschreiten. Überlange Einzel-Items werden hart
     geteilt.
     """
+    # Längensaldo wird inkrementell geführt: join().len() je Item wäre
+    # O(n^2) (Audit O-2); die Grenze bleibt exakt dieselbe.
     chunks: list[str] = []
     buf: list[str] = []
+    size = 0
+    sep = len(joiner)
     for item in items:
         if len(item) > max_chars:
             if buf:
                 chunks.append(joiner.join(buf))
-                buf = []
+                buf, size = [], 0
             chunks.extend(item[i : i + max_chars] for i in range(0, len(item), max_chars))
             continue
-        if buf and len(joiner.join(buf)) + len(joiner) + len(item) > max_chars:
+        add = len(item) + (sep if buf else 0)
+        if buf and size + add > max_chars:
             chunks.append(joiner.join(buf))
-            buf = []
+            buf, size = [], 0
+            add = len(item)
         buf.append(item)
+        size += add
     if buf:
         chunks.append(joiner.join(buf))
     return chunks

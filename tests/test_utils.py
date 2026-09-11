@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from telegram_formatter.utils import (
     REGULAR_MESSAGE_MAX_CHARS,
     RICH_MESSAGE_MAX_CHARS,
+    _safe_chunk,
     build_messages,
     chunk_text,
     convert_deepseek_latex_syntax,
@@ -485,3 +488,127 @@ def test_build_messages_splits_rich_at_32768():
     for m in msgs:
         assert m.kind == "rich"
         assert len(m.payload["rich_message"]["markdown"]) <= RICH_MESSAGE_MAX_CHARS
+
+
+# ---------------------------------------------------------------------------
+# Audit B-1: Chunk-Grenzen reißen keine Formatierungen/Formeln mehr entzwei
+# ---------------------------------------------------------------------------
+class TestChunkSyntaxSafety:
+    @staticmethod
+    def _texts(messages):
+        return [
+            m.payload["rich_message"]["markdown"]
+            if m.kind == "rich"
+            else m.payload["text"]
+            for m in messages
+        ]
+
+    def test_bold_over_chunk_boundary_stays_balanced(self):
+        text = "**" + "x" * 5_000 + "**"
+        texts = self._texts(build_messages(text, "1"))
+        assert len(texts) > 1
+        for chunk in texts:
+            assert chunk.count("<b>") == chunk.count("</b>"), chunk[:80]
+            assert len(chunk) <= REGULAR_MESSAGE_MAX_CHARS
+
+    def test_entities_never_split_at_chunk_end(self):
+        # '<' wird zu '&lt;' escaped; harte Schnitte duerfen die Entity nicht trennen
+        text = "<" * 20_000
+        texts = self._texts(build_messages(text, "1"))
+        for chunk in texts:
+            assert not re.search(r"&(amp|lt|gt)$", chunk)
+
+    def test_display_math_not_split_across_rich_chunks(self):
+        body = "$$\n" + "\n".join(f"x_{i} = \\frac{{{i}}}{{{i + 1}}}" for i in range(5000)) + "\n$$"
+        texts = self._texts(build_messages(body, "1"))
+        assert len(texts) > 1
+        for chunk in texts:
+            assert chunk.count("$$") % 2 == 0, chunk[:80]
+            assert len(chunk) <= RICH_MESSAGE_MAX_CHARS
+
+    def test_code_fence_not_split_across_rich_chunks(self):
+        code = "```py\n" + "\n".join(f"v_{i} = {i}" for i in range(12000)) + "\n```"
+        # Fence allein loest keinen Rich-Pfad aus -> mit Formel kombinieren
+        texts = self._texts(build_messages("$x$\n\n" + code, "1"))
+        assert len(texts) > 1
+        for chunk in texts:
+            assert chunk.count("```") % 2 == 0
+
+    def test_content_survives_reassembly(self):
+        words = " ".join(f"w{i}" for i in range(6000))
+        text = f"**{words[:200]}** {words}"
+        texts = self._texts(build_messages(text, "1"))
+        assert len(texts) > 1
+        # Referenz: unchunked konvertiertes HTML. Tag-freier Inhalt muss
+        # identisch sein (Reassembly bis auf Whitespace/Chunk-Fugen).
+        from telegram_formatter.utils import markdown_to_html
+
+        expected = re.sub(r"<[^>]+>", "", markdown_to_html(text))
+        produced = re.sub(r"<[^>]+>", "", "\n".join(texts))
+        assert "".join(produced.split()) == "".join(expected.split())
+
+    def test_safe_chunk_hard_falls_back_on_oversized_unit(self):
+        # Einzelne, das Limit ueberschreitende Formel: harter Schnitt, aber
+        # keine Exception und jedes Stueck <= Limit.
+        huge = "$" + "x" * (RICH_MESSAGE_MAX_CHARS + 500) + "$"
+        chunks = _safe_chunk(huge, RICH_MESSAGE_MAX_CHARS)
+        assert all(len(c) <= RICH_MESSAGE_MAX_CHARS for c in chunks)
+
+
+# ---------------------------------------------------------------------------
+# Audit B-4 / M-1 / B-12 / N-1: Formel-Erkennung, Escaping, Listen, NUL
+# ---------------------------------------------------------------------------
+class TestMathBoundaryAndEscaping:
+    def test_prices_are_not_math(self):
+        """B-4: '$100 und $200' ist ein Preis, keine Inline-Formel."""
+        messages = build_messages("Das Buch kostet $100 und der Stift $200.", "1")
+        assert all(m.kind == "regular" for m in messages)
+        assert "$100" in messages[0].payload["text"]
+
+    def test_real_inline_math_still_routes_to_rich(self):
+        messages = build_messages("Energie: $E=mc^2$!", "1")
+        assert messages[0].kind == "rich"
+        assert "$E=mc^2$" in messages[0].payload["rich_message"]["markdown"]
+
+    def test_math_may_not_cross_paragraphs(self):
+        messages = build_messages("$a\n\nb$", "1")
+        assert all(m.kind == "regular" for m in messages)
+
+    def test_empty_dollars_not_display_math(self):
+        assert not has_latex("$$$$")
+        assert has_latex("$$x$$")
+
+    def test_fence_language_allowlist(self):
+        """M-1: Info-String landet im Attribut language="…" — nur sicheres Alphabet."""
+        out = markdown_to_html('```"\nonclick="alert(1)\nfoo\n```')
+        assert "language=" not in out          # Attribut komplett verworfen
+        assert "onclick=&quot;" in out         # Inhalt escaped, nicht Attribut
+        ok = markdown_to_html("```python\nx=1\n```")
+        assert 'language="python"' in ok
+
+    def test_quotes_escaped_in_link_href(self):
+        """M-1: rohes " bricht href="…" auf — jetzt &quot;."""
+        out = markdown_to_html('[klick](https://ex.com/")onmouseover="x)')
+        assert '&quot;' in out
+        assert out.count('"') <= 2  # nur die Attribut-Wrapper selbst
+
+    def test_list_indent_preserved(self):
+        """B-12: verschachtelte Listen kollabieren nicht mehr."""
+        out = markdown_to_html("- top\n  - nested")
+        assert "\n  \u2022 nested" in out
+
+    def test_nul_stripped_before_placeholders(self):
+        """N-1: NUL aus Nutertext würde Platzhalter des Stores kollidieren."""
+        assert "\x00" not in normalize_text("a\x00b")
+        out = markdown_to_html("x\x000\x00 y")  # sieht aus wie ein Platzhalter
+        assert "\x00" not in out
+
+    def test_deepseek_and_dollar_mixed_document(self):
+        src = "Text \\(x^2\\) und Preis $5 und \\[ y \\] dann $10."
+        out = convert_deepseek_latex_syntax(src)
+        assert "$x^2$" in out and "$$ y $$" in out   # DeepSeek konvertiert
+        assert "$5 und" in out and "$10." in out     # Preise unangetastet
+        # Nach Konversion darf der gemischte Text keine Formel-Routing-False-Positives
+        # mehr ausloesen, die ueber die echten Bloecke hinausgehen:
+        segs = split_formulas(out)
+        assert [s.kind for s in segs if s.kind != "text"] == ["inline_math", "display_math"]

@@ -39,10 +39,15 @@ import argparse
 import logging
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from telegram_formatter.botkit.privacy import install_privacy_filters, scrub_environment
-from telegram_formatter.botkit.registry import BotRegistry, RegistrationError
+from telegram_formatter.botkit.registry import (
+    OWNER_REF_PATTERN,
+    BotRegistry,
+    RegistrationError,
+)
 from telegram_formatter.botkit.review import (
     CHECKLIST,
     CHECKLIST_IDS,
@@ -79,6 +84,33 @@ def _load_ledger(path: str) -> ReviewLedger:
     return ReviewLedger.load(path)
 
 
+@contextmanager
+def _ledger_transaction(path: str):
+    """
+    Load-Modify-Save des Audit-Trails unter einer Prozess-Sperre (Audit B-10).
+
+    Ohne Sperrdatei galt "last writer wins": zwei gleichzeitige
+    ``botctl approve`` verloren die jeweils andere Entscheidung.
+    Geflockt wird eine Sidecar-Datei ``<ledger>.lock``; Plattformen ohne
+    ``fcntl`` (Windows) laufen ungesperrt weiter (best effort, dokumentiert).
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - non-POSIX
+        yield _load_ledger(path)
+        return
+
+    target = Path(path)
+    lock_path = target.with_name(target.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as lock_fh:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX)
+        try:
+            yield _load_ledger(path)
+        finally:
+            fcntl.flock(lock_fh, fcntl.LOCK_UN)
+
+
 def _gate(ledger: ReviewLedger) -> ReviewGate:
     # Lokaler/Git-Modus: das Ledger ist autoritativ, keine Registry nötig.
     return ReviewGate(ledger, registry=None, min_approvals=2, require_maintainer=True)
@@ -88,6 +120,20 @@ def _read_input(path: str | None) -> str:
     if path:
         return Path(path).read_text(encoding="utf-8")
     return sys.stdin.read()
+
+
+def _resolve_owner(explicit: str | None) -> str:
+    """
+    Owner-Handle bestimmen — mit sicherem Fallback (Audit B-8).
+
+    Der Default war ``os.environ["USER"][:32]``; realistische Usernamen
+    (Leerzeichen, Umlaute, Suffixe wie ``$jones``) verletzen
+    OWNER_REF_PATTERN und führten zur irreführenden Meldung
+    „Bot konnte nicht verifiziert werden". Unpassende Werte werden auf
+    das neutrale Pseudonym ``local`` zurückgezogen.
+    """
+    candidate = (explicit or os.environ.get("USER", "") or "local").strip()[:32]
+    return candidate if OWNER_REF_PATTERN.match(candidate) else "local"
 
 
 # --------------------------------------------------------------------------- #
@@ -131,49 +177,48 @@ def cmd_review(args: argparse.Namespace) -> int:
         print(f"✖ Datei nicht gefunden: {path}")
         return 2
 
-    ledger = _load_ledger(args.ledger)
-    gate = _gate(ledger)
-    try:
-        report = gate.analyze(path)
-    except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
-        # Das Review-Tor prüft Python-Quellcode. Nicht-parsbare Eingaben
-        # (z. B. Markdown-READMEs im bots/-Ordner, Binärdateien) werden als
-        # Eingabefehler gemeldet — nicht als Traceback und ohne Ticket.
-        ort = f" in Zeile {exc.lineno}" if isinstance(exc, SyntaxError) else ""
-        print(
-            f"✖ {path}: nicht als Python-Quelltext lesbar{ort} "
-            f"({exc.__class__.__name__}) — nur *.py-Dateien zum Review einreichen."
-        )
-        return 2
+    with _ledger_transaction(args.ledger) as ledger:
+        gate = _gate(ledger)
+        try:
+            report = gate.analyze(path)
+        except (SyntaxError, UnicodeDecodeError, ValueError, OSError) as exc:
+            # Das Review-Tor prüft Python-Quellcode. Nicht-parsbare Eingaben
+            # (z. B. Markdown-READMEs im bots/-Ordner, Binärdateien,
+            # Verzeichnisse — Audit B-8: IsADirectoryError lief bisher als
+            # rohes Traceback hoch) werden als Eingabefehler gemeldet.
+            ort = f" in Zeile {exc.lineno}" if isinstance(exc, SyntaxError) else ""
+            print(
+                f"✖ {path}: nicht als Python-Quelltext lesbar{ort} "
+                f"({exc.__class__.__name__}) — nur *.py-Dateien zum Review einreichen."
+            )
+            return 2
 
-    print(report.as_text())
-    if not report.ok:
-        print("\n✖ Review gestoppt: Blocker müssen behoben werden.")
-        return 1
+        print(report.as_text())
+        if not report.ok:
+            print("\n✖ Review gestoppt: Blocker müssen behoben werden.")
+            return 1
 
-    if args.check:
-        print("\n✔ Nur Prüfung gewünscht (--check): kein Ticket angelegt.")
+        if args.check:
+            print("\n✔ Nur Prüfung gewünscht (--check): kein Ticket angelegt.")
+            return 0
+
+        try:
+            ticket = gate.submit(args.bot_id, path)
+        except ReviewGateError as exc:
+            print(f"\n✖ {exc}")
+            return 1
+
+        ledger.save(args.ledger)
+        print(f"\n✔ Ticket {ticket.ticket_id} angelegt (sha256={ticket.source_sha256[:12]}).")
+        print(f"    Audit-Trail: {args.ledger}")
+        print("    Freigabe durch zwei Personen, davon mindestens eine Maintainer:in:")
+        print(f"    python -m telegram_formatter.botctl approve {ticket.ticket_id} --reviewer <handle> "
+              f"--role maintainer --checks {','.join(sorted(CHECKLIST_IDS))}")
         return 0
-
-    try:
-        ticket = gate.submit(args.bot_id, path)
-    except ReviewGateError as exc:
-        print(f"\n✖ {exc}")
-        return 1
-
-    ledger.save(args.ledger)
-    print(f"\n✔ Ticket {ticket.ticket_id} angelegt (sha256={ticket.source_sha256[:12]}).")
-    print(f"    Audit-Trail: {args.ledger}")
-    print("    Freigabe durch zwei Personen, davon mindestens eine Maintainer:in:")
-    print(f"    python -m telegram_formatter.botctl approve {ticket.ticket_id} --reviewer <handle> "
-          f"--role maintainer --checks {','.join(sorted(CHECKLIST_IDS))}")
-    return 0
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
     """Trägt eine Review-Entscheidung ein (Freigabe oder Ablehnung)."""
-    ledger = _load_ledger(args.ledger)
-    gate = _gate(ledger)
     try:
         reviewer = Reviewer(args.reviewer, ReviewRole(args.role))
     except (ReviewError, ValueError) as exc:
@@ -181,14 +226,16 @@ def cmd_approve(args: argparse.Namespace) -> int:
         return 2
 
     if args.reject:
-        try:
-            ticket = gate.reject(args.ticket, reviewer, note=args.note or "ohne Angabe")
-        except ReviewError as exc:
-            print(f"✖ {exc}")
-            return 1
-        ledger.save(args.ledger)
-        print(f"✔ Ticket {ticket.ticket_id} abgelehnt von {reviewer.handle}.")
-        return 0
+        with _ledger_transaction(args.ledger) as ledger:
+            gate = _gate(ledger)
+            try:
+                ticket = gate.reject(args.ticket, reviewer, note=args.note or "ohne Angabe")
+            except (ReviewError, RegistrationError) as exc:
+                print(f"✖ {exc}")
+                return 1
+            ledger.save(args.ledger)
+            print(f"✔ Ticket {ticket.ticket_id} abgelehnt von {reviewer.handle}.")
+            return 0
 
     checks = tuple(c.strip() for c in args.checks.split(",") if c.strip())
     missing = CHECKLIST_IDS - set(checks)
@@ -199,13 +246,17 @@ def cmd_approve(args: argparse.Namespace) -> int:
             print(f"    {item.check_id}: {item.question}")
         return 2
 
-    try:
-        ticket = gate.approve(args.ticket, reviewer, checks=checks, note=args.note)
-    except ReviewError as exc:
-        print(f"✖ {exc}")
-        return 1
-
-    ledger.save(args.ledger)
+    with _ledger_transaction(args.ledger) as ledger:
+        gate = _gate(ledger)
+        try:
+            ticket = gate.approve(args.ticket, reviewer, checks=checks, note=args.note)
+        except (ReviewError, RegistrationError) as exc:
+            # RegistrationError (Audit B-9): wenn das Ticket die Freigabe in
+            # eine Registry schreiben will, deren Eintrag revoked/abgelaufen
+            # ist — sauber melden statt Traceback.
+            print(f"✖ {exc}")
+            return 1
+        ledger.save(args.ledger)
     state = "freigegeben ✔" if ticket.is_approved(
         min_approvals=gate.min_approvals, require_maintainer=gate.require_maintainer
     ) else f"wartet ({len(ticket.approvals)}/{gate.min_approvals} Freigaben)"
@@ -215,13 +266,13 @@ def cmd_approve(args: argparse.Namespace) -> int:
 
 def cmd_verify(args: argparse.Namespace) -> int:
     """Prüft, ob Bot und Code-Fassung freigegeben sind (CI-Tor vor dem Deployment)."""
-    ledger = _load_ledger(args.ledger)
-    gate = _gate(ledger)
-    try:
-        gate.verify(args.bot_id, args.path, check_registry=False)
-    except ReviewGateError as exc:
-        print(f"✖ Nicht freigegeben: {exc}")
-        return 1
+    with _ledger_transaction(args.ledger) as ledger:
+        gate = _gate(ledger)
+        try:
+            gate.verify(args.bot_id, args.path, check_registry=False)
+        except (ReviewGateError, OSError, ValueError) as exc:
+            print(f"✖ Nicht freigegeben: {exc}")
+            return 1
     print(f"✔ Freigegeben: {args.path} (sha256={source_sha256(args.path)[:12]}).")
     return 0
 
@@ -255,7 +306,7 @@ def cmd_send(args: argparse.Namespace) -> int:
         verify=lambda secret: get_me(secret, timeout=args.timeout, api_base=args.api_base)
     )
     try:
-        registry.register(token, owner_ref=args.owner)
+        registry.register(token, owner_ref=_resolve_owner(args.owner))
     except RegistrationError as exc:
         print(f"✖ Bot konnte nicht verifiziert werden: {exc}")
         return 1
@@ -265,7 +316,16 @@ def cmd_send(args: argparse.Namespace) -> int:
         timeout=args.timeout,
         api_base=args.api_base,
     )
-    manager = SessionManager(registry=registry, review_gate=gate, config=config)
+    # Audit B-2: Der --local-trust-Pfad darf dem Manager keinen ReviewGate
+    # geben — sonst verlangt SessionManager.open einen Registry-Status
+    # "approved", den im Selbstbetrieb niemand setzt, und jede Session
+    # scheitert ("Bot ist nicht freigegeben"). Ohne Gate gilt: verifizierter
+    # Bot + ausdrücklicher Lokalvertrauen des Nutzers genügen.
+    manager = SessionManager(
+        registry=registry,
+        review_gate=None if args.local_trust else gate,
+        config=config,
+    )
     text = _read_input(args.file)
 
     try:
@@ -358,7 +418,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_send.add_argument("--chat-id", required=True)
     p_send.add_argument("--file", help="Eingabedatei (sonst STDIN).")
     p_send.add_argument("--token-env", default="TELEGRAM_BOT_TOKEN")
-    p_send.add_argument("--owner", default=os.environ.get("USER", "local")[:32] or "local")
+    p_send.add_argument("--owner", default=None,
+                        help="Pseudonym; Standard: $USER (falls gültig), sonst 'local'.")
     p_send.add_argument("--bot-source", help="Reviewter Bot-Code (Pfad).")
     p_send.add_argument("--local-trust", action="store_true",
                         help="Review überspringen (nur private/self-hosted Bots).")

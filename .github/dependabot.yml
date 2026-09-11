@@ -1,0 +1,31 @@
+version: 2
+
+# Supply-Chain-Härtung (Audit M-5): Updates werden automatisiert
+# vorgeschlagen, statt nur wöchentlich per pip-audit-Cron aufzufallen.
+# Pins bleiben erhalten (requirements.txt), Dependabot öffnet Update-PRs —
+# die durch denselben bot-review-Workflow (Tests + Statik) laufen.
+
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:30"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "automation"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:30"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "ci", "automation"]
+    commit-message:
+      prefix: "chore(ci)"

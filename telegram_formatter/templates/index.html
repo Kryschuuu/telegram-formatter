@@ -4,29 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Telegram Formatter — Markdown + LaTeX</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    {# Audit H-5: CDN-Assets versionsgepinnt; CSP (app.py) erlaubt exakt diese
+      _hosts. SRI-Hashes beim Release ergänzen (erfordert die Asset-Bytes). #}
+    <script src="https://cdn.tailwindcss.com/3.4.16" crossorigin="anonymous"
+            referrerpolicy="no-referrer"></script>
     <link rel="stylesheet"
           href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
           crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <style>
-        .tg-bubble {
-            background: white;
-            padding: 16px;
-            border-radius: 12px;
-            border-bottom-right-radius: 4px;
-            border: 1px solid #e2e8f0;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            word-wrap: break-word;
-            white-space: pre-wrap;
-        }
-        /* FAQ-Akkordeons */
-        details.faq-item summary { cursor: pointer; list-style: none; }
-        details.faq-item summary::-webkit-details-marker { display: none; }
-        details.faq-item summary .faq-chevron { transition: transform .2s ease; }
-        details.faq-item[open] summary .faq-chevron { transform: rotate(180deg); }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
 </head>
-<body class="bg-slate-100 font-sans min-h-screen flex flex-col">
+<body class="bg-slate-100 font-sans min-h-screen flex flex-col"
+      data-convert-url="{{ url_for('convert') }}" data-send-url="{{ url_for('send') }}">
 
 <!-- ===== Header (sticky) ===== -->
 <header class="bg-white/95 backdrop-blur border-b border-slate-200 shadow-sm sticky top-0 z-40">
@@ -192,8 +180,11 @@
                     Der Token liegt nur als Umgebungsvariable auf dem Server und wird ausschließlich
                     für den Versand an die Telegram-API verwendet — er wird nie im Browser
                     ausgeliefert, nicht in Logs geschrieben und nicht in einer Datenbank gespeichert.
-                    Behandele ihn dennoch wie ein Passwort: nie öffentlich posten, bei Verdacht via
-                    @BotFather mit <code class="bg-slate-100 px-1 rounded">/revoke</code> neu erzeugen.
+                    Seit v2.1.0 ist der Versand zusätzlich gehärtet: Fehlermeldungen der API werden
+                    bereinigt (kein Token, keine URL), der Zielchat ist auf den konfigurierten Chat
+                    festgelegt und die Endpunkte sind optional per <code class="bg-slate-100 px-1 rounded">X-Auth-Token</code>
+                    geschützt. Behandele ihn dennoch wie ein Passwort: nie öffentlich posten, bei
+                    Verdacht via @BotFather mit <code class="bg-slate-100 px-1 rounded">/revoke</code> neu erzeugen.
                 </p>
             </details>
             <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
@@ -329,76 +320,6 @@
     </div>
 </footer>
 
-<script>
-    const input = document.getElementById('input');
-    const preview = document.getElementById('preview');
-    const payloads = document.getElementById('payloads');
-    const sendBtn = document.getElementById('sendBtn');
-    const resetBtn = document.getElementById('resetBtn');
-    const sendStatus = document.getElementById('sendStatus');
-
-    // Einfache Markdown-Vorschau (nur zur Orientierung im Editor).
-    function renderPreview() {
-        let t = (input.value || '');
-        t = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        t = t.replace(/^#+\s+(.*)$/gm, '<b>$1</b>');
-        t = t.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-        t = t.replace(/\*(.+?)\*/g, '<i>$1</i>');
-        t = t.replace(/__(.+?)__/g, '<u>$1</u>');
-        t = t.replace(/\n/g, '<br>');
-        preview.innerHTML = t || 'Vorschau erscheint hier…';
-    }
-
-    async function refreshPayloads() {
-        const res = await fetch('/api/convert', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({text: input.value})
-        });
-        const data = await res.json();
-        payloads.textContent = JSON.stringify(data, null, 2);
-        if (data.count > 1) {
-            sendStatus.textContent = `Hinweis: ${data.count} Nachrichten (automatisch aufgeteilt).`;
-        } else {
-            sendStatus.textContent = '';
-        }
-    }
-
-    // Setzt die komplette Arbeitsfläche zurück: Eingabe, Vorschau, Payloads,
-    // Statusmeldung — und gibt den Fokus an das Eingabefeld zurück.
-    function resetAll() {
-        input.value = '';
-        preview.innerHTML = 'Vorschau erscheint hier…';
-        payloads.textContent = '—';
-        sendStatus.textContent = '';
-        input.focus();
-    }
-
-    async function send() {
-        sendBtn.disabled = true;
-        sendBtn.textContent = 'Sende…';
-        try {
-            const res = await fetch('/api/send', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: input.value})
-            });
-            const data = await res.json();
-            sendStatus.textContent = data.error ? ('Fehler: ' + data.error) : `✅ ${data.sent} Nachricht(en) gesendet.`;
-        } catch (e) {
-            sendStatus.textContent = 'Netzwerkfehler.';
-        } finally {
-            sendBtn.disabled = false;
-            sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane mr-1" aria-hidden="true"></i> An Telegram senden';
-        }
-    }
-
-    input.addEventListener('input', () => { renderPreview(); refreshPayloads(); });
-    sendBtn.addEventListener('click', send);
-    resetBtn.addEventListener('click', resetAll);
-
-    renderPreview();
-    refreshPayloads();
-</script>
+    <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

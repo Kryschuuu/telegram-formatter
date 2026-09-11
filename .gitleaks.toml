@@ -20,22 +20,19 @@ title = "telegram-formatter"
 [extend]
 useDefault = true
 
-# Neue Schreibweise (gitleaks >= 8.19)
+# Neue Schreibweise (gitleaks >= 8.19).
+# Audit N-2: vorher galten paths ODER regexes — das Dummy-Regex allowlistete
+# damit Tokenförmiges mit ID 123456789 im GESAMTEN Repo. Mit matchAll=true
+# müssen beide Bedingungen treffen ( fixtures-Pfad UND Dummy-Muster );
+# historisch belastete Doku-Pfade sind zusätzlich explizit aufgenommen.
 [[allowlists]]
 description = "Absichtliche Negativbeispiele (BK006) und Dokumentations-Dummy"
+matchAll = true
 paths = [
   '''tests/fixtures/.*''',
-]
-regexes = [
-  '''123456789:[A-Za-z0-9_-]{35}''',
-]
-
-# Alte Schreibweise — bleibt zur Kompatibilität mit älteren gitleaks-Versionen
-# erhalten. Beide Listen werden von gitleaks zusammengeführt (logisches ODER).
-[allowlist]
-description = "Absichtliche Negativbeispiele (BK006) und Dokumentations-Dummy"
-paths = [
-  '''tests/fixtures/.*''',
+  '''README\.md''',
+  '''CHANGELOG\.md''',
+  '''docs/.*''',
 ]
 regexes = [
   '''123456789:[A-Za-z0-9_-]{35}''',

@@ -49,3 +49,150 @@ def test_review_check_passes_for_reference_bot(tmp_path, capsys):
     )
     assert rc == 0
     assert "keine Befunde" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# Audit B-2: botctl send --local-trust muss funktionieren (Reproduktion:
+# Exit 1 "Bot ist nicht freigegeben" — der dokumentierte Selbstbetrieb-Pfad
+# war komplett tot).
+# --------------------------------------------------------------------------- #
+def test_send_local_trust_end_to_end(tmp_path, monkeypatch, capsys):
+    import telegram_formatter.botctl as bc
+    import telegram_formatter.botkit.session as sess_mod
+
+    monkeypatch.setattr(
+        bc, "get_me",
+        lambda secret, **kw: {"ok": True, "result": {
+            "id": 123456789, "is_bot": True, "username": "mein_bot", "first_name": "Mein"}},
+    )
+    sent: list = []
+    monkeypatch.setattr(
+        sess_mod, "send_message",
+        lambda message, secret, **kw: sent.append(message) or {"ok": True},
+    )
+    monkeypatch.setenv("BOTCTL_TEST_TOKEN", "123456789:" + "A" * 35)
+    payload = tmp_path / "msg.md"
+    payload.write_text("**Hallo** $x^2$", encoding="utf-8")
+
+    rc = bc.main([
+        "send", "--chat-id", "-1001",
+        "--token-env", "BOTCTL_TEST_TOKEN",
+        "--owner", "alice", "--local-trust", "--send",
+        "--file", str(payload),
+        "--ledger", str(tmp_path / "reviews.json"),
+    ])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "Gesendet" in out
+    assert len(sent) == 1
+    assert sent[0].payload["chat_id"] == "-1001"
+
+
+def test_send_dry_run_local_trust(tmp_path, monkeypatch, capsys):
+    import telegram_formatter.botctl as bc
+
+    monkeypatch.setattr(
+        bc, "get_me",
+        lambda secret, **kw: {"ok": True, "result": {
+            "id": 123456789, "is_bot": True, "username": "mein_bot", "first_name": "Mein"}},
+    )
+    monkeypatch.setenv("BOTCTL_TEST_TOKEN", "123456789:" + "A" * 35)
+    payload = tmp_path / "msg.md"
+    payload.write_text("**nur Vorschau**", encoding="utf-8")
+
+    rc = bc.main([
+        "send", "--chat-id", "-1001",
+        "--token-env", "BOTCTL_TEST_TOKEN",
+        "--owner", "alice", "--local-trust",
+        "--file", str(payload),
+        "--ledger", str(tmp_path / "reviews.json"),
+    ])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "Dry-Run" in out
+
+
+def test_send_requires_token_after_use_env_is_scrubbed(tmp_path, monkeypatch, capsys):
+    """scrub_environment muss das Token nach der Nutzung aus dem Prozess-Env tilgen."""
+    import os
+
+    import telegram_formatter.botctl as bc
+
+    monkeypatch.setattr(
+        bc, "get_me",
+        lambda secret, **kw: {"ok": True, "result": {
+            "id": 123456789, "is_bot": True, "username": "mein_bot", "first_name": "Mein"}},
+    )
+    import telegram_formatter.botkit.session as sess_mod
+    monkeypatch.setattr(sess_mod, "send_message", lambda *a, **kw: {"ok": True})
+    monkeypatch.setenv("BOTCTL_TEST_TOKEN", "123456789:" + "A" * 35)
+    payload = tmp_path / "m.md"
+    payload.write_text("hi", encoding="utf-8")
+
+    rc = bc.main(["send", "--chat-id", "-1", "--token-env", "BOTCTL_TEST_TOKEN",
+                  "--owner", "alice", "--local-trust", "--send",
+                  "--file", str(payload), "--ledger", str(tmp_path / "r.json")])
+    assert rc == 0
+    assert "BOTCTL_TEST_TOKEN" not in os.environ
+
+
+# --------------------------------------------------------------------------- #
+# Audit B-8/B-10/Owner-Fallback: Kommando-Ebene
+# --------------------------------------------------------------------------- #
+def test_review_directory_is_clean_input_error(tmp_path, capsys):
+    """B-8: IsADirectoryError darf nicht als rohes Traceback enden."""
+    from telegram_formatter.botctl import main
+
+    directory = tmp_path / "bots"
+    directory.mkdir()
+    rc = main(["review", str(directory), "--bot-id", "0", "--check",
+               "--ledger", str(tmp_path / "reviews.json")])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "nicht als Python-Quelltext lesbar" in out
+    assert "Traceback" not in out
+
+
+def test_review_and_approve_persist_both_decisions(tmp_path, capsys):
+    """B-10-Kernpfad: Load-Modify-Save unter Lock — beide Freigaben im Trail."""
+    import json
+
+    from telegram_formatter.botctl import main
+
+    trail = tmp_path / "reviews.json"
+    rc = main(["review", str(CLEAN_BOT), "--bot-id", "42", "--ledger", str(trail)])
+    assert rc == 0
+    tickets = json.loads(trail.read_text(encoding="utf-8"))
+    ticket_id = tickets[0]["ticket_id"]
+
+    rc1 = main(["approve", ticket_id, "--reviewer", "alice", "--role", "maintainer",
+                "--checks", "C1,C2,C3,C4,C5,C6,C7,C8,C9", "--ledger", str(trail)])
+    rc2 = main(["approve", ticket_id, "--reviewer", "bob", "--role", "contributor",
+                "--checks", "C1,C2,C3,C4,C5,C6,C7,C8,C9", "--ledger", str(trail)])
+    assert (rc1, rc2) == (0, 0)
+    final = json.loads(trail.read_text(encoding="utf-8"))
+    decisions = final[0]["decisions"]
+    assert {d["reviewer"] for d in decisions} == {"alice", "bob"}
+
+
+def test_send_owner_fallback_for_invalid_user(tmp_path, monkeypatch, capsys):
+    """B-8: ein USER-Wert jenseits von OWNER_REF_PATTERN darf nicht den
+    Verifizierungsfehler vortäuschen — Fallback auf 'local'."""
+    import telegram_formatter.botctl as bc
+    import telegram_formatter.botkit.session as sess_mod
+
+    monkeypatch.setenv("USER", "Not A Valid Handle!")
+    monkeypatch.setattr(
+        bc, "get_me",
+        lambda secret, **kw: {"ok": True, "result": {
+            "id": 123456789, "is_bot": True, "username": "b", "first_name": "B"}},
+    )
+    monkeypatch.setattr(sess_mod, "send_message", lambda *a, **kw: {"ok": True})
+    monkeypatch.setenv("BOTCTL_TEST_TOKEN", "123456789:" + "A" * 35)
+    payload = tmp_path / "m.md"
+    payload.write_text("hi", encoding="utf-8")
+
+    rc = bc.main(["send", "--chat-id", "-1", "--token-env", "BOTCTL_TEST_TOKEN",
+                  "--local-trust", "--send", "--file", str(payload),
+                  "--ledger", str(tmp_path / "r.json")])
+    assert rc == 0, capsys.readouterr().out
