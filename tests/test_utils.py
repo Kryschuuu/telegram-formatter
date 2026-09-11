@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from telegram_formatter.utils import (
     REGULAR_MESSAGE_MAX_CHARS,
     RICH_MESSAGE_MAX_CHARS,
+    _safe_chunk,
     build_messages,
     chunk_text,
     convert_deepseek_latex_syntax,
@@ -485,3 +488,68 @@ def test_build_messages_splits_rich_at_32768():
     for m in msgs:
         assert m.kind == "rich"
         assert len(m.payload["rich_message"]["markdown"]) <= RICH_MESSAGE_MAX_CHARS
+
+
+# ---------------------------------------------------------------------------
+# Audit B-1: Chunk-Grenzen reißen keine Formatierungen/Formeln mehr entzwei
+# ---------------------------------------------------------------------------
+class TestChunkSyntaxSafety:
+    @staticmethod
+    def _texts(messages):
+        return [
+            m.payload["rich_message"]["markdown"]
+            if m.kind == "rich"
+            else m.payload["text"]
+            for m in messages
+        ]
+
+    def test_bold_over_chunk_boundary_stays_balanced(self):
+        text = "**" + "x" * 5_000 + "**"
+        texts = self._texts(build_messages(text, "1"))
+        assert len(texts) > 1
+        for chunk in texts:
+            assert chunk.count("<b>") == chunk.count("</b>"), chunk[:80]
+            assert len(chunk) <= REGULAR_MESSAGE_MAX_CHARS
+
+    def test_entities_never_split_at_chunk_end(self):
+        # '<' wird zu '&lt;' escaped; harte Schnitte duerfen die Entity nicht trennen
+        text = "<" * 20_000
+        texts = self._texts(build_messages(text, "1"))
+        for chunk in texts:
+            assert not re.search(r"&(amp|lt|gt)$", chunk)
+
+    def test_display_math_not_split_across_rich_chunks(self):
+        body = "$$\n" + "\n".join(f"x_{i} = \\frac{{{i}}}{{{i + 1}}}" for i in range(5000)) + "\n$$"
+        texts = self._texts(build_messages(body, "1"))
+        assert len(texts) > 1
+        for chunk in texts:
+            assert chunk.count("$$") % 2 == 0, chunk[:80]
+            assert len(chunk) <= RICH_MESSAGE_MAX_CHARS
+
+    def test_code_fence_not_split_across_rich_chunks(self):
+        code = "```py\n" + "\n".join(f"v_{i} = {i}" for i in range(12000)) + "\n```"
+        # Fence allein loest keinen Rich-Pfad aus -> mit Formel kombinieren
+        texts = self._texts(build_messages("$x$\n\n" + code, "1"))
+        assert len(texts) > 1
+        for chunk in texts:
+            assert chunk.count("```") % 2 == 0
+
+    def test_content_survives_reassembly(self):
+        words = " ".join(f"w{i}" for i in range(6000))
+        text = f"**{words[:200]}** {words}"
+        texts = self._texts(build_messages(text, "1"))
+        assert len(texts) > 1
+        # Referenz: unchunked konvertiertes HTML. Tag-freier Inhalt muss
+        # identisch sein (Reassembly bis auf Whitespace/Chunk-Fugen).
+        from telegram_formatter.utils import markdown_to_html
+
+        expected = re.sub(r"<[^>]+>", "", markdown_to_html(text))
+        produced = re.sub(r"<[^>]+>", "", "\n".join(texts))
+        assert "".join(produced.split()) == "".join(expected.split())
+
+    def test_safe_chunk_hard_falls_back_on_oversized_unit(self):
+        # Einzelne, das Limit ueberschreitende Formel: harter Schnitt, aber
+        # keine Exception und jedes Stueck <= Limit.
+        huge = "$" + "x" * (RICH_MESSAGE_MAX_CHARS + 500) + "$"
+        chunks = _safe_chunk(huge, RICH_MESSAGE_MAX_CHARS)
+        assert all(len(c) <= RICH_MESSAGE_MAX_CHARS for c in chunks)
