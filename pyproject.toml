@@ -48,7 +48,7 @@ dependencies = { file = ["requirements.txt"] }
 include = ["telegram_formatter*"]
 
 [tool.setuptools.package-data]
-telegram_formatter = ["templates/*.html"]
+telegram_formatter = ["templates/*.html", "static/*.css", "static/*.js"]
 
 # ---------------------------------------------------------------------------
 # Ruff — bewusst explizit, damit CI-Ergebnisse reproduzierbar sind

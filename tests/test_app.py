@@ -1,4 +1,9 @@
-"""Tests für die Flask-Weboberfläche (``app``)."""
+"""Tests für die Flask-Weboberfläche (``app``).
+
+Der Fixture-Block härzt gegen die Befunde des Security-Audits 2026-09:
+Chat-Pinning, Input-Validierung, Größen-/Mengenlimits, API-Token,
+Origin-Check, Security-Header und „Fehler enthalten niemals den Token".
+"""
 
 from __future__ import annotations
 
@@ -10,16 +15,26 @@ import pytest
 
 from telegram_formatter import __version__
 from telegram_formatter import app as app_module
+from telegram_formatter.sender import SendError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SHIM_PATH = REPO_ROOT / "app.py"
 
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
+    """Isolierte App: Modulglobals zurücksetzen, Limits aus, Rate-Buckets leer."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "")
+    monkeypatch.setattr(app_module, "CHAT_ID", "")
+    monkeypatch.setattr(app_module, "API_TOKEN", "")
+    monkeypatch.setattr(app_module, "MAX_INPUT_CHARS", 100_000)
+    monkeypatch.setattr(app_module, "SENDS_PER_MINUTE", 0)
+    monkeypatch.setattr(app_module, "CONVERTS_PER_MINUTE", 0)
+    app_module._RATE_HITS.clear()
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as c:
         yield c
+    app_module._RATE_HITS.clear()
 
 
 def test_index_renders(client):
@@ -48,6 +63,26 @@ def test_index_contains_new_ui_elements(client):
     assert page.count("<details") >= 7  # sieben aufklappbare Akkordeons
 
 
+def test_assets_are_external_no_inline_script(client):
+    """Audit H-5: keine Inline-Skripte/Styles -> CSP ohne unsafe-inline tragfähig."""
+    page = client.get("/").data.decode("utf-8")
+    assert "<script>" not in page.replace("<script src", "<script_src")
+    assert "static/app.js" in page
+    assert "static/app.css" in page
+    assert "cdn.tailwindcss.com/3.4.16" in page  # versionsgepinnt
+
+
+def test_security_headers_present(client):
+    resp = client.get("/")
+    csp = resp.headers["Content-Security-Policy"]
+    assert "frame-ancestors 'none'" in csp
+    assert "unsafe-inline" not in csp
+    assert "https://cdn.tailwindcss.com" in csp
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    assert resp.headers["Referrer-Policy"] == "no-referrer"
+
+
 def test_convert_regular(client):
     resp = client.post("/api/convert", json={"text": "**fett** text"})
     data = resp.get_json()
@@ -68,8 +103,64 @@ def test_convert_empty_text(client):
     assert resp.get_json()["count"] == 0
 
 
+# --------------------------------------------------------------------------- #
+# K-2 / H-2 / B-5: Eingabevalidierung und Chat-Pinning
+# --------------------------------------------------------------------------- #
+def test_convert_rejects_non_string_text(client):
+    """B-5 (Audit): früher 500 durch AttributeError — jetzt saubere 400."""
+    resp = client.post("/api/convert", json={"text": 12345})
+    assert resp.status_code == 400
+    assert "String" in resp.get_json()["error"]
+
+
+def test_convert_rejects_oversized_text(client, monkeypatch):
+    monkeypatch.setattr(app_module, "MAX_INPUT_CHARS", 10)
+    resp = client.post("/api/convert", json={"text": "x" * 11})
+    assert resp.status_code == 400
+    assert "zu lang" in resp.get_json()["error"]
+
+
+def test_convert_rejects_non_numeric_chat_id(client):
+    """Audit K-2: chat_id darf kein beliebiges JSON-Objekt sein."""
+    resp = client.post("/api/convert", json={"text": "hi", "chat_id": {"$gt": ""}})
+    assert resp.status_code == 400
+
+
+def test_send_ignores_body_chat_id_when_pinned(client, monkeypatch):
+    """K-2 (kritisch): mit konfiguriertem CHAT_ID ist der Zielchat NICHT
+    überschreibbar — andernfalls wäre der Endpunkt ein offener Relay."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:secretsecretsecretsecretsecretsec")
+    monkeypatch.setattr(app_module, "CHAT_ID", "-100999")
+    seen = []
+    monkeypatch.setattr(app_module, "send_message",
+                        lambda m, t, **kw: seen.append(m.payload["chat_id"]) or {"ok": True})
+
+    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "42"})
+    assert resp.status_code == 400  # Fremd-Chat abgelehnt
+
+    resp = client.post("/api/send", json={"text": "hallo"})
+    assert resp.status_code == 200
+    assert seen == ["-100999"]
+
+
+def test_send_requires_valid_chat_in_selfhosted_mode(client, monkeypatch):
+    """Ohne ENV-Chat (Selbstbetrieb): numerische chat_id im Body ist Pflicht."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:x")
+    seen = []
+    monkeypatch.setattr(
+        app_module, "send_message",
+        lambda m, t, **kw: seen.append(m.payload["chat_id"]) or {"ok": True},
+    )
+    resp = client.post("/api/send", json={"text": "hallo"})
+    assert resp.status_code == 400  # ohne chat_id gar nicht sendefähig
+    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "77"})
+    assert resp.status_code == 200
+    assert seen == ["77"]
+    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "4;2"})
+    assert resp.status_code == 400  # numerisches Format erzwungen
+
+
 def test_send_missing_token(client):
-    app_module.BOT_TOKEN = ""
     resp = client.post("/api/send", json={"text": "hallo"})
     assert resp.status_code == 400
     assert "TELEGRAM_BOT_TOKEN" in resp.get_json()["error"]
@@ -173,3 +264,85 @@ def test_root_shim_stays_a_pure_forwarder():
         pytest.fail(f"Unerwartete Anweisung im Shim: {type(node).__name__} (Zeile {node.lineno})")
 
     assert forwarded == ["app"], "Shim muss genau ein Objekt weiterleiten: app"
+# --------------------------------------------------------------------------- #
+# K-1/H-3: Fehlerpfade dürfen nichts Sensibles enthalten
+# --------------------------------------------------------------------------- #
+def test_send_error_body_never_contains_token(client, monkeypatch):
+    token = "123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345"
+    monkeypatch.setattr(app_module, "BOT_TOKEN", token)
+    monkeypatch.setattr(app_module, "CHAT_ID", "-1")
+
+    def boom(message, bot_token, **kw):
+        raise SendError(f"Netzwerkfehler beim Versand ({'ConnectionError'}).")
+
+    monkeypatch.setattr(app_module, "send_message", boom)
+    resp = client.post("/api/send", json={"text": "hi"})
+    assert resp.status_code == 502
+    assert token not in resp.get_data(as_text=True)
+
+
+def test_send_reports_partial_progress_and_backoff(client, monkeypatch):
+    """B-6/B-7: bereits gesendete Chunks + retry_after werden kommuniziert."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "123:x")
+    monkeypatch.setattr(app_module, "CHAT_ID", "-1")
+    calls = {"n": 0}
+
+    def flaky(message, bot_token, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"ok": True}
+        raise SendError("Telegram-API-Fehler 429: Too Many Requests.", retry_after=37)
+
+    monkeypatch.setattr(app_module, "send_message", flaky)
+    long_bold = "**" + "x" * 5_000 + "**"  # erzwingt > 1 Chunk
+    resp = client.post("/api/send", json={"text": long_bold})
+    data = resp.get_json()
+    assert resp.status_code == 429
+    assert data["retry_after"] == 37
+    assert data["sent_before_error"] == 1
+    assert "nicht" in data["note"] or "Wartezeit" in data["note"]
+
+
+# --------------------------------------------------------------------------- #
+# API-Token + Origin + Größenlimit + Rate-Limit
+# --------------------------------------------------------------------------- #
+def test_api_token_required_when_configured(client, monkeypatch):
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
+    resp = client.post("/api/convert", json={"text": "hi"})
+    assert resp.status_code == 401
+    resp = client.post("/api/convert", json={"text": "hi"}, headers={"X-Auth-Token": "nope"})
+    assert resp.status_code == 401
+    resp = client.post("/api/convert", json={"text": "hi"}, headers={"X-Auth-Token": "s3cret"})
+    assert resp.status_code == 200
+
+
+def test_foreign_origin_rejected(client):
+    resp = client.post("/api/convert", json={"text": "hi"},
+                       headers={"Origin": "https://evil.example"})
+    assert resp.status_code == 403
+
+
+def test_body_size_limit_rejected(client):
+    """H-2: ohne MAX_CONTENT_LENGTH liest Flask unbegrenzt in den RAM."""
+    assert app_module.app.config["MAX_CONTENT_LENGTH"] == app_module.MAX_BODY_BYTES
+    big = b'{"text": "' + b"x" * (app_module.MAX_BODY_BYTES + 64) + b'"}'
+    resp = client.post("/api/convert", data=big, content_type="application/json")
+    assert resp.status_code == 413
+
+
+def test_send_rate_limit_per_ip(client, monkeypatch):
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "123:x")
+    monkeypatch.setattr(app_module, "CHAT_ID", "-1")
+    monkeypatch.setattr(app_module, "SENDS_PER_MINUTE", 2)
+    monkeypatch.setattr(app_module, "send_message", lambda m, t, **kw: {"ok": True})
+
+    assert client.post("/api/send", json={"text": "a"}).status_code == 200
+    assert client.post("/api/send", json={"text": "b"}).status_code == 200
+    blocked = client.post("/api/send", json={"text": "c"})
+    assert blocked.status_code == 429
+
+
+def test_unknown_route_returns_json_error(client):
+    resp = client.get("/api/nope")
+    assert resp.status_code == 404
+    assert "error" in resp.get_json()
