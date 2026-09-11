@@ -39,13 +39,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--chat-id",
-        default=os.environ.get("TELEGRAM_CHAT_ID", ""),
-        help="Ziel-Chat/-Kanal (z. B. -100123456789).",
+        default=None,
+        help="Ziel-Chat/-Kanal (z. B. -100123456789). Standard: TELEGRAM_CHAT_ID.",
     )
     parser.add_argument(
         "--token",
-        default=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
-        help="Telegram-Bot-Token.",
+        default=None,
+        help="[veraltet — sichtbar in ps & Shell-Historie] Telegram-Bot-Token. "
+             "Besser: Umgebungsvariable TELEGRAM_BOT_TOKEN setzen.",
     )
     parser.add_argument(
         "--send",
@@ -57,6 +58,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    chat_id = args.chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
+
+    # Audit M-2: Tokens als CLI-Argument stehen in der Prozessliste (ps)
+    # und in der Shell-Historie. Der Botkit-Weg (BotToken.from_getpass /
+    # Environment + scrub) ist der empfohlene Ersatz.
+    token = args.token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if args.token:
+        print("WARNUNG: --token ist veraltet (ps/Historie-Leak). Nutze die "
+              "Umgebungsvariable TELEGRAM_BOT_TOKEN oder 'botctl' mit "
+              "BotToken.from_getpass().", file=sys.stderr)
 
     # Eingabe lesen (Datei oder STDIN), immer explizit UTF-8.
     if args.input:
@@ -65,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         text = sys.stdin.read()
 
-    messages = build_messages(text, args.chat_id or 0)
+    messages = build_messages(text, chat_id or 0)
 
     if not messages:
         print("Keine (nicht leere) Eingabe zum Senden.")
@@ -75,14 +86,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"--- Nachricht {i}/{len(messages)} ({msg.kind}) ---")
         print(json.dumps(msg.payload, ensure_ascii=False, indent=2))
         if args.send:
-            if not args.token:
+            if not token:
                 print("FEHLER: --token bzw. TELEGRAM_BOT_TOKEN fehlt.")
                 return 1
-            if not args.chat_id:
+            if not chat_id:
                 print("FEHLER: --chat-id bzw. TELEGRAM_CHAT_ID fehlt.")
                 return 1
             try:
-                print("Telegram-Antwort:", send_message(msg, args.token))
+                print("Telegram-Antwort:", send_message(msg, token))
             except SendError as exc:
                 print(f"FEHLER: {exc}")
                 return 1
