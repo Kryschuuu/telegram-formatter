@@ -81,8 +81,14 @@ def normalize_text(text: str) -> str:
     ``ì`` in mehrere Codepoints (``i`` + COMBINING GRAVE ACCENT). Das
     verschiebt nachgelagerte Offsets und Längenberechnungen. NFC stellt
     sicher, dass ein Zeichen immer EIN Codepoint ist.
+
+    NUL-Zeichen werden entfernt: ``_PlaceholderStore`` markiert geschützte
+    Bereiche mit ``\\x00…\\x00``; Nutzer-NULs (via JSON ``\\u0000`` möglich)
+    würden sonst Platzhalter kollidieren lassen und von Telegram ohnehin
+    abgelehnt (Audit N-1).
     """
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\x00", "")
     return unicodedata.normalize("NFC", text)
 
 
@@ -147,7 +153,7 @@ def split_formulas(text: str) -> list[Segment]:
         if text[i:i+2] == "$$":
             start = i + 2
             end = text.find("$$", start)
-            if end != -1:
+            if end != -1 and text[start:end].strip() and "\n\n" not in text[start:end]:
                 formula = text[start:end]
                 flush_text()
                 segments.append(Segment("display_math", formula))
@@ -184,10 +190,17 @@ def split_formulas(text: str) -> list[Segment]:
                 i += 1
                 continue
 
-            # Einzelnes $ suchen (nicht $$)
+            # Einzelnes $ suchen (nicht $$). GFM-Grenzregeln (Audit B-4):
+            # ""$100 und $200"" ist eine Preisangabe, keine Formel —
+            # schließendes $ darf nicht auf Leerzeichen treffen und nicht
+            # direkt vor einer Ziffer stehen.
             start = i + 1
             end = text.find("$", start)
-            if end != -1 and (end == start or text[end - 1] != "$"):
+            if (
+                end != -1
+                and (end == start or text[end - 1] != "$")
+                and _math_bounds_ok(text, start, end)
+            ):
                 formula = text[start:end]
                 flush_text()
                 segments.append(Segment("inline_math", formula))
@@ -241,16 +254,22 @@ def convert_deepseek_latex_syntax(text: str) -> str:
         # 1. Bestehende $$...$$-Formel unverändert übernehmen.
         if pair == "$$":
             end = text.find("$$", i + 2)
-            if end != -1:
+            if end != -1 and text[i + 2 : end].strip() and "\n\n" not in text[i + 2 : end]:
                 out.append(text[i : end + 2])
                 i = end + 2
                 continue
 
-        # 2. Bestehende $...$-Formel unverändert übernehmen
-        #    ("$ 20" ist eine Preisangabe, kein Formelbeginn).
+        # 2. Bestehende $...$-Formel unverändert übernehmen — mit denselben
+        #    GFM-Grenzregeln wie split_formulas ("$ 20"/"$100 und $200" sind
+        #    Preise; Audit B-4), damit Routing und Konversion dieselben
+        #    Bereiche als Mathematik ansehen.
         if text[i] == "$" and not (i + 1 < n and text[i + 1].isspace()):
             end = text.find("$", i + 1)
-            if end != -1 and (end == i + 1 or text[end - 1] != "$"):
+            if (
+                end != -1
+                and (end == i + 1 or text[end - 1] != "$")
+                and _math_bounds_ok(text, i + 1, end)
+            ):
                 out.append(text[i : end + 1])
                 i = end + 1
                 continue
@@ -378,8 +397,31 @@ class _PlaceholderStore:
 
 
 def _escape_html(text: str) -> str:
-    """Escaped die drei in Telegram-HTML bedeutungstragenden Zeichen."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    """
+    Escaped die in Telegram-HTML bedeutungstragenden Zeichen.
+
+    Das Anführungszeichen wird zusätzlich escaped (Audit M-1): unsere
+    Erzeuger schreiben Textanteile in Attributkontexte (``<a href="…">``,
+    ``<pre language="…">``), wo ein rohes ``"`` das Attribut aufbrechen und
+    Payload-Injection ermöglichen würde.
+    """
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+#: Zulässiges Alphabet für Info-Strings von Codefences (``language="…"``).
+#: Unbekannte Sprachen führen zu leerem Attribut statt Attribut-Injection.
+_FENCE_LANG_RE = re.compile(r"^[A-Za-z0-9_+#.-]{1,40}$")
+
+
+def _safe_fence_lang(raw: str) -> str:
+    """Normalisiert die Fence-Sprache auf ein Attribut-sicheres Token."""
+    lang = raw.strip().split()[0] if raw.strip() else ""
+    return lang if _FENCE_LANG_RE.match(lang) else ""
 
 
 # ---------------------------------------------------------------------------
@@ -399,8 +441,10 @@ def markdown_to_html(text: str) -> str:
     store = _PlaceholderStore()
 
     # 1. Fenced-Code-Blöcke (```...```) und Inline-Code schützen.
+    #    Die Sprache läuft durch eine Allowlist — sie landet sonst roh im
+    #    Attribut language="…" (Audit M-1: Attribut-Injection verhindern).
     def fenced(m: re.Match) -> str:
-        lang = m.group(1).strip()
+        lang = _safe_fence_lang(m.group(1))
         content = m.group(2).rstrip("\n")
         if lang:
             return store(f'<pre language="{lang}">{_escape_html(content)}</pre>')
@@ -442,9 +486,10 @@ def markdown_to_html(text: str) -> str:
         r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text
     )
 
-    # 9. Listenpunkte.
-    text = re.sub(r"^\s*[-*+]\s+", "• ", text, flags=re.M)
-    text = re.sub(r"^\s*\d+[.)]\s+", "• ", text, flags=re.M)
+    # 9. Listenpunkte — Einrückung bleibt erhalten (Audit B-12), sonst
+    #    kollabieren verschachtelte Listen auf eine Ebene.
+    text = re.sub(r"^(\s*)[-*+]\s+", r"\1• ", text, flags=re.M)
+    text = re.sub(r"^(\s*)\d+[.)]\s+", r"\1• ", text, flags=re.M)
 
     # 10. Inline-Formatierung (Reihenfolge wichtig: fett vor kursiv,
     #     Unterstreichen vor Kursiv-_).
@@ -475,7 +520,7 @@ def _protect_math(text: str, store: _PlaceholderStore) -> str:
         if text[i:i+2] == "$$":
             start = i + 2
             end = text.find("$$", start)
-            if end != -1:
+            if end != -1 and text[start:end].strip() and "\n\n" not in text[start:end]:
                 formula = text[start:end]
                 if validate_latex_braces(formula):
                     out.append(store(_escape_html(formula)))
@@ -523,7 +568,11 @@ def _protect_math(text: str, store: _PlaceholderStore) -> str:
 
             start = i + 1
             end = text.find("$", start)
-            if end != -1 and (end == start or text[end - 1] != "$"):
+            if (
+                end != -1
+                and (end == start or text[end - 1] != "$")
+                and _math_bounds_ok(text, start, end)  # GFM-Grenzregeln (B-4)
+            ):
                 formula = text[start:end]
                 if validate_latex_braces(formula):
                     out.append(store(_escape_html(formula)))
@@ -602,8 +651,11 @@ def markdown_to_rich_markdown(text: str) -> str:
     store = _PlaceholderStore()
 
     # 1. Code schützen, damit "$" und "__" darin unangetastet bleiben.
+    #    Sprache nur, wenn sie das erlaubte Alphabet trifft (Audit M-1);
+    #    unbekannte Info-Strings werden verworfen, der Block bleibt ``` ohne
+    #    Sprachangabe.
     def fenced(m: re.Match) -> str:
-        lang = m.group(1).strip()
+        lang = _safe_fence_lang(m.group(1))
         content = m.group(2).rstrip("\n")
         return store(f"```{lang}\n{content}\n```")
 
@@ -919,19 +971,26 @@ def _group(items: list[str], max_chars: int, joiner: str) -> list[str]:
     ``max_chars`` nicht überschreiten. Überlange Einzel-Items werden hart
     geteilt.
     """
+    # Längensaldo wird inkrementell geführt: join().len() je Item wäre
+    # O(n^2) (Audit O-2); die Grenze bleibt exakt dieselbe.
     chunks: list[str] = []
     buf: list[str] = []
+    size = 0
+    sep = len(joiner)
     for item in items:
         if len(item) > max_chars:
             if buf:
                 chunks.append(joiner.join(buf))
-                buf = []
+                buf, size = [], 0
             chunks.extend(item[i : i + max_chars] for i in range(0, len(item), max_chars))
             continue
-        if buf and len(joiner.join(buf)) + len(joiner) + len(item) > max_chars:
+        add = len(item) + (sep if buf else 0)
+        if buf and size + add > max_chars:
             chunks.append(joiner.join(buf))
-            buf = []
+            buf, size = [], 0
+            add = len(item)
         buf.append(item)
+        size += add
     if buf:
         chunks.append(joiner.join(buf))
     return chunks

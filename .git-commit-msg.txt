@@ -1,0 +1,31 @@
+fix(utils): Formel-Routing nach GFM-Regeln, Attribut-Escaping, Kleinfixes
+
+Audit-Befunde B-4, M-1, B-12, N-1, O-2:
+
+* B-4: Inline-Math erkennt Formelbereiche jetzt mit gemeinsamen
+  _math_bounds_ok-Praedikat in allen drei Scannern (split_formulas,
+  convert_deepseek_latex_syntax, _protect_math) — Randregeln wie GFM:
+  kein Whitespace an den Randern des Formelinhalts, keine Ziffer direkt
+  hinter dem schliessenden '$', keine Formel ueber Absatzgrenzen.
+  "Das Buch kostet $100 und der Stift $200." bleibt damit normaler
+  Text (kein Rich-Fehlrouting, kein kaputtes LaTeX-Rendering); echte
+  $E=mc^2$-Formeln routen weiterhin auf den Rich-Pfad.
+  Display-$$...$$ verlangt nicht-leeren Inhalt innerhalb eines
+  Abschnitts.
+* M-1: _escape_html escaped zusaetzlich " — Links und language="…"-
+  Attribute koennen nicht mehr per Anfuehrungszeichen aufgebrochen
+  werden. Fence-Info-Strings laufen durch eine Allowlist
+  (_FENCE_LANG_RE, max. 40 Zeichen, sicheres Alphabet); unbekannte
+  Angaben fuellen das Attribut leer statt es zu injizieren. Gilt fuer
+  Regular- UND Rich-Pfad.
+* B-12: Listenkonvertierung erhaelt die Einrückung (verschachtelte
+  Listen kollabieren nicht mehr auf Ebene 0).
+* N-1: normalize_text entfernt NUL-Zeichen — sie waeren sonst mit den
+  \x00-Markern des _PlaceholderStore kollidiert (Inhaltsvertauschung,
+  von Telegram ohnehin abgelehnt).
+* O-2: _group fuehrt den Laengensaldo inkrementell statt ueber
+  join().len() je Item (quadratisches Verhalten auf grossen Dokumenten
+  beseitigt; identische Chunk-Grenzen).
+
+Tests: 9 neue Regressionstests in TestMathBoundaryAndEscaping;
+214 Tests gesamt gruen.
