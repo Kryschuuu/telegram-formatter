@@ -116,3 +116,31 @@ def test_scrub_environment_removes_only_listed_names(monkeypatch):
 @pytest.mark.parametrize("value", ["", None])
 def test_redact_with_falsy_values(value):
     assert redact(value or "") == ""
+
+
+def test_filter_redacts_tracebacks_and_stack():
+    """Audit H-4: Handler formatieren exc_info NACH den Filtern — der Filter
+    muss den Stack vorrendern und redigieren, sonst laufen Tokens durch."""
+    import logging
+
+    logger = logging.getLogger("test_h4")
+    record = logger.makeRecord(
+        "test_h4", logging.ERROR, __file__, 1, "fehlgeschlagen", (), None
+    )
+    try:
+        raise ValueError(
+            "connect failed https://api.telegram.org/bot123456789:"
+            "AAH1bcDefGhIjKlMnOpQrStUvWxYz012345/sendMessage"
+        )
+    except ValueError:
+        import sys
+
+        record.exc_info = sys.exc_info()
+
+    from telegram_formatter.botkit.privacy import RedactingFilter
+
+    RedactingFilter().filter(record)
+    assert record.exc_info is None
+    assert record.exc_text is not None
+    assert "AAH1bcDefGhIjKlMnOpQrStUvWxYz012345" not in record.exc_text
+    assert "[redacted]" in record.exc_text

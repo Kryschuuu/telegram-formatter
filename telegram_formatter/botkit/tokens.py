@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import threading
 import time
 from collections.abc import Callable
 from typing import Protocol
@@ -220,10 +221,13 @@ class InMemoryTokenVault:
     * Handles sind 256-Bit-Zufallswerte (nicht erratbar, nicht ableitbar);
     * die TTL ist hart: :meth:`fetch` verlängert sie *nicht*, eine Session
       muss sich bei Bedarf neu registrieren (Fail-Closed statt Komfort);
-    * :meth:`purge_expired` wird vom Session-Manager regelmäßig aufgerufen.
+    * :meth:`purge_expired` wird vom Session-Manager regelmäßig aufgerufen;
+    * alle Operationen laufen unter einem Lock (Thread-safety, Audit M-7).
 
-    Geeignet für den gehosteten Modus, in dem das Token einmalig übergeben
-    und danach nur noch über ein HttpOnly-Cookie-Handle referenziert wird.
+    Hinweis (Audit N-5): Dieser Vault ist ein **Baustein** für einen
+    gehosteten Modus (Handle statt Token im Request). Ein solcher Modus —
+    inkl. HttpOnly-Cookie-Schicht — ist aktuell **nicht implementiert**;
+    die Flask-App referenziert Tokens nicht über Handles.
     """
 
     def __init__(
@@ -235,6 +239,7 @@ class InMemoryTokenVault:
         self._clock = clock
         self._default_ttl = default_ttl_seconds
         self._entries: dict[str, tuple[VaultEntry, BotToken]] = {}
+        self._lock = threading.RLock()
 
     def store(self, token: BotToken, *, ttl_seconds: float | None = None) -> str:
         ttl = self._default_ttl if ttl_seconds is None else ttl_seconds
@@ -247,31 +252,36 @@ class InMemoryTokenVault:
             created_at=now,
             expires_at=now + ttl,
         )
-        self._entries[handle] = (entry, token)
+        with self._lock:
+            self._entries[handle] = (entry, token)
         return handle
 
     def fetch(self, handle: str) -> BotToken | None:
-        item = self._entries.get(handle)
-        if item is None:
-            return None
-        entry, token = item
-        if self._clock() >= entry.expires_at:
-            del self._entries[handle]  # fail-closed: abgelaufen = gelöscht
-            return None
-        return token
+        with self._lock:
+            item = self._entries.get(handle)
+            if item is None:
+                return None
+            entry, token = item
+            if self._clock() >= entry.expires_at:
+                del self._entries[handle]  # fail-closed: abgelaufen = gelöscht
+                return None
+            return token
 
     def revoke(self, handle: str) -> bool:
-        return self._entries.pop(handle, None) is not None
+        with self._lock:
+            return self._entries.pop(handle, None) is not None
 
     def purge_expired(self) -> int:
         now = self._clock()
-        expired = [h for h, (entry, _) in self._entries.items() if now >= entry.expires_at]
-        for handle in expired:
-            del self._entries[handle]
-        return len(expired)
+        with self._lock:
+            expired = [h for h, (entry, _) in self._entries.items() if now >= entry.expires_at]
+            for handle in expired:
+                del self._entries[handle]
+            return len(expired)
 
     def __len__(self) -> int:
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)
 
 
 class PassthroughTokenVault:

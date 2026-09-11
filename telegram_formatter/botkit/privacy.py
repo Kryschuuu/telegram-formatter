@@ -135,7 +135,15 @@ class RedactingFilter(logging.Filter):
     schützt er auch Bibliotheken, die wir nicht kontrollieren — inklusive
     ``urllib3``, das bei Debug-Level sonst die komplette URL mitsamt
     Bot-Token loggen würde.
+
+    Traceback-Härtung (Audit H-4): Handler formatieren ``exc_info`` erst
+    *nach* den Filtern — ein roher Exception-Stack (z. B. eine
+    ``requests``-Meldung mit API-URL) würde den Filter komplett umgehen.
+    Der Filter rendert den Stack deshalb selbst, redigiert ihn und
+    neutralisiert ``exc_info``/``stack_info``.
     """
+
+    _formatter = logging.Formatter()
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
@@ -144,8 +152,16 @@ class RedactingFilter(logging.Filter):
             message = str(record.msg)
         record.msg = redact(message)
         record.args = ()
-        if record.exc_text:
+        if record.exc_info:
+            try:
+                record.exc_text = redact(self._formatter.formatException(record.exc_info))
+            except Exception:  # pragma: no cover - defensive
+                record.exc_text = redact(str(record.exc_info[1] if record.exc_info[1] else ""))
+            record.exc_info = None
+        elif record.exc_text:
             record.exc_text = redact(record.exc_text)
+        if record.stack_info:
+            record.stack_info = redact(record.stack_info)
         return True
 
 

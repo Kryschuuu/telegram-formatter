@@ -139,3 +139,36 @@ def test_passthrough_vault_never_stores():
     assert vault.fetch("irgendwas") is None
     assert vault.revoke("irgendwas") is False
     assert vault.purge_expired() == 0
+
+
+def test_vault_parallel_store_fetch_is_thread_safe():
+    """Audit M-7: Paralleles store/fetch/purge ohne Lock konnte Dict-Races erzeugen."""
+    import threading
+
+    from telegram_formatter.botkit.tokens import InMemoryTokenVault
+
+    vault = InMemoryTokenVault()
+    token = BotToken.parse(SECRET) if "SECRET" in globals() else BotToken.parse(
+        "123456789:" + "A" * 35
+    )
+    handles: list[str] = []
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            for _ in range(50):
+                h = vault.store(token, ttl_seconds=5.0)
+                handles.append(h)
+                vault.fetch(h)
+                vault.purge_expired()
+                vault.revoke(h)
+        except BaseException as exc:  # noqa: BLE001 - Smoke-Test
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(vault) == 0
