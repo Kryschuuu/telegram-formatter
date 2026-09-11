@@ -180,8 +180,11 @@
                     Der Token liegt nur als Umgebungsvariable auf dem Server und wird ausschließlich
                     für den Versand an die Telegram-API verwendet — er wird nie im Browser
                     ausgeliefert, nicht in Logs geschrieben und nicht in einer Datenbank gespeichert.
-                    Behandele ihn dennoch wie ein Passwort: nie öffentlich posten, bei Verdacht via
-                    @BotFather mit <code class="bg-slate-100 px-1 rounded">/revoke</code> neu erzeugen.
+                    Seit v2.1.0 ist der Versand zusätzlich gehärtet: Fehlermeldungen der API werden
+                    bereinigt (kein Token, keine URL), der Zielchat ist auf den konfigurierten Chat
+                    festgelegt und die Endpunkte sind optional per <code class="bg-slate-100 px-1 rounded">X-Auth-Token</code>
+                    geschützt. Behandele ihn dennoch wie ein Passwort: nie öffentlich posten, bei
+                    Verdacht via @BotFather mit <code class="bg-slate-100 px-1 rounded">/revoke</code> neu erzeugen.
                 </p>
             </details>
             <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">

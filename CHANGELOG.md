@@ -4,6 +4,72 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.1.0] - 2026-09-11## [2.1.0] - 2026-09-11
+
+Sicherheitshärtung und Fehlerbehebungen als Umsetzung des externen
+Code-Reviews (baut auf dem Stand des [Unreleased]-Blocks: Root-Shim + render.yaml) ([`SECURITY_AUDIT.md`](SECURITY_AUDIT.md)); die Nummern (K-*/H-*/
+M-*/B-*) verweisen auf die Befunde dort.
+
+### Behoben (Sicherheit — kritisch/hoch)
+
+- **K-1:** `SendError` enthielt bei Netzwerkfehlern die Requests-Fehlermeldung
+  samt URL — **und damit den Bot-Token im Klartext**, den `/api/send` an den
+  HTTP-Client zurückgab. Fehlermeldungen nennen jetzt nur noch Statuscode,
+  Exception-Klasse und gekürzte API-Description.
+- **K-2:** `/api/send` war ein offener Relay: `chat_id` aus dem Request-Body
+  überschrieb den konfigurierten Zielchat, ohne Authentifizierung. Jetzt:
+  Chat-Pinning auf `TELEGRAM_CHAT_ID`, Validierung gegen `CHAT_ID_PATTERN`,
+  optionales API-Token (`X-Auth-Token`), Origin-Bindung, Größen- (413) und
+  Rate-Limits.
+- **H-1:** Review-Gate-Bypasses geschlossen: Import-Alias-Auflösung
+  (`requests as rq`), Modul-Konstanten-/f-String-Faltung für URL-Prüfung,
+  Token-Literal-Scan in *allen* String-Konstanten (auch `AnnAssign`, Dicts,
+  Call-Argumente), `importlib`/`tempfile`/`shutil`/`builtins` verboten.
+- **H-2:** `MAX_CONTENT_LENGTH` gesetzt; Eingabelänge wie im botkit-Layer
+  begrenzt; Rate-Limiter pro IP; Doku-Gunicorn-Flags (`--workers/--timeout`).
+- **H-3/H-4:** Keine Rohtext- oder Traceback-Leaks mehr: `response.text` wird
+  nicht übernommen; der `RedactingFilter` redigiert jetzt auch Exception-Stacks
+  (die Handler formatieren nach dem Filtern).
+- **H-5:** UI ohne Inline-Skripte (CSP-fähig), CDN-Skript versionsgepinnt
+  (SRI beim Release nachziehen); CSP/nosniff/no-referrer/frame-ancestors-Header.
+- **M-3/N-2:** `api_base` nur noch HTTPS (localhost ausgenommen);
+  Gitleaks-Allowlist auf Pfad+Muster (`matchAll`) verschärft.
+
+### Behoben (Funktional)
+
+- **B-1:** Chunk-Grenzen rissen `<b>/<code>/…`-Tags, `$$`-Formelblöcke und
+  ``` fences entzwei → Telegram-400 bzw. kaputtes Rendering. Neu:
+  Tag-Balance pro Chunk (mit Nachtrag an den Folgechunk) und atomare
+  Rich-Bereiche mit `chunk_markdown_safe`-Artiger Aufteilung.
+- **B-2:** `botctl send --local-trust` brach immer mit „Bot ist nicht
+  freigegeben" — der Gate wurde dem Manager fälschlich übergeben.
+- **B-3:** `ReviewTicket.is_approved()` ignorierte Ablehnungen — ein
+  abgelehnter Bot blieb im Local-Modus freigabefähig; Re-Submit erzeugt
+  jetzt ein frisches Ticket.
+- **B-4:** Preisangaben (`$100 und $200`) wurden als LaTeX fehlgeroutet;
+  Inline-Math folgt jetzt GFM-Randregeln (in allen drei Scannern einheitlich).
+- **B-5/B-6/B-7/B-8/B-9/B-10/B-11/B-12:** `text`-Typprüfung (400 statt 500),
+  Teilversand-Rückmeldung + `retry_after`, `ok`-Flag-Prüfung,
+  Verzeichnis-Eingabe für `botctl review`, `RegistrationError`-Fang in
+  `approve`, Owner-Fallback `local`, Audit-Trail unter `flock`,
+  Fixture-Restoration, Listen-Einrückung.
+- **N-1:** NUL-Zeichen aus Nutertext entfernt (Platzhalter-Kollision).
+
+### Geändert
+
+- `chunk_text`/`_group`: inkrementelle Längenführung (O(n²) → O(n)).
+- Versand nutzt eine wiederverwendete `requests.Session` (TLS-Pooling).
+- `botkit`-Session/`InMemoryTokenVault`: Thread-safe (Locks); Sessions
+  entfernen sich beim Schließen selbst aus dem Manager.
+- CLI `--token` veraltet (ps/Historie); Environment/`botctl` empfohlen.
+- CI: Bandit ohne `-ll`; `botctl verify` als aktiver Schritt (bei
+  `vars.BOT_ID`/`vars.BOT_PATH`); Dependabot (pip, actions).
+- Dependencies: `gunicorn` 23.0.0 → 26.2.0, `requests` 2.33.0 → 2.34.2.
+
+### Hinweise (bewusst nicht Teil dieses Releases)
+
+- Parser-Ein-Pass-Rewrite (O-1) und Hash-Lockfiles (plattformabhängig) sind
+  als separate Änderungen vorgesehen; Details im Audit-Bericht.
 ## [Unreleased]
 
 ### Behoben (Deploy-Start nach der Paket-Umstellung)
