@@ -1,9 +1,10 @@
 """Wrapper: führt die funktionalen jsdom-Smoke-Tests aus (falls Node vorhanden).
 
-Ohne Node bzw. ohne global installiertes jsdom wird der Test sauber
+Ohne Node bzw. ohne installiertes jsdom wird der Test sauber
 übersprungen (Exit-Code 77 der Spec => skip). Für die volle Abdeckung:
 
-    npm install jsdom        # ins Repo-Elternverzeichnis ODER via NODE_PATH
+    npm install              # jsdom ist als Dev-Dependency gepinnt
+                             # (package.json; CI installiert es mit)
 
 Details zum Was/Warum: docs/DESIGN.md, Abschnitt „Testing“.
 """

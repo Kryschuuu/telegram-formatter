@@ -237,7 +237,18 @@ def test_root_shim_exposes_the_identical_wsgi_object():
     routes = {
         rule.rule for rule in shim.app.url_map.iter_rules() if rule.endpoint != "static"
     }
-    assert routes == {"/", "/api/convert", "/api/send"}
+    assert routes == {
+        "/",
+        "/api/convert",
+        "/api/send",
+        # BYOB-Websessions (v2.2.0): derselbe WSGI-App-Kern, daher auch über
+        # den Shim erreichbar.
+        "/api/byob/session",
+        "/api/byob/discover",
+        "/api/byob/send",
+        "/api/byob/status",
+        "/api/byob/close",
+    }
 
     # Rauchtest wie auf Render: Startbefehl liefert die Seite, und der Footer
     # zieht die Version aus telegram_formatter.__version__ (nicht hartkodiert).

@@ -140,6 +140,15 @@ jobs:
               || { echo "::error::Tokenförmiger Wert im Audit-Trail!"; exit 1; }
           fi
 
+      - name: jsdom für funktionale Frontend-Tests (optional, gepinnt)
+        # Aktiviert tests/test_jsdom_smoke.py (überspringt sauber ohne Node).
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Frontend-Dev-Abhängigkeiten (jsdom)
+        run: npm ci
+
       - name: Unit-Tests
         run: pytest -q
 

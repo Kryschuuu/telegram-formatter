@@ -45,7 +45,8 @@ function buildHarnessHtml() {
     );
     html = html.replace(
         "</body>",
-        `<script>${read(path.join(STATIC_DIR, "js/app.js"))}</script></body>`
+        `<script>${read(path.join(STATIC_DIR, "js/app.js"))}</script>` +
+        `<script>${read(path.join(STATIC_DIR, "js/byob.js"))}</script></body>`
     );
     return html;
 }
@@ -105,7 +106,7 @@ async function main() {
         },
     });
     let { window } = dom;
-    const doc = window.document;
+    let doc = window.document;
     await new Promise((resolve) => window.addEventListener("load", resolve));
 
     check("Theme-Boot: gespeichertes 'dark' wird vor/nach Parse gesetzt",
@@ -249,6 +250,138 @@ async function main() {
 
     check("Auch im zweiten Durchlauf keine Skriptfehler", scriptErrors.length === 0,
         scriptErrors.slice(-2).join(" / "));
+
+    /* ------------------------------------------------------------------ */
+    /* Fall 5: BYOB — eigene Bot-Session öffnen, senden, beenden           */
+    /* ------------------------------------------------------------------ */
+    let sessionState = "none"; // none | active | gone
+    const byobSession = {
+        session_id: "abcd1234efgh5678",
+        bot: { id: 42, username: "mein_bot", display_name: "Mein Bot", handle: "@mein_bot" },
+        chat_id: "-1001234567890",
+        limits: { ttl_seconds: 1800, idle_timeout_seconds: 600, max_messages_per_minute: 20, max_input_chars: 100000 },
+    };
+    const byobCalls = [];
+    dom = new JSDOM(buildHarnessHtml(), {
+        runScripts: "dangerously",
+        virtualConsole: trackedConsole(scriptErrors),
+        url: "https://formatter.local/",
+        beforeParse(window) {
+            window.matchMedia = () => ({
+                matches: false, media: "", addEventListener() {}, removeEventListener() {},
+                addListener() {}, removeListener() {},
+            });
+            window.fetch = (url, opts) => {
+                const u = String(url);
+                const body = opts && opts.body ? String(opts.body) : "";
+                byobCalls.push(u);
+                let status = 200;
+                let payload = { count: 1, messages: [] };
+                if (u.includes("/api/byob/session")) {
+                    status = 201; payload = byobSession;
+                } else if (u.includes("/api/byob/discover")) {
+                    payload = {
+                        chats: [
+                            { id: -1001234567890, type: "group", name: "Testgruppe" },
+                            { id: 4711, type: "private", name: "Ich" },
+                        ],
+                    };
+                } else if (u.includes("/api/byob/send")) {
+                    if (sessionState === "active") {
+                        payload = { sent: 2, session: { ttl_remaining_seconds: 1700, idle_remaining_seconds: 540 } };
+                    } else {
+                        status = 410; payload = { error: "Session abgelaufen oder unbekannt — bitte erneut öffnen." };
+                    }
+                } else if (u.includes("/api/byob/status")) {
+                    payload = sessionState === "active"
+                        ? { active: true, ttl_remaining_seconds: 1750, idle_remaining_seconds: 560, messages_sent: 1, chunks_sent: 2 }
+                        : { active: false };
+                } else if (u.includes("/api/byob/close")) {
+                    sessionState = "gone"; payload = { closed: true };
+                }
+                return Promise.resolve({ ok: status < 400, status, json: () => Promise.resolve(payload) });
+            };
+        },
+    });
+    window = dom.window;
+    doc = window.document;
+    await new Promise((resolve) => window.addEventListener("load", resolve));
+    await sleep(60);
+
+    check("BYOB: Panel sichtbar, Session-Bereich versteckt",
+        !doc.getElementById("byobForm").hidden && doc.getElementById("byobActive").hidden);
+    check("BYOB: Versandweg-Hinweis nennt den geteilten Bot (nicht die eigene Session)",
+        doc.getElementById("sendPathNote").textContent.includes("geteilter Bot") &&
+        !doc.getElementById("sendPathNote").classList.contains("is-private"),
+        doc.getElementById("sendPathNote").textContent);
+    check("BYOB: tfByob-Vertrag existiert und ist inaktiv",
+        window.tfByob && window.tfByob.isActive() === false);
+
+    /* Session öffnen: Validierungen zuerst */
+    doc.getElementById("byobToken").value = "kaputtes-token";
+    doc.getElementById("byobForm").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await sleep(40);
+    check("BYOB: ungültiges Token wird clientseitig abgewiesen (kein POST)",
+        !byobCalls.some((u) => u.includes("/api/byob/session")));
+    check("BYOB: Fehlermeldung erscheint in #byobError",
+        doc.getElementById("byobError").classList.contains("is-error"));
+
+    /* Chat-Erkennung (vor dem Öffnen — das Token-Feld ist dann noch gefüllt):
+       Chips rendern und Klick übernimmt die ID. */
+    doc.getElementById("byobToken").value = "123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345";
+    doc.getElementById("byobChat").value = "";
+    doc.getElementById("byobDiscoverBtn").click();
+    await sleep(40);
+    const chips = doc.querySelectorAll("#byobDiscoverResult .tf-chip");
+    check("BYOB: Chat-Erkennung rendert Chips", chips.length === 2, `chips=${chips.length}`);
+    if (chips.length) {
+        chips[0].click();
+        check("BYOB: Chip-Klick übernimmt die Chat-ID",
+            doc.getElementById("byobChat").value === "-1001234567890");
+    }
+
+    /* Erfolgreich öffnen */
+    sessionState = "active";
+    doc.getElementById("byobChat").value = "-1001234567890";
+    doc.getElementById("byobConsent").checked = true;
+    doc.getElementById("byobForm").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await sleep(60);
+    check("BYOB: Session-Öffnung ging an /api/byob/session",
+        byobCalls.some((u) => u.includes("/api/byob/session")));
+    check("BYOB: aktive Session sichtbar, Formular versteckt",
+        doc.getElementById("byobActive").hidden === false && doc.getElementById("byobForm").hidden === true);
+    check("BYOB: Bot-Handle + Chat-ID in der Statusanzeige",
+        doc.getElementById("byobBotName").textContent === "@mein_bot" &&
+        doc.getElementById("byobChatLabel").textContent === "-1001234567890");
+    check("BYOB: Token-Feld nach Start geleert",
+        doc.getElementById("byobToken").value === "");
+    check("BYOB: Versandweg-Hinweis zeigt privat",
+        doc.getElementById("sendPathNote").classList.contains("is-private"));
+    check("BYOB: Senden-Button-Label auf eigenen Bot",
+        doc.getElementById("sendBtnLabel").textContent === "Über eigenen Bot senden");
+    check("BYOB: Countdown läuft", /Session läuft noch/.test(doc.getElementById("byobCountdown").textContent));
+
+    /* Senden über die Session */
+    doc.getElementById("input").value = "**privat** via eigener Session";
+    doc.getElementById("sendBtn").click();
+    await sleep(60);
+    const sendCall = byobCalls.filter((u) => u.includes("/api/byob/send")).pop();
+    check("BYOB: Senden geht an /api/byob/send", Boolean(sendCall));
+    check("BYOB: Erfolgsstatus erscheint",
+        doc.getElementById("sendStatus").textContent.includes("2 Nachricht(en) gesendet"),
+        doc.getElementById("sendStatus").textContent);
+
+    /* Ablauf (410): UI muss auf das Formular zurückfallen */
+    sessionState = "gone";
+    doc.getElementById("sendBtn").click();
+    await sleep(60);
+    check("BYOB: 410 beim Senden beendet die Session clientseitig",
+        window.tfByob.isActive() === false && doc.getElementById("byobForm").hidden === false);
+    check("BYOB: Ablauf-Hinweis erscheint", doc.getElementById("byobError").classList.contains("is-error"));
+    check("BYOB: Senden-Button-Label zurück auf geteilten Bot",
+        doc.getElementById("sendBtnLabel").textContent === "An Telegram senden");
+
+    dom.window.close();
 
     console.log(failures === 0 ? "\nJSDOM_SPEC_OK" : `\nJSDOM_SPEC_FAILED (${failures})`);
     process.exit(failures === 0 ? 0 : 1);

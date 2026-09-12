@@ -40,7 +40,7 @@ JS_DIR = STATIC_DIR / "js"
 TEMPLATE_PATH = PKG_ROOT / "templates" / "index.html"
 
 CSS_ORDER = ("tokens.css", "base.css", "layout.css", "components.css")
-JS_FILES = ("theme.js", "app.js")
+JS_FILES = ("theme.js", "app.js", "byob.js")
 
 #: Tokens, die pro Theme *identisch* bleiben und daher in den Theme-Blöcken
 #: fehlen dürfen (in :root definiert, siehe tokens.css).
@@ -253,6 +253,10 @@ def test_js_ids_exist_in_template(page: str):
     assert needed >= {
         "input", "preview", "payloads", "sendBtn", "sendBtnLabel",
         "resetBtn", "sendStatus", "charCount", "themeSwitcher",
+        "byobForm", "byobToken", "byobChat", "byobConsent", "byobStartBtn",
+        "byobError", "byobActive", "byobBotName", "byobChatLabel",
+        "byobCountdown", "byobStats", "byobCloseBtn", "byobDiscoverBtn",
+        "byobDiscoverResult", "sendPathNote",
     }, "unerwartet kleines ID-Set — hat jemand die IDs umgebaut?"
     for dom_id in sorted(needed):
         assert f'id="{dom_id}"' in page, f"JS erwartet id=\"{dom_id}\" — im Template fehlt sie"
@@ -298,10 +302,11 @@ def test_faq_and_hooks_present(page: str):
     for token in (
         'id="input"', 'id="preview"', 'id="payloads"', 'id="sendBtn"',
         'id="resetBtn"', 'id="sendStatus"', 'id="status"', 'id="howto"', 'id="faq"',
-        "data-convert-url", "data-send-url",
+        'id="byob"', 'id="byobForm"', 'id="sendPathNote"',
+        "data-convert-url", "data-send-url", "data-byob-base",
     ):
         assert token in page, f"Funktions-Hook fehlt: {token}"
-    assert page.count("<details") >= 7
+    assert page.count("<details") >= 11
     assert "Vorschau erscheint hier…" in page
     assert page.index('js/theme.js"') < page.index("<body")  # synchron im <head>
 
@@ -370,6 +375,36 @@ def test_accent_and_surface_contrast_pairs():
                 f"({contrast(fg, bg):.2f} < 4.0) — {fg} vs. {bg}"
             )
     assert checked >= 10, "Kontrast-Heuristik hat fast nichts geprüft — Token-Namen umbenannt?"
+
+
+def test_package_data_covers_all_assets():
+    """pyproject-package-data muss JEDE Asset-Datei unter static/ & templates/
+    abdecken. Regression: der Glob ``static/*.css`` griff nicht in die
+    Unterverzeichnisse (static/css, static/js) — das Wheel lieferte ein
+    ungestyltes UI ohne Skripte (Bugfix v2.2.0)."""
+    import tomllib
+
+    pyproject = (PKG_ROOT.parent / "pyproject.toml").read_bytes()
+    config = tomllib.loads(pyproject.decode("utf-8"))
+    patterns = config["tool"]["setuptools"]["package-data"]["telegram_formatter"]
+
+    covered: set[Path] = set()
+    for pattern in patterns:
+        covered.update(PKG_ROOT.glob(pattern))
+
+    expected: set[Path] = set()
+    for sub in ("templates", "static"):
+        for path in (PKG_ROOT / sub).rglob("*"):
+            if path.is_file():
+                expected.add(path)
+
+    missing = expected - covered
+    assert not missing, (
+        f"Assets nicht im Wheel (package-data in pyproject.toml ergänzen): "
+        f"{sorted(str(m.relative_to(PKG_ROOT)) for m in missing)}"
+    )
+    # Und umgekehrt: keine toten Globs, die auf nichts passen.
+    assert len(patterns) == len(set(patterns))
 
 
 def test_rendered_page_is_well_formed(page: str):

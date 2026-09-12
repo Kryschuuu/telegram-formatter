@@ -20,6 +20,9 @@ dist/
 .coverage
 htmlcov/
 
+# Node: nur Dev-Dependency für jsdom-Frontend-Tests (siehe package.json)
+node_modules/
+
 # Altlasten: lokaler Kram & Vorgänger des Audit-Trails
 # (Review-Trail liegt seit v2.0.0 versioniert in audit/reviews.json)
 BAK/

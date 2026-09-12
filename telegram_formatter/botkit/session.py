@@ -154,6 +154,23 @@ class BotSession:
         return self._clock() - self._created_at
 
     @property
+    def ttl_remaining_seconds(self) -> float:
+        """Sekunden bis zum harten TTL-Ende (``0`` für geschlossene Sessions).
+
+        Basis für Countdown-Anzeigen der Webschicht (BYOB-Session-Status).
+        """
+        if self.closed:
+            return 0.0
+        return max(0.0, self._config.ttl_seconds - (self._clock() - self._created_at))
+
+    @property
+    def idle_remaining_seconds(self) -> float:
+        """Sekunden bis zum Leerlauf-Timeout (``0`` für geschlossene Sessions)."""
+        if self.closed:
+            return 0.0
+        return max(0.0, self._config.idle_timeout_seconds - (self._clock() - self._last_activity))
+
+    @property
     def is_expired(self) -> bool:
         """``True`` bei Überschreiten von TTL oder Leerlauf-Timeout."""
         if self.closed:

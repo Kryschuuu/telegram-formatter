@@ -8,6 +8,13 @@
      * Keine class-Namen erfinden: gesetzt werden nur die Zustandsklassen
        is-ok / is-error / is-over (in components.css definiert).
      * DOM-Verträge (IDs) sind durch tests/test_frontend.py abgsichert.
+   *
+   * Versand-Routing (seit v2.2.0): Ist eine BYOB-Session aktiv, stellt
+   * static/js/byob.js das Objekt `window.tfByob` bereit — send() delegiert
+   * dann an `tfByob.sendText()` (eigener Bot, privat). Ohne Session gilt
+   * der klassische Weg über /api/send (geteilter Bot). Das Label des
+   * Senden-Buttons liest setBusy() aus `window.tfSendLabel` (falls byob.js
+   * es gesetzt hat), der Status-Text läuft wie immer über #sendStatus.
    ===================================================================== */
 (function () {
     "use strict";
@@ -170,28 +177,38 @@
     function setBusy(busy) {
         sendBtn.disabled = busy;
         if (sendBtnLabel) {
-            sendBtnLabel.textContent = busy ? "Sende…" : "An Telegram senden";
+            sendBtnLabel.textContent = busy
+                ? "Sende…"
+                : (window.tfSendLabel || "An Telegram senden");
         }
+    }
+
+    function handleSendResponse(res) {
+        var data = res.data || {};
+        if (data.error) {
+            var extra = "";
+            if (typeof data.retry_after === "number") {
+                extra = " Warte " + Math.ceil(data.retry_after) + " s.";
+            }
+            if (data.sent_before_error > 0) {
+                extra += " Bereits gesendet: " + data.sent_before_error + " Teil(en) — nicht komplett wiederholen.";
+            }
+            setSendStatus("Fehler: " + data.error + extra, "error");
+        } else {
+            setSendStatus("✅ " + (data.sent || 0) + " Nachricht(en) gesendet.", "ok");
+        }
+        setBusy(false);
     }
 
     function send() {
         setBusy(true);
-        postJson(sendUrl, { text: input.value }).then(function (res) {
-            var data = res.data || {};
-            if (data.error) {
-                var extra = "";
-                if (typeof data.retry_after === "number") {
-                    extra = " Warte " + Math.ceil(data.retry_after) + " s.";
-                }
-                if (data.sent_before_error > 0) {
-                    extra += " Bereits gesendet: " + data.sent_before_error + " Teil(en) — nicht komplett wiederholen.";
-                }
-                setSendStatus("Fehler: " + data.error + extra, "error");
-            } else {
-                setSendStatus("✅ " + (data.sent || 0) + " Nachricht(en) gesendet.", "ok");
-            }
-            setBusy(false);
-        }).catch(function () {
+        // BYOB aktiv? Dann versendet byob.js über die eigene Session —
+        // Antwortform ist identisch (ok/status/data), die Auswertung bleibt
+        // hier zentral.
+        var request = (window.tfByob && window.tfByob.isActive())
+            ? window.tfByob.sendText(input.value)
+            : postJson(sendUrl, { text: input.value });
+        request.then(handleSendResponse).catch(function () {
             setSendStatus("Netzwerkfehler.", "error");
             setBusy(false);
         });
