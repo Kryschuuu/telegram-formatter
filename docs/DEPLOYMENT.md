@@ -36,7 +36,14 @@ Setze im Formular die folgenden Werte:
 | **Name** | `telegram-formatter` (frei wählbar) |
 | **Environment** | `Python` |
 | **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT --workers 2 --timeout 120` |
+| **Start Command** | `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT --threads 8` |
+
+> **Wichtig — Gunicorn-Worker & BYOB:** Die BYOB-Websessions (eigene Bot-
+> Sessions über die Website, seit v2.2.0) leben **pro Prozess** im RAM. Der
+> Start-Befehl darf deshalb nur **einen** Worker-Prozess verwenden; Nebenläufigkeit
+> liefert `--threads` (gthread). `--workers 2` ohne Sticky-Routing würde Sessions
+> im jeweils anderen Prozess „verlieren“ — der Client erhält dann eine klare
+> „Session abgelaufen oder unbekannt“-Meldung (410) statt eines Fehlversands.
 | **Plan** | Free (oder größer) |
 
 > Der `Start Command` ist wichtig: Die App muss auf `0.0.0.0` und dem von
@@ -75,7 +82,16 @@ Unter **Environment → Environment Variables** diese Einträge hinzufügen:
 | `TELEGRAM_BOT_TOKEN` | Dein Token von BotFather, z. B. `123456:ABC-...` |
 | `TELEGRAM_CHAT_ID` | **empfohlen & sicherheitsrelevant:** pinnt den Zielchat von `/api/send`; ohne sie akzeptiert die API nur eine gültige numerische `chat_id` pro Request |
 | `TELEGRAM_FORMATTER_API_TOKEN` | (optional, seit v2.1.0) gesetzt ⇒ `POST /api/*` verlangt passenden `X-Auth-Token`-Header — sinnvoll, wenn die Instanz öffentlich erreichbar ist |
+| `TELEGRAM_FORMATTER_BYOB_ENABLED` | (optional, seit v2.2.0) `0` ⇒ BYOB-Websessions & UI aus (Standard: an) |
+| `TELEGRAM_FORMATTER_BYOB_TTL_SECONDS` / `…_IDLE_SECONDS` | (optional) Lebensdauer/Leerlauf der Web-Sessions (Standard 1800/600) |
+| `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` | (optional) Anzeige-Name des geteilten Bots in der Privatsphäre-Warnung (Standard `@mdtotxt_bot`) |
 | `PYTHON_VERSION` | (optional) z. B. `3.11` |
+
+> **Privacy-Hinweis:** Ist `TELEGRAM_BOT_TOKEN` **und** `TELEGRAM_CHAT_ID`
+> gesetzt, sendet der Standard-Button in den gepinnten Chat — auf einer
+> öffentlichen Instanz ein **gemeinsamer, für alle sichtbarer Chat**. Die
+> Oberfläche warnt entsprechend; private Inhalte gehören in eine BYOB-Session
+> (Abschnitt „Versandweg“ auf der Seite).
 
 Mit **Add Variable** speichern.
 
@@ -93,7 +109,9 @@ startet die App. Nach kurzer Zeit erscheint eine URL der Form
 1. Öffne die bereitgestellte URL im Browser — die Editor-Seite erscheint.
 2. Gib z. B. ein: `**fett** und $x^2$` — die gebauten Payloads werden
    angezeigt.
-3. Klicke **An Telegram senden**, um die Nachricht tatsächlich zu versenden.
+3. Klicke **An Telegram senden**, um die Nachricht tatsächlich zu versenden —
+   ohne eigene Bot-Session über den geteilten Bot (öffentlich! Warnhinweis
+   auf der Seite beachten), mit eigener Session (BYOB) privat über deinen Bot.
 
 Alternativ per Kommandozeile (Dry-Run zeigt nur die Payloads):
 

@@ -40,7 +40,10 @@ telegram_formatter/
     │   └── components.css  Ebene 4: Bausteine (.tf-*), nur mit var(--token)
     └── js/
         ├── theme.js        Theme-Switcher (läuft synchron im <head>)
-        └── app.js          Editor-Funktionen (Vorschau, /api/convert, Senden)
+        ├── app.js          Editor-Funktionen (Vorschau, /api/convert, Senden)
+        └── byob.js         BYOB-Session-UI (v2.2.0): Session-Start/Status/
+                            Chat-Erkennung; stellt window.tfByob bereit, an
+                            das app.js den Senden-Button delegiert
 ```
 
 Laderegeln (durch `tests/test_frontend.py::test_css_load_order_is_layers`
@@ -51,7 +54,9 @@ abgesichert):
    (Thema-Flashing vermeiden).
 2. CSS in der Reihenfolge tokens → base → layout → components, damit
    Spezifität und Kaskade berechenbar bleiben.
-3. `app.js` bleibt mit `defer` am `</body>`-Ende.
+3. `app.js` und `byob.js` bleiben mit `defer` am `</body>`-Ende
+   (Reihenfolge: `app.js` vor `byob.js` — `byob.js` setzt beim Laden das
+   Senden-Label, `app.js` liest `window.tfByob` nur zur Sendezeit).
 
 ## 2. CSS-Architektur
 
@@ -244,7 +249,7 @@ Zustandsklassen, die JS an Stellschrauben klebt (nur diese drei, alle in
 | Ebene | Ort | prüft |
 |---|---|---|
 | Struktur-Verträge | `tests/test_frontend.py` (pytest, ohne Browser) | Token-Vollständigkeit je Theme, var()-Abdeckung, Asset-Existenz/-Orphanings, JS↔HTML-ID-Verträge, Swatch-Whitelist, mobile-first, `min-width` only, HTML-Wellformedness, Kontrast-Heuristik, Feature-Baseline |
-| Funktionale DOM-Tests | `tests/frontend/jsdom_spec.cjs` via `tests/test_jsdom_smoke.py` | echtes theme.js/app.js-Verhalten: Boot aus localStorage, Switcher-Klicks + Persistenz, Markdown-Vorschau, Debounce + ein POST pro Tipppause, Senden/Erfolg/Fehler (429-Merge), Reset; Skippt sauber ohne Node/jsdom (`npm install jsdom`) |
+| Funktionale DOM-Tests | `tests/frontend/jsdom_spec.cjs` via `tests/test_jsdom_smoke.py` | echtes theme.js/app.js/byob.js-Verhalten: Boot aus localStorage, Switcher-Klicks + Persistenz, Markdown-Vorschau, Debounce + ein POST pro Tipppause, Senden/Erfolg/Fehler (429-Merge), Reset sowie kompletter BYOB-Durchlauf (Session öffnen/senden/beenden, Chat-Chips, 410-Reset); Skippt sauber ohne Node/jsdom (`npm install` — jsdom ist als Dev-Dependency in `package.json` gepinnt) |
 | API/Security | `tests/test_app.py` | CSP strikt `'self'`, keine Inline-Skripte/Styles, alle Formatter-Endpunkte unverändert |
 | Syntax-Check (manuell/local) | `css-tree` + `node --check` | Parse-Fehlerfreiheit von CSS/JS (in CI durch pytest-Strukturtests abgedeckt) |
 | Menschlich | Dev-Server (`flask --app telegram_formatter.app run` + Browser) | reales Rendering; Browser-Matrix s. unten |
@@ -269,15 +274,40 @@ werden respektiert; Touch-Ziele ≥ ~40 px.
   Token im betroffenen Theme-Block ändern. Wenn ein Token *pro Theme gleich*
   bleiben soll, gehört er zu den globalen Konstanten in `:root`
   (`GLOBAL_TOKENS` in `tests/test_frontend.py`).
-* **JS erweitern?** `app.js` kennt nur IDs (`getElementById`) und die drei
-  Zustandsklassen; neue IDs in `tests/test_frontend.py::test_js_ids_exist_in_template`
-  spiegeln (die Mindestmenge ist dort hart hinterlegt). Fetch-Aufrufe laufen
-  ausschließlich über `data-convert-url`/`data-send-url` vom `<body>` —
+* **JS erweitern?** `app.js`/`byob.js` kennen nur IDs (`getElementById`) und
+  die Zustandsklassen; neue IDs in
+  `tests/test_frontend.py::test_js_ids_exist_in_template` spiegeln (die
+  Mindestmenge ist dort hart hinterlegt). Fetch-Aufrufe laufen ausschließlich
+  über `data-convert-url`/`data-send-url`/`data-byob-base` vom `<body>` —
   Endpunkte nie hartkodieren.
 * **Keine neuen Netze:** Kein CDN, keine Fonts, keine Analytics — die Seite
   muss in einer Flugzeugtoilette funktionieren. (CSP würde es auch blockieren.)
 
-## 8. Umgebungs-/Deployment-Hinweise
+## 8. BYOB-Komponenten (v2.2.0)
+
+Die Sektion „Versandweg: geteilter Bot oder eigener Bot (BYOB)?“ nutzt
+diese Bausteine (alle in `components.css`, nur mit `var(--token)`):
+
+| Klasse | Zweck |
+|---|---|
+| `.tf-note--danger` | rote Warnbox für den geteilten Bot (neue Tokens `--danger-bg/-border/-text` in **jedem** Theme-Block + Auto-Fallback) |
+| `.tf-byob__lead` | Einleitungstext des BYOB-Panels |
+| `.tf-send-path` | Hinweis am Senden-Button; `.is-private` färbt grün, wenn die eigene Session aktiv ist |
+| `.tf-form`, `.tf-field`, `.tf-field__hint`, `.tf-input`, `.tf-check`, `.tf-form-msg` | Formular (Passwort-Feld ohne Autocomplete, Consent-Checkbox, Fehler-/Erfolgsmeldung mit `.is-error`/`.is-ok`) |
+| `.tf-chip-row`, `.tf-chip`, `.tf-chip__meta` | Chat-Vorschläge der Chat-ID-Erkennung als klickbare Pills |
+| `.tf-session`, `.tf-session__title/__info/__meta/__stats` | Statuskarte der aktiven Session (Countdown `role="timer"`, Zähler, „Session beenden“) |
+| `.tf-steps--compact` | drei Schritte im BYOB-Panel (dichter als die Howto-Liste) |
+
+JS-Vertrag zwischen `app.js` und `byob.js` (bewusst minimal, kein Framework):
+
+* `window.tfByob = { isActive(): bool, sendText(text): Promise }` — ist eine
+  Session aktiv, delegiert `app.js#send()` an `sendText` (gleiche Antwortform
+  `{ok, status, data}`), sonst gilt der klassische `/api/send`-Weg.
+* `window.tfSendLabel` — optionaler Button-Text („Über eigenen Bot senden“),
+  den `app.js#setBusy` beim Zurücksetzen übernimmt.
+* Statusanzeigen teilen sich `#sendStatus` (Editor) und `#byobError` (BYOB).
+
+## 9. Umgebungs-/Deployment-Hinweise
 
 * Statische Assets werden von Flask automatisch unter `/static/` ausgeliefert;
   Render-Start (`render.yaml` → `gunicorn "telegram_formatter.app:app"`)
