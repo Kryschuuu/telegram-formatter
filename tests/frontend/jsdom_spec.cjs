@@ -190,8 +190,38 @@ async function main() {
         sendStatus.textContent.includes("3 Nachrichten (automatisch aufgeteilt)"),
         sendStatus.textContent);
 
-    /* Senden */
+    /* Senden — seit v2.3.0 mit Bestätigungsdialog: Erst Bot/Ziel prüfen,
+       abbrechen können, dann bestätigen. */
     doc.getElementById("sendBtn").click();
+    await sleep(20);
+    check("Dialog: öffnet sich beim Klick auf Senden",
+        doc.getElementById("sendConfirm").hidden === false);
+    check("Dialog: nennt den konkreten (geteilten) Bot",
+        doc.getElementById("sendConfirmBot").textContent.includes("@mdtotxt_bot") &&
+        doc.getElementById("sendConfirmBot").textContent.includes("geteilter Bot"),
+        doc.getElementById("sendConfirmBot").textContent);
+    check("Dialog: nennt das Ziel (gemeinsamer Chat, öffentlich)",
+        doc.getElementById("sendConfirmTarget").textContent.includes("Gemeinsamer Chat") &&
+        doc.getElementById("sendConfirmTarget").textContent.includes("öffentlich"),
+        doc.getElementById("sendConfirmTarget").textContent);
+    check("Dialog: Nachrichtenvorschau + Zeichenzahl",
+        doc.getElementById("sendConfirmPreview").textContent.includes("**viel** text") &&
+        doc.getElementById("sendConfirmLength").textContent.includes("Zeichen"));
+    check("Dialog: öffentliche Warnung sichtbar",
+        doc.getElementById("sendConfirmWarning").hidden === false &&
+        doc.getElementById("sendConfirmPrivate").hidden === true);
+
+    /* Abbrechen: Dialog zu, kein POST, Fokus zurück */
+    doc.getElementById("sendConfirmCancel").click();
+    check("Abbrechen: Dialog geschlossen", doc.getElementById("sendConfirm").hidden === true);
+    check("Abbrechen: es ging nichts raus",
+        !calls.some((c) => c.url.includes("api/send")),
+        JSON.stringify(calls));
+
+    /* Erneut öffnen und diesmal bestätigen */
+    doc.getElementById("sendBtn").click();
+    await sleep(20);
+    doc.getElementById("sendConfirmOk").click();
     await sleep(60);
     check("Senden: POST /api/send mit aktuellem Text",
         calls.some((c) => c.url.includes("api/send") && String(c.body).includes("**viel** text")));
@@ -200,9 +230,11 @@ async function main() {
     check("Senden: Button danach wieder aktiv", doc.getElementById("sendBtn").disabled === false);
     check("Senden: Statuszeile bekommt is-ok", sendStatus.classList.contains("is-ok"));
 
-    /* Fehlerpfad */
+    /* Fehlerpfad (mit Dialog) */
     sendResult = { ok: false, body: { error: "Zu viele Sendeversuche", retry_after: 7, sent_before_error: 1 } };
     doc.getElementById("sendBtn").click();
+    await sleep(20);
+    doc.getElementById("sendConfirmOk").click();
     await sleep(60);
     check("Fehler: Meldung + Wartezeit + Teilsende-Hinweis",
         sendStatus.textContent.includes("Zu viele Sendeversuche") &&
@@ -210,6 +242,17 @@ async function main() {
         sendStatus.textContent.includes("Bereits gesendet: 1"),
         sendStatus.textContent);
     check("Fehler: Statuszeile bekommt is-error", sendStatus.classList.contains("is-error"));
+
+    /* Escape schließt den Dialog wie Abbrechen */
+    doc.getElementById("sendBtn").click();
+    await sleep(20);
+    check("Escape-Vorbereitung: Dialog offen", doc.getElementById("sendConfirm").hidden === false);
+    doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    check("Escape: Dialog geschlossen ohne Senden",
+        doc.getElementById("sendConfirm").hidden === true &&
+        calls.filter((c) => c.url.includes("api/send")).length === 2,
+        `send-calls=${calls.filter((c) => c.url.includes("api/send")).length}`);
+
 
     /* Reset */
     doc.getElementById("resetBtn").click();
@@ -311,7 +354,7 @@ async function main() {
     check("BYOB: Panel sichtbar, Session-Bereich versteckt",
         !doc.getElementById("byobForm").hidden && doc.getElementById("byobActive").hidden);
     check("BYOB: Versandweg-Hinweis nennt den geteilten Bot (nicht die eigene Session)",
-        doc.getElementById("sendPathNote").textContent.includes("geteilter Bot") &&
+        /geteilt/.test(doc.getElementById("sendPathNote").textContent) &&
         !doc.getElementById("sendPathNote").classList.contains("is-private"),
         doc.getElementById("sendPathNote").textContent);
     check("BYOB: tfByob-Vertrag existiert und ist inaktiv",
@@ -361,9 +404,23 @@ async function main() {
         doc.getElementById("sendBtnLabel").textContent === "Über eigenen Bot senden");
     check("BYOB: Countdown läuft", /Session läuft noch/.test(doc.getElementById("byobCountdown").textContent));
 
-    /* Senden über die Session */
+    /* Senden über die Session — der Bestätigungsdialog muss den eigenen
+       Bot und den Ziel-Chat nennen (nicht den geteilten Bot). */
     doc.getElementById("input").value = "**privat** via eigener Session";
     doc.getElementById("sendBtn").click();
+    await sleep(20);
+    check("BYOB-Dialog: eigener Bot als Absender",
+        doc.getElementById("sendConfirmBot").textContent.includes("@mein_bot") &&
+        doc.getElementById("sendConfirmBot").textContent.includes("eigener Bot"),
+        doc.getElementById("sendConfirmBot").textContent);
+    check("BYOB-Dialog: konkreter Ziel-Chat",
+        doc.getElementById("sendConfirmTarget").textContent.includes("-1001234567890") &&
+        doc.getElementById("sendConfirmTarget").textContent.includes("privat"),
+        doc.getElementById("sendConfirmTarget").textContent);
+    check("BYOB-Dialog: Privat-Hinweis statt öffentlicher Warnung",
+        doc.getElementById("sendConfirmPrivate").hidden === false &&
+        doc.getElementById("sendConfirmWarning").hidden === true);
+    doc.getElementById("sendConfirmOk").click();
     await sleep(60);
     const sendCall = byobCalls.filter((u) => u.includes("/api/byob/send")).pop();
     check("BYOB: Senden geht an /api/byob/send", Boolean(sendCall));
@@ -374,6 +431,8 @@ async function main() {
     /* Ablauf (410): UI muss auf das Formular zurückfallen */
     sessionState = "gone";
     doc.getElementById("sendBtn").click();
+    await sleep(20);
+    doc.getElementById("sendConfirmOk").click();
     await sleep(60);
     check("BYOB: 410 beim Senden beendet die Session clientseitig",
         window.tfByob.isActive() === false && doc.getElementById("byobForm").hidden === false);

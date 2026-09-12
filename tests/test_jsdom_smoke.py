@@ -37,10 +37,17 @@ def _render_index(tmp_path: Path) -> Path:
     return target
 
 
-def test_jsdom_functional_smoke(tmp_path):
+def test_jsdom_functional_smoke(tmp_path, monkeypatch):
     """Theme-Boot, Switcher-Klicks, Vorschau-Rendering, Debounce/Fetch,
-    Senden inkl. Fehlerpfad und Zurücksetzen — gegen das echt gerenderte
-    Template mit den echten statischen Skripten (Stub-Fetch, kein Netz)."""
+    Senden (inkl. Bestätigungsdialog/Abbrechen und Fehlerpfad) und
+    Zurücksetzen — gegen das echt gerenderte Template mit den echten
+    statischen Skripten (Stub-Fetch, kein Netz).
+
+    Gerendert wird der *konfigurierte* Zustand (geteilter Bot aktiv): Nur
+    dann ist der geteilte Versandweg (und seine öffentliche Warnung im
+    Bestätigungsdialog) realistisch testbar."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "123456789:AAHx24" + "a" * 29)
+    monkeypatch.setattr(app_module, "CHAT_ID", "-1001234567890")
     html_file = _render_index(tmp_path)
     proc = subprocess.run(
         [NODE, str(SPEC), str(html_file)],

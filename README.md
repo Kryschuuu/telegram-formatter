@@ -124,7 +124,9 @@ flask --app telegram_formatter.app run   # http://127.0.0.1:5000
 
 Im Browser Markdown/LaTeX eingeben, die Payloads in Echtzeit prüfen und
 optional direkt senden — wahlweise über eine eigene Bot-Session (BYOB,
-empfohlen) oder den geteilten Bot (öffentlich, siehe unten).
+empfohlen) oder den geteilten Bot (öffentlich, siehe unten). Vor jedem
+Versand erscheint eine **Bestätigung**, die den konkreten Bot und das Ziel
+anzeigt und sich abbrechen lässt.
 
 ### Beispiel-Eingabe
 
@@ -196,8 +198,12 @@ aktiven:
 
 **Wichtig (Privatsphäre):** Solange keine eigene Session läuft, sendet der
 Senden-Button über den geteilten Bot in den gemeinsamen Chat — die
-Oberfläche warnt an beiden Stellen (am Button und im Abschnitt
-„Versandweg“). Für private Inhalte: eigene Bot-Session starten. Der Ablauf:
+Oberfläche warnt mehrfach: als **Top-Warnung ganz oben auf der Seite**, am
+Button selbst und **im Bestätigungsdialog vor jedem Versand** (der den
+konkreten Bot, das Ziel und eine Vorschau zeigt und abgebrochen werden
+kann). Ein eigener Aufklärungs-Abschnitt („Privatsphäre“) erklärt außerdem,
+was @BotFather und Bots in Bezug auf Sichtbarkeit bedeuten. Für private
+Inhalte: eigene Bot-Session starten. Der Ablauf:
 
 1. **Bot anlegen:** [@BotFather](https://t.me/BotFather) → `/newbot` → Token kopieren.
 2. **Chat-ID ermitteln:** [@userinfobot](https://t.me/userinfobot) für die eigene ID

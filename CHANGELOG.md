@@ -4,6 +4,62 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.3.0] - 2026-09-12
+
+**Sende-Bestätigung, Top-Warnung & Privatsphäre-Aufklärung.** Drei
+UX-Maßnahmen gegen versehentliche Offenlegung: (1) Vor jedem Versand zeigt
+ein **Bestätigungsdialog** den konkreten Absender-Bot, das konkrete Ziel
+und eine Nachrichtenvorschau — mit echter Abbrechen-Möglichkeit (Button,
+Escape, Backdrop-Klick). (2) Die Warnung zum öffentlichen geteilten Bot
+steht jetzt **ganz oben auf der Seite** statt erst im BYOB-Abschnitt. (3)
+Ein neuer Abschnitt **„Privatsphäre“** klärt auf, was @BotFather und
+Telegram-Bots in Bezug auf Sichtbarkeit bedeuten (Bot-Profile sind öffentlich,
+Bot-Chats nicht Ende-zu-Ende-verschlüsselt, Token = Schlüssel).
+
+### Hinzugefügt
+
+- **Sende-Bestätigungsdialog** (`#sendConfirm`, `static/js/app.js`):
+  - Öffnet sich bei Klick auf „An Telegram senden“ und bei Strg/Cmd+Enter;
+    erst „Jetzt senden“ löst den tatsächlichen Versand aus.
+  - Zeigt drei Fakten: **Absender-Bot** (konkret: `@mdtotxt_bot (geteilter
+    Bot dieser Seite)` bzw. `@dein_bot (dein eigener Bot)`), **Ziel**
+    (gemeinsamer Chat — öffentlich / dein Chat — privat) und eine
+    **Nachrichtenvorschau** mit Zeichenzahl (auf 280 Zeichen gekürzt).
+  - Drei Hinweis-Varianten per Zustand: öffentliche Warnung (geteilter Bot
+    aktiv), privat-Bestätigung (BYOB-Session aktiv), neutraler Hinweis
+    (kein Versandweg konfiguriert).
+  - Abbrechen per Button, Escape oder Klick auf den Backdrop — es wird
+    nichts gesendet; der Fokus kehrt zum Auslöser zurück. Offene Dialoge
+    fangen Tab-Fokus (Fokusfalle) und sind als `role="dialog"` mit
+    `aria-modal` ausgezeichnet.
+- **JS-Vertrag erweitert:** `window.tfByob.describeTarget()` liefert
+  `{bot, chat}` der aktiven Session (oder `null`) — `app.js` befüllt daraus
+  den Dialog. `<body>` trägt zusätzlich `data-shared-bot` und
+  `data-configured`.
+- **Top-Warnung** (`.tf-top-warning`): Die „Wichtig — der geteilte Bot ist
+  öffentlich!“-Warnung steht als volle Breite direkt unter dem Header, vor
+  Hero und Editor (nur gerendert, wenn der geteilte Bot konfiguriert ist);
+  der Link zeigt auf den BYOB-Abschnitt. Die bisherige Kopie im
+  BYOB-Abschnitt ist entfernt (keine Duplizierung).
+- **Privatsphäre-Sektion** (`#privacy`): Vier Erklär-Karten — Was ist
+  @BotFather (Verwaltungsbot, sieht nur Metadaten, Bot gehört zum eigenen
+  Konto), Was ist ein Bot (Profil öffentlich, Inhalte nur im Chat, keine
+  E2E-Verschlüsselung, Token = Lesezugriff), geteilter Bot (gemeinsamer
+  Chat, öffentlich) und eigener Bot (BYOB, Token nur im RAM) — plus
+  FAQ-Eintrag „Sind Bots und BotFather öffentlich einsehbar?“.
+- **CSS-Komponenten** (`components.css`): `.tf-modal*` (Overlay-Dialog mit
+  neutralem Backdrop), `.tf-facts` (dt/dd-Faktenliste), `.tf-note--ok`
+  (grüne Gegenbox zu `--danger`), `.tf-top-warning`, `.tf-privacy*`.
+
+### Geändert
+
+- Howto-Schritt 5 und Editor-Tipp beschreiben jetzt die Bestätigung vor
+  dem Versand („Versandweg prüfen & bestätigen“).
+- `tests/test_jsdom_smoke.py` rendert die Seite im *konfigurierten* Zustand,
+  damit der geteilte Versandweg (inkl. öffentlicher Warnung im Dialog)
+  realistisch getestet wird; die jsdom-Spec prüft neu Dialog-Inhalte,
+  Abbrechen- und Escape-Pfad für beide Versandwege.
+
 ## [2.2.0] - 2026-09-12
 
 **BYOB auf der Website — dezentrale Bot-Sessions statt geteiltem

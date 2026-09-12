@@ -15,6 +15,17 @@
    * der klassische Weg über /api/send (geteilter Bot). Das Label des
    * Senden-Buttons liest setBusy() aus `window.tfSendLabel` (falls byob.js
    * es gesetzt hat), der Status-Text läuft wie immer über #sendStatus.
+   *
+   * Sende-Bestätigung (seit v2.3.0): Ein Klick auf „An Telegram senden“
+   * (oder Strg/Cmd+Enter) öffnet ZUERST den Bestätigungs-Dialog
+   * #sendConfirm. Er zeigt den konkreten Absender-Bot, das konkrete Ziel
+   * und eine Nachrichtenvorschau — befüllt aus `window.tfByob
+   * .describeTarget()` bzw. den <body>-Datatributen data-shared-bot und
+   * data-configured. Erst „Jetzt senden“ (#sendConfirmOk) ruft send()
+   * auf; „Abbrechen“ (#sendConfirmCancel), Escape und ein Klick auf den
+   * Backdrop schließen den Dialog, ohne etwas zu versenden. Der Fokus
+   * bleibt dabei im Dialog (Tab-Falle) und kehrt danach zum Auslöser
+   * zurück.
    ===================================================================== */
 (function () {
     "use strict";
@@ -30,7 +41,25 @@
     var convertUrl = document.body.dataset.convertUrl || "api/convert";
     var sendUrl = document.body.dataset.sendUrl || "api/send";
 
+    // Sende-Bestätigung (Modal): welcher Bot, welches Ziel — abbrechen möglich.
+    var sendConfirm = document.getElementById("sendConfirm");
+    var sendConfirmBackdrop = document.getElementById("sendConfirmBackdrop");
+    var sendConfirmBot = document.getElementById("sendConfirmBot");
+    var sendConfirmTarget = document.getElementById("sendConfirmTarget");
+    var sendConfirmPreview = document.getElementById("sendConfirmPreview");
+    var sendConfirmLength = document.getElementById("sendConfirmLength");
+    var sendConfirmWarning = document.getElementById("sendConfirmWarning");
+    var sendConfirmPrivate = document.getElementById("sendConfirmPrivate");
+    var sendConfirmUnavailable = document.getElementById("sendConfirmUnavailable");
+    var sendConfirmOk = document.getElementById("sendConfirmOk");
+    var sendConfirmOkLabel = document.getElementById("sendConfirmOkLabel");
+    var sendConfirmCancel = document.getElementById("sendConfirmCancel");
+    var sharedBotHandle = document.body.dataset.sharedBot || "geteilter Bot";
+    var sharedConfigured = document.body.dataset.configured === "1";
+    var lastFocused = null;
+
     var CONVERT_DEBOUNCE_MS = 300;
+    var CONFIRM_PREVIEW_CHARS = 280;
     var convertTimer = null;
     var PLACEHOLDER = "Vorschau erscheint hier…";
     var REGULAR_LIMIT = 4096;
@@ -214,20 +243,150 @@
         });
     }
 
+    /* ---------------------------------------------------------------
+       Sende-Bestätigung: Vor jedem Versand wird der konkrete Weg
+       angezeigt (geteilter Bot = öffentlich vs. eigene Session =
+       privat). Erst „Jetzt senden“ versendet — Abbrechen, Escape und
+       Klick auf den Backdrop senden nichts.
+       --------------------------------------------------------------- */
+    function sendTargetInfo() {
+        if (window.tfByob && window.tfByob.isActive()) {
+            var own = (window.tfByob.describeTarget && window.tfByob.describeTarget()) || {};
+            return {
+                own: true,
+                bot: own.bot || "dein eigener Bot",
+                chat: String(own.chat || "?")
+            };
+        }
+        return { own: false, bot: sharedBotHandle, chat: null };
+    }
+
+    function openSendConfirm() {
+        if (!input.value.trim()) {
+            setSendStatus("Nichts zu senden — der Editor ist leer.", null);
+            input.focus();
+            return;
+        }
+        if (!sendConfirm) {
+            // Defensiver Fallback (Markup fehlt): direkt senden wie früher.
+            send();
+            return;
+        }
+
+        var target = sendTargetInfo();
+        lastFocused = document.activeElement;
+
+        if (target.own) {
+            sendConfirmBot.textContent = target.bot + " (dein eigener Bot)";
+            sendConfirmTarget.textContent =
+                "Chat " + target.chat + " — nur dein Ziel-Chat (privat)";
+            sendConfirmOkLabel.textContent = "Über " + target.bot + " senden";
+        } else if (sharedConfigured) {
+            sendConfirmBot.textContent = target.bot + " (geteilter Bot dieser Seite)";
+            sendConfirmTarget.textContent =
+                "Gemeinsamer Chat dieser Seite — öffentlich sichtbar für alle Besucher";
+            sendConfirmOkLabel.textContent = "Über " + target.bot + " senden";
+        } else {
+            sendConfirmBot.textContent = "— (kein geteilter Bot konfiguriert)";
+            sendConfirmTarget.textContent =
+                "Kein Versandweg aktiv — eigene Bot-Session (BYOB) starten";
+            sendConfirmOkLabel.textContent = "Senden versuchen";
+        }
+
+        var raw = input.value || "";
+        sendConfirmPreview.textContent = raw.length > CONFIRM_PREVIEW_CHARS
+            ? raw.slice(0, CONFIRM_PREVIEW_CHARS) + " …"
+            : raw;
+        sendConfirmLength.textContent =
+            raw.length.toLocaleString("de-DE") + " Zeichen";
+
+        sendConfirmWarning.hidden = !(!target.own && sharedConfigured);
+        sendConfirmPrivate.hidden = !target.own;
+        sendConfirmUnavailable.hidden = !(!target.own && !sharedConfigured);
+
+        sendConfirm.hidden = false;
+        sendConfirmCancel.focus();
+    }
+
+    function closeSendConfirm(restoreFocus) {
+        if (!sendConfirm || sendConfirm.hidden) {
+            return;
+        }
+        sendConfirm.hidden = true;
+        if (restoreFocus) {
+            var back = lastFocused;
+            lastFocused = null;
+            if (back && typeof back.focus === "function" &&
+                document.contains(back) && !back.disabled) {
+                back.focus();
+            } else {
+                input.focus();
+            }
+        } else {
+            lastFocused = null;
+        }
+    }
+
+    /* Tab-Falle: Fokus bleibt im offenen Dialog (nicht dahinter). */
+    function trapFocus(event) {
+        var focusables = sendConfirm.querySelectorAll(
+            "button, [href], input, textarea, select, [tabindex]:not([tabindex=\"-1\"])"
+        );
+        if (!focusables.length) {
+            return;
+        }
+        var first = focusables[0];
+        var last = focusables[focusables.length - 1];
+        var active = document.activeElement;
+        if (event.shiftKey && (active === first || !sendConfirm.contains(active))) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && (active === last || !sendConfirm.contains(active))) {
+            event.preventDefault();
+            first.focus();
+        }
+    }
+
+    if (sendConfirm) {
+        sendConfirmOk.addEventListener("click", function () {
+            closeSendConfirm(false);
+            send();
+        });
+        sendConfirmCancel.addEventListener("click", function () {
+            closeSendConfirm(true);
+        });
+        if (sendConfirmBackdrop) {
+            sendConfirmBackdrop.addEventListener("click", function () {
+                closeSendConfirm(true);
+            });
+        }
+        document.addEventListener("keydown", function (event) {
+            if (sendConfirm.hidden) {
+                return;
+            }
+            if (event.key === "Escape") {
+                event.preventDefault();
+                closeSendConfirm(true);
+            } else if (event.key === "Tab") {
+                trapFocus(event);
+            }
+        });
+    }
+
     input.addEventListener("input", function () {
         renderPreview();
         updateCharCount();
         scheduleRefresh();
     });
-    sendBtn.addEventListener("click", send);
+    sendBtn.addEventListener("click", openSendConfirm);
     resetBtn.addEventListener("click", resetAll);
 
-    /* Komfort: Strg/Cmd+Enter sendet direkt aus dem Editor. */
+    /* Komfort: Strg/Cmd+Enter öffnet die Senden-Bestätigung aus dem Editor. */
     input.addEventListener("keydown", function (event) {
         if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
             event.preventDefault();
-            if (!sendBtn.disabled && input.value.trim()) {
-                send();
+            if (!sendBtn.disabled) {
+                openSendConfirm();
             }
         }
     });

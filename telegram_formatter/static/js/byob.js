@@ -14,8 +14,12 @@
      * Das Token-Feld wird nach dem Session-Start geleert; der Token
        selbst wird genau einmal (Session-Start) übertragen.
      * Dieses Modul stellt `window.tfByob` bereit:
-         { isActive(): bool, sendText(text): Promise<{ok,status,data}> }
-       app.js delegiert den Senden-Button daran (Fallback: geteilter Bot).
+         { isActive(): bool,
+           describeTarget(): {bot, chat} | null,
+           sendText(text): Promise<{ok,status,data}> }
+       app.js delegiert den Senden-Button daran (Fallback: geteilter Bot) und
+       fragt describeTarget() für die Senden-Bestätigung ab (konkreter Bot +
+       konkreter Ziel-Chat im Dialog).
      * DOM-Verträge (IDs) sind durch tests/test_frontend.py abgsichert;
        Funktionsabläufe tests/frontend/jsdom_spec.cjs.
    ===================================================================== */
@@ -55,6 +59,10 @@
     var idleRemaining = 0;
     var tickTimer = null;
     var pollTimer = null;
+    // Identität der aktiven Session für die Senden-Bestätigung (app.js fragt
+    // via tfByob.describeTarget() ab, bevor der Dialog gebaut wird).
+    var sessionBot = null;
+    var sessionChat = null;
 
     function setError(message, kind) {
         errorBox.textContent = message || "";
@@ -158,6 +166,8 @@
         var bot = data.bot || {};
         botName.textContent = bot.handle || bot.display_name || ("Bot " + (bot.id || "?"));
         chatLabel.textContent = data.chat_id || "?";
+        sessionBot = bot.handle || bot.display_name || ("Bot " + (bot.id || "?"));
+        sessionChat = data.chat_id || "?";
         setError("");
         showActive(true);
         renderSessionStatus();
@@ -171,6 +181,8 @@
         var had = sessionId !== null;
         sessionId = null;
         limits = null;
+        sessionBot = null;
+        sessionChat = null;
         stopTimers();
         showActive(false);
         updateSendPath();
@@ -306,10 +318,17 @@
         });
     }
 
-    // Öffentlicher Vertrag für app.js (Senden-Button-Routing).
+    // Öffentlicher Vertrag für app.js (Senden-Button-Routing + Bestätigungsdialog).
     window.tfByob = {
         isActive: function () {
             return sessionId !== null;
+        },
+        // Ziel der aktiven Session für die Senden-Bestätigung: konkreter Bot
+        // + konkreter Chat — oder null, wenn keine Session läuft.
+        describeTarget: function () {
+            return sessionId
+                ? { bot: sessionBot, chat: sessionChat }
+                : null;
         },
         sendText: function (text) {
             var sid = sessionId;

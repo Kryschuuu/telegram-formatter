@@ -493,7 +493,11 @@ def test_index_renders_byob_panel_and_warning(byob_client, monkeypatch):
     # Token-Feld: Passwortfeld ohne Autocomplete (Schulterblick-Schutz).
     assert 'id="byobToken"' in page and 'type="password"' in page
     assert 'autocomplete="off"' in page
-    # Warnung zum geteilten Bot + empfohlener BYOB-Weg.
+    # Warnung zum geteilten Bot + empfohlener BYOB-Weg: seit v2.3.0 als
+    # Top-Warnung GANZ OBEN auf der Seite (vor Hero und Editor).
+    assert 'class="tf-top-warning"' in page
+    assert "Wichtig — der geteilte Bot ist öffentlich!" in page
+    assert page.index('class="tf-top-warning"') < page.index('class="tf-hero"')
     assert "tf-note--danger" in page
     assert "@mdtotxt_bot" in page
     assert "gemeinsamen Chat" in page
@@ -507,8 +511,13 @@ def test_index_without_shared_bot_shows_neutral_note(byob_client, monkeypatch):
     monkeypatch.setattr(app_module, "CHAT_ID", "")
     page = byob_client.get("/").data.decode("utf-8")
     assert "Kein geteilter Bot konfiguriert" in page
-    # Keine Rot-Warnung ohne geteilten Bot …
-    assert "tf-note--danger" not in page
+    # Keine sichtbare Rot-Warnung ohne geteilten Bot: keine Top-Warnung …
+    assert 'class="tf-top-warning"' not in page
+    assert "Wichtig — der geteilte Bot ist öffentlich!" not in page
+    # … die Warnung des Sende-Bestätigungsdialogs bleibt dabei hidden im
+    # Markup (sichtbar schaltet sie app.js erst bei aktivem geteilten Bot) …
+    assert 'id="sendConfirmWarning" class="tf-note tf-note--danger" role="note" hidden' in page
+    assert 'id="sendConfirmUnavailable" class="tf-note" role="note" hidden' in page
     # … aber das BYOB-Panel bleibt.
     assert 'id="byobForm"' in page
 

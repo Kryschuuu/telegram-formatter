@@ -61,6 +61,14 @@ def test_index_contains_new_ui_elements(client):
     assert 'id="howto"' in page
     assert 'id="faq"' in page
     assert page.count("<details") >= 7  # sieben aufklappbare Akkordeons
+    # Sende-Bestätigung (v2.3.0): Dialog mit Abbrechen-Möglichkeit …
+    assert 'id="sendConfirm"' in page
+    assert 'id="sendConfirmOk"' in page
+    assert 'id="sendConfirmCancel"' in page
+    assert "Abbrechen" in page
+    # … und die Privatsphäre-Aufklärung (BotFather, Bots, Sichtbarkeit).
+    assert 'id="privacy"' in page
+    assert "@BotFather" in page
 
 
 def test_assets_are_self_hosted_no_inline_script(client):

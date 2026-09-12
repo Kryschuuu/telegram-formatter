@@ -853,3 +853,216 @@
     gap: .55rem;
     margin: 0 0 .4rem;
 }
+
+/* --- Top-Warnung: geteilter Bot ist öffentlich (ganz oben, volle Breite) ------ */
+.tf-top-warning {
+    padding-block: 1.1rem;
+    background: var(--danger-bg);
+    border-bottom: 1px solid var(--danger-border);
+}
+
+/* Innerhalb des farbigen Bandes bleibt die Box selbst transparent —
+   das Band IST die Warnfläche, die Box strukturiert nur. */
+.tf-top-warning .tf-note--top {
+    background: transparent;
+    border-color: var(--danger-border);
+}
+
+/* --- Sende-Bestätigung: Modal (welcher Bot? wohin? abbrechen?) ---------------- */
+.tf-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    overflow: auto;
+    padding: 1.25rem;
+}
+
+/* Neutraler Overlay-Schleier (dokumentierte Ausnahme: rgba(127,127,127,α)
+   ist theme-unabhängig und funktioniert auf hell wie dunkel). */
+.tf-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(127, 127, 127, .55);
+}
+
+.tf-modal__panel {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: .9rem;
+    width: min(100%, 34rem);
+    max-height: calc(100vh - 2.5rem);
+    max-height: calc(100svh - 2.5rem);
+    overflow: auto;
+    margin: auto; /* zentriert UND bleibt bei Überhöhe scrollbar erreichbar */
+    padding: 1.4rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow-lg);
+}
+
+.tf-modal__title {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: var(--heading);
+}
+
+.tf-modal__title .tf-icon {
+    color: var(--accent);
+}
+
+.tf-modal__lead {
+    margin: 0;
+    font-size: .88rem;
+    line-height: 1.6;
+    color: var(--text-muted);
+}
+
+.tf-modal__preview {
+    display: block;
+    max-height: 8rem;
+    overflow: auto;
+    font-family: var(--font-mono);
+    font-size: .8rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.tf-modal__length {
+    display: block;
+    margin-top: .3rem;
+    font-size: .72rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-faint);
+}
+
+/* --- Faktenliste (dt/dd): im Sende-Dialog, unabhängig wiederverwendbar -------- */
+.tf-facts {
+    display: grid;
+    gap: .6rem;
+    margin: 0;
+}
+
+.tf-facts__row {
+    display: grid;
+    gap: .15rem .9rem;
+    padding: .55rem .8rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+}
+
+@media (min-width: 40rem) {
+    .tf-facts__row {
+        grid-template-columns: 9rem minmax(0, 1fr);
+        align-items: start;
+    }
+}
+
+.tf-facts dt {
+    font-size: .72rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-faint);
+}
+
+.tf-facts dd {
+    margin: 0;
+    font-size: .88rem;
+    line-height: 1.55;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+/* --- Erfolgs-/Privat-Variante der Hinweisbox (Gegenstück zu --danger) --------- */
+.tf-note--ok {
+    border-color: var(--ok);
+    background: var(--surface-2);
+}
+
+.tf-note--ok .tf-note__title {
+    color: var(--ok);
+}
+
+/* --- Privatsphäre-Sektion: BotFather, Bots & Sichtbarkeit --------------------- */
+.tf-privacy__lead {
+    margin: 0;
+    font-size: .88rem;
+    line-height: 1.65;
+    color: var(--text-muted);
+}
+
+.tf-privacy__grid {
+    display: grid;
+    gap: .9rem;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 48rem) {
+    .tf-privacy__grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+.tf-privacy__item {
+    display: grid;
+    gap: .45rem;
+    align-content: start;
+    padding: .95rem 1.05rem;
+    border: 1px solid var(--border);
+    border-left: .3rem solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+}
+
+.tf-privacy__item h3 {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin: 0;
+    font-size: .92rem;
+    font-weight: 800;
+    color: var(--heading);
+}
+
+.tf-privacy__item h3 .tf-icon {
+    color: var(--accent);
+}
+
+.tf-privacy__item p {
+    margin: 0;
+    font-size: .84rem;
+    line-height: 1.65;
+    color: var(--text-muted);
+}
+
+.tf-privacy__item--danger {
+    border-left-color: var(--err);
+}
+
+.tf-privacy__item--danger h3 .tf-icon {
+    color: var(--danger-text);
+}
+
+.tf-privacy__item--ok {
+    border-left-color: var(--ok);
+}
+
+.tf-privacy__item--ok h3 .tf-icon {
+    color: var(--ok);
+}
+
+.tf-privacy__note {
+    margin: 0;
+    font-size: .82rem;
+    line-height: 1.6;
+    color: var(--text-faint);
+}
