@@ -32,10 +32,14 @@ Nachrichten.
   eigener Bot registrieren, reviewen und in einer ephemeren Session
   nutzen — ohne zentrale Datenspeicherung.
 - **Unicode-sicher** — NFC-Normalisierung für Diakritika wie `ì`.
-- **Komfortable Web-Oberfläche** (v1.1.0) — Live-Vorschau und Payloads in
-  Echtzeit, Reset-Button („Zurücksetzen"), Sticky-Header im Karten-Layout,
-  Schritt-für-Schritt-Howto, aufklappbares FAQ, Disclaimer-Hinweisbox sowie
-  Buy-me-a-coffee-Unterstützungs-Link (Header & Footer).
+- **Komfortable Web-Oberfläche** (v1.1.0, Redesign 2026-09) — Live-Vorschau
+  und Payloads in Echtzeit, Zeichenzähler, Reset-Button („Zurücksetzen“),
+  Sticky-Header, Schritt-für-Schritt-Howto, aufklappbares FAQ,
+  Disclaimer-Hinweisbox und Buy-me-a-coffee-Link (Header & Footer).
+  Vollständig selbst-gehostetes Design-System (keine CDNs) mit **vier Themes
+  plus Auto-Modus** (Light · Dark · Colorful · Minimal) und
+  Theme-Switcher mit localStorage-Persistenz. Details:
+  [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Warum zwei Pfade?
 
@@ -210,7 +214,7 @@ Review-Checkliste: `python -m telegram_formatter.botctl checklist`
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                  # 180 Tests
+pytest -q                                  # 259 Tests
 ruff check .                               # Stil & offensichtliche Fehler
 bandit -c pyproject.toml -r telegram_formatter -ll   # Sicherheits-Scan
 ```

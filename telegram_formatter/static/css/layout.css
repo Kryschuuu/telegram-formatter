@@ -1,0 +1,137 @@
+/* =====================================================================
+   telegram_formatter — Design-System „tf“
+   Ebene 3/4: LAYOUT — Seitenstruktur & Responsive-Breakpoints
+   ---------------------------------------------------------------------
+   Breakpoints (mobile zuerst):
+     Basis               ≤ 640 px  — Telefon: alles einspaltig, kompakt
+     min-width 48rem     ≥ 768 px  — Tablet: Header-Zweizeiler erlaubt mehr
+     min-width 64rem     ≥ 1024 px — Desktop: Editor | Ausgabe nebeneinander
+   ===================================================================== */
+
+.tf-container {
+    width: min(100% - 2.5rem, var(--container));
+    margin-inline: auto;
+}
+
+/* --- Kopfzeile ------------------------------------------------------- */
+.tf-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--header-border);
+    box-shadow: var(--shadow);
+}
+
+/* Transparenz nur, wenn der Browser Backdrop-Filter kann; sonst opaque. */
+@supports (backdrop-filter: blur(8px)) {
+    .tf-header {
+        backdrop-filter: blur(10px) saturate(1.4);
+        -webkit-backdrop-filter: blur(10px) saturate(1.4);
+    }
+}
+
+.tf-header__inner {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+    padding-block: .65rem;
+}
+
+.tf-header__spacer {
+    flex: 1 1 0;
+}
+
+/* --- Hero ------------------------------------------------------------ */
+.tf-hero {
+    padding-block: 2.25rem .75rem;
+}
+
+.tf-hero__tagline {
+    max-width: 56ch;
+    color: var(--text-muted);
+    font-size: 1.05rem;
+    margin-bottom: 1rem;
+}
+
+/* --- Arbeitsbereich: Editor links, Ausgabe rechts -------------------- */
+.tf-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+    padding-block: 1rem 2rem;
+}
+
+@media (min-width: 64rem) {
+    .tf-workspace {
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+        gap: 2rem;
+    }
+
+    /* Die Ausgabespalte bleibt beim Scrollen des langen Editors sichtbar. */
+    .tf-workspace__output {
+        position: sticky;
+        top: 4.5rem;
+    }
+}
+
+.tf-page {
+    display: grid;
+    gap: 2.25rem;
+    padding-block: 0 3.5rem;
+}
+
+@media (min-width: 48rem) {
+    .tf-hero {
+        padding-block: 3rem 1rem;
+    }
+}
+
+/* --- Sektion (Howto, FAQ): direkter Nachbar = etwas Zusatzluft ---------- */
+.tf-section + .tf-section {
+    margin-top: .5rem;
+}
+
+.tf-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 40rem) {
+    .tf-steps {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (min-width: 72rem) {
+    .tf-steps {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+}
+
+/* --- Footer ------------------------------------------------------------ */
+.tf-footer__grid {
+    display: grid;
+    gap: 1.75rem;
+    grid-template-columns: minmax(0, 1fr);
+    padding-block: 2.25rem;
+    font-size: .9rem;
+}
+
+@media (min-width: 48rem) {
+    .tf-footer__grid {
+        grid-template-columns: 1.2fr 1.4fr 1fr;
+        align-items: start;
+    }
+
+    .tf-footer__support {
+        justify-items: end;
+        text-align: right;
+    }
+}

@@ -17,6 +17,7 @@ pip install -e .
 | Aufgabe | Kommando |
 |---|---|
 | Tests | `pytest -q` |
+| UI-Design-Verträge | `pytest tests/test_frontend.py` (Struktur) — für funktionale DOM-Tests zusätzlich `npm install jsdom`, dann `pytest tests/test_jsdom_smoke.py` (skippt ohne Node/jsdom sauber) |
 | Lint | `ruff check .` |
 | Sicherheits-Scan | `bandit -c pyproject.toml -r telegram_formatter examples/own_bot -ll` |
 | Alle Prüfungen wie CI | siehe [`audit/README.md`](audit/README.md) |

@@ -25,8 +25,9 @@ Härtungen (Security-Audit 2026-09, Befunde K-1/K-2/H-2/H-5/M-6/B-5/B-6):
   ``botkit.SessionConfig``), pro IP ein einfaches Frequenzlimit für
   ``/api/send`` (Standard 6/min) und ``/api/convert`` (Standard 60/min).
 * **Origin-Check:** POSTs mit fremdem ``Origin``-Header werden abgewiesen.
-* **Sicherheits-Header:** CSP ohne ``unsafe-inline``/CDN-Whitelist für
-  Styles/Skripte, ``nosniff``, ``no-referrer``, ``DENY`` für Frames.
+* **Sicherheits-Header:** CSP strikt ``'self'`` (seit dem UI-Redesign keine
+  CDN-Whitelists mehr, kein ``unsafe-inline``), ``nosniff``, ``no-referrer``,
+  ``DENY`` für Frames.
 * **Kein Upstream-Detail-Leak:** Fehler antworten mit kurter Meldung;
   ``SendError``-Meldungen enthalten per Konstruktionsregel (Modul ``sender``)
   weder Token noch URL. Zusätzlich installiert die App die
@@ -154,9 +155,16 @@ def _security_headers(response):
     csp = "; ".join(
         (
             "default-src 'self'",
-            "script-src 'self' https://cdn.tailwindcss.com",
-            "style-src 'self' https://cdnjs.cloudflare.com",
-            "font-src 'self' https://cdnjs.cloudflare.com data:",
+            # Redesign 2026-09: komplett selbst-gehostete Assets (static/css,
+            # static/js) — die Tailwind-/Font-Awesome-CDNs sind entfernt und
+            # damit jede Fremdnets-Whitelist. Root-Cause des Design-Bruchs war
+            # genau dieses Gespann: Das Tailwind-Play-CDN injizierte Inline-
+            # <style>-Regeln, die die damalige CSP (style-src ohne
+            # 'unsafe-inline') blockierte -> ungestylter Rohtext. Ohne CDN kann
+            # so etwas nicht mehr passieren; Tests: tests/test_app.py und
+            # tests/test_frontend.py.
+            "script-src 'self'",
+            "style-src 'self'",
             "img-src 'self' data:",
             "connect-src 'self'",
             "object-src 'none'",

@@ -3,69 +3,144 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+          content="Markdown und LaTeX in sendefertige Telegram-Nachrichten umwandeln — mit Live-Vorschau, Rich-Message-Erkennung, automatischem Splitting und vier Themes.">
+    <meta name="theme-color" content="#eef2f7">
     <title>Telegram Formatter — Markdown + LaTeX</title>
-    {# Audit H-5: CDN-Assets versionsgepinnt; CSP (app.py) erlaubt exakt diese
-      _hosts. SRI-Hashes beim Release ergänzen (erfordert die Asset-Bytes). #}
-    <script src="https://cdn.tailwindcss.com/3.4.16" crossorigin="anonymous"
-            referrerpolicy="no-referrer"></script>
-    <link rel="stylesheet"
-          href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
-          crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+    {# Redesign 2026-09: bewusste ABWESENHEIT von CDN-Assets. Früher lud die
+      Seite Tailwind & Font Awesome von Fremdnets — die CSP (app.py) blockierte
+      die damit injizierten Inline-Styles, die Seite fiel auf ungestylten
+      Rohtext zurück. Seitdem ist das komplette Design selbst-gehostet:
+      4 CSS-Schichten + 2 JS-Dateien unter static/, CSP strikt 'self'.
+      Architektur & Theme-Anleitung: docs/DESIGN.md. #}
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/layout.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+    {# Synchron (kein defer!) und VOR dem Body: setzt data-theme antes
+       ersten Paint — siehe static/js/theme.js. #}
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
 </head>
-<body class="bg-slate-100 font-sans min-h-screen flex flex-col"
-      data-convert-url="{{ url_for('convert') }}" data-send-url="{{ url_for('send') }}">
+<body data-convert-url="{{ url_for('convert') }}" data-send-url="{{ url_for('send') }}">
+
+<a class="tf-skip-link" href="#editor">Direkt zum Editor springen</a>
 
 <!-- ===== Header (sticky) ===== -->
-<header class="bg-white/95 backdrop-blur border-b border-slate-200 shadow-sm sticky top-0 z-40">
-    <div class="max-w-6xl mx-auto px-6 py-3 flex items-center gap-3">
-        <i class="fa-solid fa-paper-plane text-sky-600 text-xl" aria-hidden="true"></i>
-        <h1 class="text-xl font-black text-slate-800">Telegram Formatter</h1>
-        <span class="hidden md:inline text-xs text-slate-400 uppercase font-bold tracking-wider">
-            Markdown + LaTeX → Telegram
+<header class="tf-header">
+    <div class="tf-container tf-header__inner">
+        <a class="tf-brand" href="#top" aria-label="Telegram Formatter — zur Startseite">
+            <span class="tf-brand__logo" aria-hidden="true">
+                <svg class="tf-icon" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>
+            </span>
+            Telegram Formatter
+        </a>
+        <span class="tf-brand__tagline">Markdown + LaTeX → Telegram</span>
+
+        <span class="tf-header__spacer"></span>
+
+        <span id="status" class="tf-status {{ 'tf-status--ok' if configured else 'tf-status--warn' }}"
+              title="{{ 'Zielchat konfiguriert — Versand bereit' if configured else 'Ohne TELEGRAM_BOT_TOKEN nur Konvertierung/Vorschau' }}">
+            {%- if configured -%}
+                Bot konfiguriert — senden bereit
+            {%- else -%}
+                Kein Bot-Token gesetzt — nur Vorschau
+            {%- endif -%}
         </span>
-        <span id="status" class="ml-auto text-xs font-bold {{ 'text-emerald-600' if configured else 'text-amber-600' }}">
-            {{ '● Bot konfiguriert' if configured else '○ Kein Bot-Token gesetzt' }}
-        </span>
+
+        <!-- Theme-Switcher: Färbung passiert allein via <html data-theme> -->
+        <div class="tf-theme-switcher" id="themeSwitcher" role="group" aria-label="Design-Theme wählen">
+            <button type="button" class="tf-theme-btn" data-theme-choice="auto"
+                    aria-pressed="false" title="Automatisch — folgt dem System (hell/dunkel)">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v18a9 9 0 0 0 0-18Z" fill="currentColor" stroke="none"/></svg>
+                <span class="tf-theme-btn__swatch" aria-hidden="true"></span>
+                <span class="tf-theme-btn__label">Auto</span>
+            </button>
+            <button type="button" class="tf-theme-btn" data-theme-choice="light"
+                    aria-pressed="false" title="Light — helles Tageslicht-Design">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                <span class="tf-theme-btn__swatch" aria-hidden="true"></span>
+                <span class="tf-theme-btn__label">Light</span>
+            </button>
+            <button type="button" class="tf-theme-btn" data-theme-choice="dark"
+                    aria-pressed="false" title="Dark — Nachtmodus wie die Telegram-Desktop-App">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+                <span class="tf-theme-btn__swatch" aria-hidden="true"></span>
+                <span class="tf-theme-btn__label">Dark</span>
+            </button>
+            <button type="button" class="tf-theme-btn" data-theme-choice="colorful"
+                    aria-pressed="false" title="Colorful — Farbverläufe & Glas-Karten">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 1 9-9c0 2-1.5 3-3 3h-1.5a2 2 0 0 0-1.4 3.4c.4.5.4 1.6-.6 2.1a8.7 8.7 0 0 1-2.5.5Z"/><circle cx="8" cy="10" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="7" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="10" r="1.2" fill="currentColor" stroke="none"/></svg>
+                <span class="tf-theme-btn__swatch" aria-hidden="true"></span>
+                <span class="tf-theme-btn__label">Colorful</span>
+            </button>
+            <button type="button" class="tf-theme-btn" data-theme-choice="minimal"
+                    aria-pressed="false" title="Minimal — monochrom, kantig, ohne Schatten">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1.5"/></svg>
+                <span class="tf-theme-btn__swatch" aria-hidden="true"></span>
+                <span class="tf-theme-btn__label">Minimal</span>
+            </button>
+        </div>
+
         <a href="https://buymeacoffee.com/rg4free" target="_blank" rel="noopener"
            title="Unterstütze die Entwicklung mit einem Kaffee"
-           class="bg-amber-400 hover:bg-amber-500 text-slate-900 font-bold text-sm px-4 py-2 rounded-xl shadow transition-colors flex items-center gap-2 whitespace-nowrap">
-            <i class="fa-solid fa-mug-hot" aria-hidden="true"></i> Buy me a coffee
+           class="tf-btn tf-btn--coffee">
+            <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h11v9a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4Z"/><path d="M16 10h2.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 2v3M12 2v3"/></svg>
+            Buy me a coffee
         </a>
     </div>
 </header>
 
-<main class="max-w-6xl mx-auto px-6 py-8 w-full space-y-8">
+<noscript>
+    <p class="tf-container tf-noscript">
+        JavaScript ist deaktiviert: Das Theme folgt deinen Systemeinstellungen, alle
+        Texte sind lesbar — Live-Vorschau und Payloads benötigen jedoch JavaScript.
+    </p>
+</noscript>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+<main id="top" class="tf-container tf-page">
+
+    <!-- ===== Hero: was das Tool tut, auf einen Blick ===== -->
+    <section class="tf-hero" aria-labelledby="hero-title">
+        <h1 id="hero-title">Markdown + LaTeX → <br>sendefertige Telegram-Nachrichten</h1>
+        <p class="tf-hero__tagline">
+            Text links eintippen, rechts sofort die Telegram-Vorschau und den exakten
+            API-Payload sehen — inklusive LaTeX-Formeln, Pipe-Tabellen und automatischer
+            Aufteilung langer Nachrichten.
+        </p>
+    </section>
+
+    <div class="tf-workspace">
 
         <!-- ===== Eingabe ===== -->
-        <section class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
-            <label for="input" class="block text-sm font-bold text-slate-700">
-                <i class="fa-solid fa-keyboard text-sky-600 mr-1" aria-hidden="true"></i>
-                Markdown + LaTeX Eingabe
-            </label>
-            <textarea id="input" rows="18"
-                      class="w-full p-4 border border-slate-300 rounded-xl font-mono text-sm outline-none focus:border-sky-500 resize-y bg-slate-50"
+        <section class="tf-card" id="editor" aria-labelledby="editor-title">
+            <h2 class="tf-card__title" id="editor-title">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                <label for="input">Markdown + LaTeX Eingabe</label>
+            </h2>
+            <textarea id="input" rows="16" class="tf-editor" spellcheck="false"
                       placeholder="**Fett**, *kursiv*, __unterstrichen__, `code` und $x^2 + y^2$ ..."></textarea>
-            <div class="flex gap-3">
-                <button id="sendBtn"
-                        class="flex-1 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-bold py-3 rounded-xl shadow-md transition-colors">
-                    <i class="fa-solid fa-paper-plane mr-1" aria-hidden="true"></i> An Telegram senden
+            <div class="tf-card__foot">
+                <span id="charCount" class="tf-editor-meta" aria-live="off">0 Zeichen</span>
+                <p id="sendStatus" class="tf-send-status" role="status" aria-live="polite"></p>
+            </div>
+            <div class="tf-btn-row">
+                <button id="sendBtn" type="button" class="tf-btn tf-btn--primary">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>
+                    <span id="sendBtnLabel">An Telegram senden</span>
                 </button>
-                <button id="resetBtn" type="button"
-                        title="Leert Eingabe, Vorschau, Payloads und Statusmeldung"
-                        class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 px-4 rounded-xl transition-colors">
-                    <i class="fa-solid fa-rotate-left mr-1" aria-hidden="true"></i> Zurücksetzen
+                <button id="resetBtn" type="button" class="tf-btn tf-btn--ghost" title="Leert Eingabe, Vorschau, Payloads und Statusmeldung">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+                    Zurücksetzen
                 </button>
             </div>
-            <p id="sendStatus" class="text-sm text-slate-500"></p>
+            <p class="tf-card__hint">Tipp: Strg/Cmd + Enter sendet direkt aus dem Editor.</p>
 
             <!-- ===== Disclaimer (Hinweisbox unter dem Editor) ===== -->
-            <aside class="border border-amber-300 bg-amber-50 text-amber-900 rounded-xl p-4 text-sm leading-relaxed"
-                   aria-label="Haftungsausschluss">
-                <p class="font-bold flex items-center gap-2 mb-1">
-                    <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Haftungsausschluss
+            <aside class="tf-note" aria-label="Haftungsausschluss">
+                <p class="tf-note__title">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                    Haftungsausschluss
                 </p>
                 <p>
                     Die Nutzung dieses Tools erfolgt auf eigene Verantwortung. Du allein bist
@@ -82,83 +157,91 @@
         </section>
 
         <!-- ===== Vorschau / Ausgabe ===== -->
-        <section class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
-            <label class="block text-sm font-bold text-slate-700">
-                <i class="fa-solid fa-eye text-sky-600 mr-1" aria-hidden="true"></i>
+        <section class="tf-card tf-workspace__output" aria-labelledby="preview-title">
+            <h2 class="tf-card__title" id="preview-title">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
                 Vorschau (Live)
-            </label>
-            <div class="tg-bubble text-sm" id="preview">Vorschau erscheint hier…</div>
+            </h2>
+            <div class="tf-preview-frame">
+                <div class="tg-bubble" id="preview" role="img" aria-label="Live-Vorschau der Telegram-Nachricht">
+                    Vorschau erscheint hier…
+                </div>
+                <p class="tf-bubble__tail">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>
+                    so kommt es in Telegram an
+                </p>
+            </div>
 
-            <label class="block text-sm font-bold text-slate-700 pt-2">
-                <i class="fa-solid fa-code text-sky-600 mr-1" aria-hidden="true"></i>
+            <h2 class="tf-card__title" id="payload-title">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
                 Gebaute Telegram-Payloads
-            </label>
-            <pre id="payloads" class="bg-slate-900 text-slate-100 text-xs p-4 rounded-xl overflow-auto max-h-96">—</pre>
+            </h2>
+            <pre id="payloads" class="tf-payloads" aria-labelledby="payload-title">—</pre>
         </section>
     </div>
 
     <!-- ===== Howto ===== -->
-    <section id="howto" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
-        <h2 class="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
-            <i class="fa-solid fa-list-ol text-sky-600" aria-hidden="true"></i> So funktioniert's — Schritt für Schritt
+    <section id="howto" class="tf-card tf-section" aria-labelledby="howto-title">
+        <h2 class="tf-card__title" id="howto-title">
+            <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+            So funktioniert’s — Schritt für Schritt
         </h2>
-        <ol class="space-y-4">
-            <li class="flex gap-4">
-                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">1</span>
+        <ol class="tf-steps">
+            <li class="tf-step">
+                <span class="tf-step__num" aria-hidden="true">1</span>
                 <div>
-                    <p class="font-bold text-slate-800">Bot-Token holen</p>
-                    <p class="text-sm text-slate-600 leading-relaxed">
-                        In Telegram <a class="text-sky-700 underline" href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>
-                        anschreiben, <code class="bg-slate-100 px-1 rounded">/newbot</code> ausführen und den angezeigten Token kopieren.
-                        Ihn als Umgebungsvariable <code class="bg-slate-100 px-1 rounded">TELEGRAM_BOT_TOKEN</code> setzen
+                    <p class="tf-step__title">Bot-Token holen</p>
+                    <p class="tf-step__text">
+                        In Telegram <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>
+                        anschreiben, <code>/newbot</code> ausführen und den angezeigten Token kopieren.
+                        Ihn als Umgebungsvariable <code>TELEGRAM_BOT_TOKEN</code> setzen
                         (oder beim Deployen im Hosting-Panel eintragen).
                     </p>
                 </div>
             </li>
-            <li class="flex gap-4">
-                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">2</span>
+            <li class="tf-step">
+                <span class="tf-step__num" aria-hidden="true">2</span>
                 <div>
-                    <p class="font-bold text-slate-800">Chat-ID ermitteln</p>
-                    <p class="text-sm text-slate-600 leading-relaxed">
-                        <a class="text-sky-700 underline" href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>
+                    <p class="tf-step__title">Chat-ID ermitteln</p>
+                    <p class="tf-step__text">
+                        <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>
                         anschreiben und die eigene numerische ID ablesen; für Gruppen/Kanälen den Bot dort
-                        hinzufügen und die (negative) ID via <code class="bg-slate-100 px-1 rounded">getUpdates</code> auslesen.
-                        Als <code class="bg-slate-100 px-1 rounded">TELEGRAM_CHAT_ID</code> setzen.
+                        hinzufügen und die (negative) ID via <code>getUpdates</code> auslesen.
+                        Als <code>TELEGRAM_CHAT_ID</code> setzen.
                     </p>
                 </div>
             </li>
-            <li class="flex gap-4">
-                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">3</span>
+            <li class="tf-step">
+                <span class="tf-step__num" aria-hidden="true">3</span>
                 <div>
-                    <p class="font-bold text-slate-800">Text eingeben</p>
-                    <p class="text-sm text-slate-600 leading-relaxed">
+                    <p class="tf-step__title">Text eingeben</p>
+                    <p class="tf-step__text">
                         Markdown mit Formatierungen (Fett, Kursiv, Code, …), LaTeX-Formeln
-                        (<code class="bg-slate-100 px-1 rounded">$…$</code> / <code class="bg-slate-100 px-1 rounded">$$…$$</code>)
-                        und Tabellen links in den Editor schreiben. Auch die Syntax von
-                        DeepSeek und Gemini (<code class="bg-slate-100 px-1 rounded">\(…\)</code> /
-                        <code class="bg-slate-100 px-1 rounded">\[…\]</code>) wird erkannt und
-                        automatisch umgewandelt.
+                        (<code>$…$</code> / <code>$$…$$</code>) und Tabellen links in den Editor
+                        schreiben. Auch die Syntax von DeepSeek und Gemini
+                        (<code>\(…\)</code> / <code>\[…\]</code>) wird erkannt und automatisch
+                        umgewandelt.
                     </p>
                 </div>
             </li>
-            <li class="flex gap-4">
-                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">4</span>
+            <li class="tf-step">
+                <span class="tf-step__num" aria-hidden="true">4</span>
                 <div>
-                    <p class="font-bold text-slate-800">Vorschau &amp; Payloads prüfen</p>
-                    <p class="text-sm text-slate-600 leading-relaxed">
+                    <p class="tf-step__title">Vorschau &amp; Payloads prüfen</p>
+                    <p class="tf-step__text">
                         Rechts erscheint sofort die Live-Vorschau und darunter die exakt gebauten
                         Telegram-API-Payloads — inklusive automatischer Aufteilung in mehrere
                         Nachrichten, falls nötig.
                     </p>
                 </div>
             </li>
-            <li class="flex gap-4">
-                <span class="shrink-0 w-8 h-8 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-sm">5</span>
+            <li class="tf-step">
+                <span class="tf-step__num" aria-hidden="true">5</span>
                 <div>
-                    <p class="font-bold text-slate-800">Senden</p>
-                    <p class="text-sm text-slate-600 leading-relaxed">
-                        Auf „An Telegram senden" klicken — der Status unter dem Button zeigt Erfolg
-                        oder Fehlermeldung. Mit „Zurücksetzen" lässt sich alles wieder leeren.
+                    <p class="tf-step__title">Senden</p>
+                    <p class="tf-step__text">
+                        Auf „An Telegram senden“ klicken — der Status unter dem Button zeigt Erfolg
+                        oder Fehlermeldung. Mit „Zurücksetzen“ lässt sich alles wieder leeren.
                     </p>
                 </div>
             </li>
@@ -166,120 +249,132 @@
     </section>
 
     <!-- ===== FAQ ===== -->
-    <section id="faq" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
-        <h2 class="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
-            <i class="fa-solid fa-circle-question text-sky-600" aria-hidden="true"></i> FAQ — Häufige Fragen
+    <section id="faq" class="tf-card tf-section" aria-labelledby="faq-title">
+        <h2 class="tf-card__title" id="faq-title">
+            <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+            FAQ — Häufige Fragen
         </h2>
-        <div class="space-y-3">
-            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
-                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+        <div class="tf-faq-list">
+            <details class="tf-faq__item faq-item">
+                <summary>
                     Ist der Bot-Token sicher? Wo wird er gespeichert?
-                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </summary>
-                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
-                    Der Token liegt nur als Umgebungsvariable auf dem Server und wird ausschließlich
-                    für den Versand an die Telegram-API verwendet — er wird nie im Browser
-                    ausgeliefert, nicht in Logs geschrieben und nicht in einer Datenbank gespeichert.
-                    Seit v2.1.0 ist der Versand zusätzlich gehärtet: Fehlermeldungen der API werden
-                    bereinigt (kein Token, keine URL), der Zielchat ist auf den konfigurierten Chat
-                    festgelegt und die Endpunkte sind optional per <code class="bg-slate-100 px-1 rounded">X-Auth-Token</code>
-                    geschützt. Behandele ihn dennoch wie ein Passwort: nie öffentlich posten, bei
-                    Verdacht via @BotFather mit <code class="bg-slate-100 px-1 rounded">/revoke</code> neu erzeugen.
-                </p>
+                <div class="tf-faq__answer">
+                    <p>
+                        Der Token liegt nur als Umgebungsvariable auf dem Server und wird ausschließlich
+                        für den Versand an die Telegram-API verwendet — er wird nie im Browser
+                        ausgeliefert, nicht in Logs geschrieben und nicht in einer Datenbank gespeichert.
+                        Seit v2.1.0 ist der Versand zusätzlich gehärtet: Fehlermeldungen der API werden
+                        bereinigt (kein Token, keine URL), der Zielchat ist auf den konfigurierten Chat
+                        festgelegt und die Endpunkte sind optional per <code>X-Auth-Token</code>
+                        geschützt. Behandele ihn dennoch wie ein Passwort: nie öffentlich posten, bei
+                        Verdacht via @BotFather mit <code>/revoke</code> neu erzeugen.
+                    </p>
+                </div>
             </details>
-            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
-                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+            <details class="tf-faq__item faq-item">
+                <summary>
                     Wie finde ich meine Chat-ID heraus?
-                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </summary>
-                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
-                    Für Privat-Chats: <a class="text-sky-700 underline" href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>
-                    starten und die angezeigte Zahl verwenden. Für Gruppen und Kanäle den Bot
-                    hinzufügen, eine Testnachricht senden und die <code class="bg-slate-100 px-1 rounded">chat.id</code>
-                    im Antwort-JSON von <code class="bg-slate-100 px-1 rounded">https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>
-                    ablesen (Gruppen-IDs beginnen meist mit <code class="bg-slate-100 px-1 rounded">-100</code>).
-                </p>
+                <div class="tf-faq__answer">
+                    <p>
+                        Für Privat-Chats: <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>
+                        starten und die angezeigte Zahl verwenden. Für Gruppen und Kanäle den Bot
+                        hinzufügen, eine Testnachricht senden und die <code>chat.id</code>
+                        im Antwort-JSON von <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>
+                        ablesen (Gruppen-IDs beginnen meist mit <code>-100</code>).
+                    </p>
+                </div>
             </details>
-            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
-                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+            <details class="tf-faq__item faq-item">
+                <summary>
                     Warum sieht meine LaTeX-Formel in der Vorschau einfach aus?
-                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </summary>
-                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
-                    Die Editor-Vorschau ist nur eine Orientierung. Echtes LaTeX-Rendering passiert
-                    erst in Telegram selbst: Sobald <code class="bg-slate-100 px-1 rounded">$…$</code>-Formeln
-                    oder Tabellen erkannt werden, baut das Tool automatisch eine Rich-Message,
-                    die Telegram nativ als Formel rendert (Bot API 10.1+). Die Vorschau kann das
-                    browserseitig nicht leisten — der Payload rechts zeigt dir aber das korrekte Ergebnis.
-                </p>
+                <div class="tf-faq__answer">
+                    <p>
+                        Die Editor-Vorschau ist nur eine Orientierung. Echtes LaTeX-Rendering passiert
+                        erst in Telegram selbst: Sobald <code>$…$</code>-Formeln
+                        oder Tabellen erkannt werden, baut das Tool automatisch eine Rich-Message,
+                        die Telegram nativ als Formel rendert (Bot API 10.1+). Die Vorschau kann das
+                        browserseitig nicht leisten — der Payload rechts zeigt dir aber das korrekte Ergebnis.
+                    </p>
+                </div>
             </details>
-            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
-                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+            <details class="tf-faq__item faq-item">
+                <summary>
                     Wie lang darf eine Nachricht sein?
-                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </summary>
-                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
-                    Telegram erlaubt 4096 Zeichen für klassische und 32768 Zeichen für Rich
-                    Messages. Längere Texte werden automatisch an Absatz-, Zeilen- und Wortgrenzen
-                    aufgeteilt — ohne Formatierungen oder Tabellen zu zerreißen. Die Statuszeile
-                    unter dem Sende-Button zeigt an, wenn in mehrere Nachrichten aufgeteilt wurde.
-                </p>
+                <div class="tf-faq__answer">
+                    <p>
+                        Telegram erlaubt 4096 Zeichen für klassische und 32768 Zeichen für Rich
+                        Messages. Längere Texte werden automatisch an Absatz-, Zeilen- und Wortgrenzen
+                        aufgeteilt — ohne Formatierungen oder Tabellen zu zerreißen. Die Statuszeile
+                        unter dem Sende-Button zeigt an, wenn in mehrere Nachrichten aufgeteilt wurde.
+                    </p>
+                </div>
             </details>
-            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
-                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+            <details class="tf-faq__item faq-item">
+                <summary>
                     Was passiert mit meinen eingegebenen Daten?
-                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </summary>
-                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
-                    Nichts Bleibendes: Deine Eingaben werden nur im Arbeitsspeicher konvertiert
-                    und — nur wenn du aktiv auf „Senden" klickst — an die Telegram-API übergeben.
-                    Es gibt keine Datenbank, keine Analyse-Cookies, kein Tracking und keine
-                    Auswertung. Beim reinen Konvertieren ohne Sende-Button verlässt dein Text den
-                    Server gar nicht Richtung Telegram.
-                </p>
+                <div class="tf-faq__answer">
+                    <p>
+                        Nichts Bleibendes: Deine Eingaben werden nur im Arbeitsspeicher konvertiert
+                        und — nur wenn du aktiv auf „Senden“ klickst — an die Telegram-API übergeben.
+                        Es gibt keine Datenbank, keine Analyse-Cookies, kein Tracking und keine
+                        Auswertung. Beim reinen Konvertieren ohne Sende-Button verlässt dein Text den
+                        Server gar nicht Richtung Telegram.
+                    </p>
+                </div>
             </details>
-            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
-                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+            <details class="tf-faq__item faq-item">
+                <summary>
                     Welche Formatierungen werden unterstützt?
-                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </summary>
-                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
-                    Fett <code class="bg-slate-100 px-1 rounded">**x**</code>, Kursiv
-                    <code class="bg-slate-100 px-1 rounded">*x*</code>/<code class="bg-slate-100 px-1 rounded">_x_</code>,
-                    Unterstrichen <code class="bg-slate-100 px-1 rounded">__x__</code>, Durchgestrichen
-                    <code class="bg-slate-100 px-1 rounded">~~x~~</code>, Inline-Code
-                    <code class="bg-slate-100 px-1 rounded">`x`</code>, Codeblöcke, Links,
-                    Überschriften, Listen und Blockquotes — zusätzlich LaTeX-Formeln und
-                    Pipe-Tabellen (als Rich Messages).
-                </p>
+                <div class="tf-faq__answer">
+                    <p>
+                        Fett <code>**x**</code>, Kursiv <code>*x*</code>/<code>_x_</code>,
+                        Unterstrichen <code>__x__</code>, Durchgestrichen <code>~~x~~</code>, Inline-Code
+                        <code>`x`</code>, Codeblöcke, Links, Überschriften, Listen und Blockquotes —
+                        zusätzlich LaTeX-Formeln und Pipe-Tabellen (als Rich Messages).
+                    </p>
+                </div>
             </details>
-            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
-                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+            <details class="tf-faq__item faq-item">
+                <summary>
                     Werden Formeln aus DeepSeek oder Gemini unterstützt?
-                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </summary>
-                <p class="text-sm text-slate-600 mt-2 leading-relaxed">
-                    Ja. KI-Tools wie DeepSeek und Gemini liefern LaTeX mit den Delimitern
-                    <code class="bg-slate-100 px-1 rounded">\(…\)</code> (inline) und
-                    <code class="bg-slate-100 px-1 rounded">\[…\]</code> (abgesetzt).
-                    Telegram rendert nur <code class="bg-slate-100 px-1 rounded">$…$</code> und
-                    <code class="bg-slate-100 px-1 rounded">$$…$$</code>, deshalb wird die Syntax
-                    beim Erzeugen der Payload automatisch umgewandelt — der Formelinhalt bleibt
-                    dabei unverändert. Einfach den Text aus dem Chat hierher kopieren.
-                </p>
+                <div class="tf-faq__answer">
+                    <p>
+                        Ja. KI-Tools wie DeepSeek und Gemini liefern LaTeX mit den Delimitern
+                        <code>\(…\)</code> (inline) und <code>\[…\]</code> (abgesetzt).
+                        Telegram rendert nur <code>$…$</code> und <code>$$…$$</code>, deshalb wird die
+                        Syntax beim Erzeugen der Payload automatisch umgewandelt — der Formelinhalt bleibt
+                        dabei unverändert. Einfach den Text aus dem Chat hierher kopieren.
+                    </p>
+                </div>
             </details>
-            <details class="faq-item border border-slate-200 rounded-xl px-4 py-3 bg-slate-50">
-                <summary class="font-bold text-slate-800 text-sm flex items-center justify-between gap-2">
+            <details class="tf-faq__item faq-item">
+                <summary>
                     Es klappt nicht — was kann ich bei Fehlern tun?
-                    <i class="fa-solid fa-chevron-down fa-xs text-slate-400 faq-chevron" aria-hidden="true"></i>
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </summary>
-                <ul class="text-sm text-slate-600 mt-2 leading-relaxed list-disc list-inside space-y-1">
-                    <li>„TELEGRAM_BOT_TOKEN nicht konfiguriert" → Umgebungsvariable setzen und den Server neu starten.</li>
-                    <li>„Keine Chat-ID angegeben" → <code class="bg-slate-100 px-1 rounded">TELEGRAM_CHAT_ID</code> setzen (Howto, Schritt 2).</li>
-                    <li>„401 Unauthorized" → Token falsch oder widerrufen; neu bei @BotFather holen.</li>
-                    <li>„400 Bad Request / chat not found" → Bot ist nicht im Ziel-Chat Mitglied bzw. ID-Tipp (Vorzeichen beachten).</li>
-                    <li>„429 Too Many Requests" → Telegram-Rate-Limit; kurze Pause, dann erneut senden.</li>
-                </ul>
+                <div class="tf-faq__answer">
+                    <ul>
+                        <li>„TELEGRAM_BOT_TOKEN nicht konfiguriert“ → Umgebungsvariable setzen und den Server neu starten.</li>
+                        <li>„Keine Chat-ID angegeben“ → <code>TELEGRAM_CHAT_ID</code> setzen (Howto, Schritt 2).</li>
+                        <li>„401 Unauthorized“ → Token falsch oder widerrufen; neu bei @BotFather holen.</li>
+                        <li>„400 Bad Request / chat not found“ → Bot ist nicht im Ziel-Chat Mitglied bzw. ID-Tipp (Vorzeichen beachten).</li>
+                        <li>„429 Too Many Requests“ → Telegram-Rate-Limit; kurze Pause, dann erneut senden.</li>
+                    </ul>
+                </div>
             </details>
         </div>
     </section>
@@ -287,39 +382,43 @@
 </main>
 
 <!-- ===== Footer ===== -->
-<footer class="bg-slate-800 text-slate-300 mt-auto">
-    <div class="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
+<footer class="tf-footer">
+    <div class="tf-container tf-footer__grid">
         <div>
-            <p class="font-black text-white flex items-center gap-2 mb-2">
-                <i class="fa-solid fa-paper-plane text-sky-400" aria-hidden="true"></i> Telegram Formatter
+            <p class="tf-footer__title">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>
+                Telegram Formatter
             </p>
-            <p class="text-slate-400 leading-relaxed">
+            <p>
                 Markdown + LaTeX → sendefertige Telegram-Nachrichten.
                 Open Source unter GNU GPL v3 · Version {{ version }}.
             </p>
         </div>
         <div>
-            <p class="font-bold text-white mb-2 flex items-center gap-2">
-                <i class="fa-solid fa-scale-balanced text-slate-400" aria-hidden="true"></i> Kurz-Disclaimer
+            <p class="tf-footer__title">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+                Kurz-Disclaimer
             </p>
-            <p class="text-xs text-slate-400 leading-relaxed">
+            <p class="tf-footer__small">
                 Nutzung auf eigene Verantwortung; für den Inhalt der Nachrichten sind allein die
                 Nutzenden gemäß den Nutzungsbedingungen verantwortlich. Keine Verbindung zu
                 Telegram. Keine Datenspeicherung. Keine Haftung für Schäden.
             </p>
         </div>
-        <div class="md:text-right">
-            <p class="font-bold text-white mb-2 flex items-center gap-2 md:justify-end">
-                <i class="fa-solid fa-heart text-rose-400" aria-hidden="true"></i> Unterstützen
+        <div class="tf-footer__support">
+            <p class="tf-footer__title">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 14c1.5-1.4 3-3.1 3-5A3.9 3.9 0 0 0 12 6a3.9 3.9 0 0 0-10 3c0 1.9 1.5 3.6 3 5l7 7Z"/></svg>
+                Unterstützen
             </p>
-            <a href="https://buymeacoffee.com/rg4free" target="_blank" rel="noopener"
-               class="inline-flex items-center gap-2 font-bold text-amber-300 hover:text-amber-200 transition-colors">
-                <i class="fa-solid fa-mug-hot" aria-hidden="true"></i> Buy me a coffee
-            </a>
+            <p>
+                <a href="https://buymeacoffee.com/rg4free" target="_blank" rel="noopener">
+                    Buy me a coffee ☕
+                </a>
+            </p>
         </div>
     </div>
 </footer>
 
-    <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
 </body>
 </html>
