@@ -10,6 +10,26 @@ Die eigentliche Logik liegt in ``telegram_formatter/utils``/``telegram_formatter
 eine dünne HTTP-Schicht darüber — die aber die Sicherheitsgrenze des
 gehosteten Dienstes bildet.
 
+Zwei Versand-Wege (seit v2.2.0):
+
+* **Geteilter Bot** (``/api/send``): sendet über den zentral konfigurierten
+  Bot in den gepinnten ``TELEGRAM_CHAT_ID``. Auf einer öffentlichen Instanz
+  ist das ein **gemeinsamer Chat** — jeder Besucher sieht alle bisher
+  gesendeten Nachrichten. Die Oberfläche warnt entsprechend; für private
+  Inhalte ist BYOB der empfohlene Weg.
+* **Eigener Bot — BYOB** (``/api/byob/*``): Nutzende registrieren ihr eigenes
+  Bot-Token, der Server öffnet darüber eine **ephemere Session** (Botkit,
+  Betriebsmodus B aus ``docs/DECENTRAL_BOT_ARCHITECTURE.md``). Das Token
+  liegt ausschließlich im RAM der Session (TTL/Leerlauf-Timeout, Rate-Limit
+  pro Session) und wird beim Ende verworfen — keine Datei, keine Datenbank,
+  kein Log, kein Cookie. Der Session-Handle wandert als opaker Zufallswert
+  in den Request-Body zurück und wieder mit (bewusst *kein* Cookie: keine
+  Ambient-Authority, kein CSRF-Risiko, funktioniert auch in Kontexten mit
+  blockierten Third-Party-Cookies). Es läuft **kein Nutzer-Code** auf dem
+  Server — deshalb gilt das Review-Gate hier per Konstruktion als erfüllt
+  (``require_review=False``); es bleibt Pflicht für eigenen Bot-Code über
+  ``botctl``/CI.
+
 Härtungen (Security-Audit 2026-09, Befunde K-1/K-2/H-2/H-5/M-6/B-5/B-6):
 
 * **Chat-Pinning:** ist ``TELEGRAM_CHAT_ID`` gesetzt, akzeptiert ``/api/send``
@@ -23,7 +43,12 @@ Härtungen (Security-Audit 2026-09, Befunde K-1/K-2/H-2/H-5/M-6/B-5/B-6):
 * **Größen- & Mengengrenzen:** Request-Body hart auf ``MAX_BODY_BYTES``
   begrenzt (413 statt OOM), Text auf ``MAX_INPUT_CHARS`` (wie
   ``botkit.SessionConfig``), pro IP ein einfaches Frequenzlimit für
-  ``/api/send`` (Standard 6/min) und ``/api/convert`` (Standard 60/min).
+  ``/api/send`` (Standard 6/min) und ``/api/convert`` (Standard 60/min)
+  sowie separate Limits für die BYOB-Endpunkte (Öffnen/Erkennen/Senden).
+* **BYOB-Anti-Missbrauch:** harte Kappen für aktive Sessions (insgesamt
+  ``BYOB_MAX_SESSIONS_TOTAL``, pro Absender ``BYOB_MAX_SESSIONS_PER_IP``),
+  ``reap_expired`` vor jedem Öffnen, Chat-ID-Validierung über
+  ``botkit.registry.validate_chat_id``.
 * **Origin-Check:** POSTs mit fremdem ``Origin``-Header werden abgewiesen.
 * **Sicherheits-Header:** CSP strikt ``'self'`` (seit dem UI-Redesign keine
   CDN-Whitelists mehr, kein ``unsafe-inline``), ``nosniff``, ``no-referrer``,
@@ -33,10 +58,14 @@ Härtungen (Security-Audit 2026-09, Befunde K-1/K-2/H-2/H-5/M-6/B-5/B-6):
   weder Token noch URL. Zusätzlich installiert die App die
   Privacy-Redaction der botkit-Schicht auf den Root-Logger.
 
+Betriebshinweis: BYOB-Sessions leben **pro Prozess** im RAM. Der Start-Befehl
+muss deshalb mit genau einem Gunicorn-Worker (plus ``--threads``) laufen —
+siehe ``render.yaml`` und ``docs/DEPLOYMENT.md``.
+
 Starten::
 
     flask --app telegram_formatter.app run        # Entwicklung
-    gunicorn "telegram_formatter.app:app" --workers 2 --timeout 120   # Produktion
+    gunicorn "telegram_formatter.app:app" --threads 8   # Produktion (BYOB-tauglich: 1 Prozess)
 """
 
 from __future__ import annotations
@@ -47,16 +76,39 @@ import os
 import threading
 import time
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from flask import Flask, jsonify, render_template, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from telegram_formatter import __version__
-from telegram_formatter.botkit.registry import CHAT_ID_PATTERN
+from telegram_formatter.botkit.registry import (
+    CHAT_ID_PATTERN,
+    BotRegistry,
+    RegistrationError,
+)
+from telegram_formatter.botkit.session import (
+    RateLimitExceeded,
+    SessionConfig,
+    SessionError,
+    SessionExpired,
+    SessionManager,
+)
+from telegram_formatter.botkit.telegram_api import TelegramAPIError, get_me, get_updates
+from telegram_formatter.botkit.tokens import BotToken, TokenError
 from telegram_formatter.sender import SendError, send_message
 from telegram_formatter.utils import build_messages
 
 app = Flask(__name__)
+# Plattform-Proxys (Render & Co.) liefern die Client-IP im ``X-Forwarded-For``-
+# Header; ohne ProxyFix wäre ``request.remote_addr`` für ALLE Besucher die
+# Proxy-Adresse und die IP-Rate-Limits (convert/send/BYOB) fielen auf einen
+# gemeinsamen Eimer zusammen. ``x_for=1`` vertraut genau einer Proxy-Ebene —
+# der Standard-Topologie der Hosting-Plattform. Die Rate-Limits sind
+# Missbrauchs-Heuristik (keine Authentifizierung); ein gefälschter
+# Forward-Header kann sie aufblähen, aber keine Sicherheitsgrenze überwinden.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)  # type: ignore[method-assign]
 LOGGER = logging.getLogger("telegram_formatter.app")
 
 # --- harte Grenzen ----------------------------------------------------------
@@ -77,6 +129,51 @@ CHAT_ID = (os.environ.get("TELEGRAM_CHAT_ID", "") or "").strip()
 #: Optionaler Zugangsschutz für den gehosteten Betrieb (POSTs brauchen den
 #: Header ``X-Auth-Token``). Für rein lokalen Gebrauch kann er leer bleiben.
 API_TOKEN = os.environ.get("TELEGRAM_FORMATTER_API_TOKEN", "")
+
+
+# --- BYOB: Eigene Bots in ephemeren Web-Sessions (botkit, Modus B) ---------- #
+def _env_flag(name: str, default: bool = True) -> bool:
+    """Liest ein Boolean-Flag aus der Umgebung (``1/true/yes/on`` ⇒ wahr)."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+#: BYOB-Websessions aktiv? (Abschaltbar für Betreiber, die keine fremden
+#: Tokens über ihre Instanz relayen wollen.)
+BYOB_ENABLED = _env_flag("TELEGRAM_FORMATTER_BYOB_ENABLED", True)
+#: Session-Öffnungen (getMe-Verifikation) pro Minute und IP.
+BYOB_SESSIONS_PER_MINUTE = int(
+    os.environ.get("TELEGRAM_FORMATTER_BYOB_SESSIONS_PER_MINUTE", "3")
+)
+#: Chat-ID-Erkennungen (getUpdates) pro Minute und IP.
+BYOB_DISCOVER_PER_MINUTE = int(
+    os.environ.get("TELEGRAM_FORMATTER_BYOB_DISCOVER_PER_MINUTE", "3")
+)
+#: Sendungen über BYOB-Sessions pro Minute und IP (zusätzlich zum
+#: Session-eigenen Limit von ``max_messages_per_minute``).
+BYOB_SENDS_PER_MINUTE = int(os.environ.get("TELEGRAM_FORMATTER_BYOB_SENDS_PER_MINUTE", "6"))
+#: Harte Lebensdauer einer BYOB-Web-Session (Sekunden) — entspricht
+#: ``SessionConfig.ttl_seconds``; danach ist das Token verworfen.
+BYOB_TTL_SECONDS = float(os.environ.get("TELEGRAM_FORMATTER_BYOB_TTL_SECONDS", "1800"))
+#: Leerlauf-Timeout einer BYOB-Web-Session (Sekunden).
+BYOB_IDLE_SECONDS = float(os.environ.get("TELEGRAM_FORMATTER_BYOB_IDLE_SECONDS", "600"))
+#: Anzeige-Name des geteilten Bots für die Privatsphäre-Warnung im UI.
+SHARED_BOT_HANDLE = (
+    os.environ.get("TELEGRAM_FORMATTER_SHARED_BOT_HANDLE", "@mdtotxt_bot")
+    or "@mdtotxt_bot"
+).strip()
+
+#: RAM-Schutz gegen Session-Flooding: Obergrenzen aktiver Sessions insgesamt
+#: bzw. pro Absender-IP. Bewusst Konstanten (kein ENV): sie schützen den
+#: Prozess, nicht die Produktpolitik.
+BYOB_MAX_SESSIONS_TOTAL = 100
+BYOB_MAX_SESSIONS_PER_IP = 3
+#: HTTP-Timeout für die Telegram-Aufrufe der BYOB-Endpunkte (getMe/getUpdates).
+BYOB_API_TIMEOUT = 15.0
+#: RAM-TTL der Registry-Einträge (nur Metadaten: Bot-ID, Handle, Fingerprint).
+BYOB_REGISTRY_TTL = 3600.0
 
 
 # --------------------------------------------------------------------------- #
@@ -127,6 +224,152 @@ def _rate_limited(bucket: str, limit: int, window_seconds: float = 60.0) -> bool
             return True
         hits.append(now)
         return False
+
+
+# --------------------------------------------------------------------------- #
+# BYOB-Laufzeit: Registry + SessionManager + Session-Metadaten (alles RAM)
+# --------------------------------------------------------------------------- #
+@dataclass
+class _BotInfo:
+    """Nicht-geheime Bot-Identität für die Anzeige im UI (aus ``getMe``)."""
+
+    id: int
+    username: str
+    display_name: str
+
+    def as_dict(self) -> dict:
+        handle = f"@{self.username}" if self.username else f"id:{self.id}"
+        return {
+            "id": self.id,
+            "username": self.username,
+            "display_name": self.display_name,
+            "handle": handle,
+        }
+
+
+class _ByobRuntime:
+    """
+    Web-Laufzeitumgebung für BYOB-Sessions (Betriebsmodus B).
+
+    Kapselt die botkit-Bausteine (``BotRegistry`` + ``SessionManager``) plus
+    die session-bezogenen Metadaten, die nur die Webschicht braucht (Absender-
+    IP für die Per-IP-Kappe, Bot-Identität für die Statusanzeige). Alles lebt
+    im RAM dieses Prozesses und endet mit der Session bzw. dem Prozess:
+
+    * das Token selbst hält ausschließlich das ``BotSession``-Objekt,
+    * ``meta`` enthält IP und Identität, niemals das Token,
+    * abgelaufene Sessions werden beim nächsten Zugriff entfernt
+      (``SessionManager.reap_expired`` + ``prune``).
+
+    Der Konstruktor ist bewusst injizierbar (Registry/Manager/Config), damit
+    Tests ohne Netzwerk und mit Fake-Uhren arbeiten können.
+    """
+
+    def __init__(
+        self,
+        *,
+        registry: BotRegistry,
+        manager: SessionManager,
+        config: SessionConfig,
+    ) -> None:
+        self._registry = registry
+        self._manager = manager
+        self._config = config
+        #: session_id -> {"ip": Absender-IP, "bot": _BotInfo}
+        self._meta: dict[str, dict[str, object]] = {}
+        self._lock = threading.RLock()
+
+    @property
+    def manager(self) -> SessionManager:
+        return self._manager
+
+    @property
+    def config(self) -> SessionConfig:
+        return self._config
+
+    def prune(self) -> None:
+        """Entfernt Metadaten von Sessions, die der Manager nicht mehr kennt."""
+        with self._lock:
+            stale = [sid for sid in self._meta if self._manager.get(sid) is None]
+            for sid in stale:
+                del self._meta[sid]
+
+    def count_for_ip(self, ip: str) -> int:
+        with self._lock:
+            return sum(1 for meta in self._meta.values() if meta.get("ip") == ip)
+
+    def open_session(self, token: BotToken, chat_id: str, *, ip: str):
+        """
+        Verifiziert + registriert den Bot und öffnet die ephemere Session.
+
+        :raises RegistrationError: Telegram lehnt das Token ab (ungültig,
+            widerrufen, kein Bot, ID-Mismatch).
+        :raises SessionError: Chat-ID ungültig oder Session-Grenzen verletzt.
+        """
+        record = self._registry.register(token, owner_ref="web")
+        bot_info = _BotInfo(
+            id=record.identity.bot_id,
+            username=record.identity.username,
+            display_name=record.identity.display_name,
+        )
+        session = self._manager.open(token, chat_id)
+        with self._lock:
+            self._meta[session.session_id] = {"ip": ip, "bot": bot_info}
+        return session, bot_info
+
+    def bot_info(self, session_id: str) -> _BotInfo | None:
+        with self._lock:
+            meta = self._meta.get(session_id)
+        if not meta:
+            return None
+        bot = meta.get("bot")
+        return bot if isinstance(bot, _BotInfo) else None
+
+    def close(self, session_id: str) -> bool:
+        """Schließt die Session (Token-Referenz fällt) und räumt ``meta``."""
+        closed = self._manager.close(session_id)
+        with self._lock:
+            self._meta.pop(session_id, None)
+        return closed
+
+
+_BYOB_RUNTIME: _ByobRuntime | None = None
+_BYOB_BUILD_LOCK = threading.Lock()
+
+
+def _build_byob(config: SessionConfig | None = None) -> _ByobRuntime:
+    """
+    Baut die BYOB-Laufzeit. ``get_me`` wird über das Modul-Global aufgelöst,
+    damit Tests es monkeypatchen können.
+
+    ``require_review=False`` ist hier sicher, weil auf dem Server ausschließlich
+    der geprüfte Code dieses Projekts läuft (``utils``/``sender``) — es gibt
+    keinen Nutzer-Bot-Code, der ein Review bräuchte. Das Review-Gate bleibt
+    für eigenen Bot-Code (``botctl``, CI) unverändert Pflicht.
+    """
+    cfg = config or SessionConfig(
+        require_review=False,
+        ttl_seconds=BYOB_TTL_SECONDS,
+        idle_timeout_seconds=BYOB_IDLE_SECONDS,
+        max_input_chars=MAX_INPUT_CHARS,
+        timeout=BYOB_API_TIMEOUT,
+    )
+    registry = BotRegistry(
+        verify=lambda secret: get_me(secret, timeout=BYOB_API_TIMEOUT),
+        ttl_seconds=BYOB_REGISTRY_TTL,
+    )
+    manager = SessionManager(registry=registry, review_gate=None, config=cfg)
+    return _ByobRuntime(registry=registry, manager=manager, config=cfg)
+
+
+def _byob() -> _ByobRuntime:
+    """Lazy Singleton — erst bei erster Nutzung bauen (Import bleibt billig)."""
+    global _BYOB_RUNTIME
+    if _BYOB_RUNTIME is None:
+        with _BYOB_BUILD_LOCK:
+            if _BYOB_RUNTIME is None:
+                _BYOB_RUNTIME = _build_byob()
+    return _BYOB_RUNTIME
 
 
 # --------------------------------------------------------------------------- #
@@ -205,20 +448,36 @@ def _unhandled(exc):
 # --------------------------------------------------------------------------- #
 # Request-Payload extrahieren + validieren
 # --------------------------------------------------------------------------- #
-def _extract_request(require_chat: bool):
-    """Liefert ``(text, chat_id, None)`` oder ``(None, None, error_response)``."""
+def _json_body() -> tuple[dict | None, tuple | None]:
+    """JSON-Objekt aus dem Request-Body — oder eine 400-Fehlerantwort."""
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
-        return None, None, (jsonify({"error": "JSON-Objekt als Body erwartet."}), 400)
+        return None, (jsonify({"error": "JSON-Objekt als Body erwartet."}), 400)
+    return data, None
 
+
+def _valid_text(data: dict) -> tuple[str | None, tuple | None]:
+    """``text``-Feld prüfen (Typ + Länge) — gemeinsam für alle Sendewege."""
     text = data.get("text", "")
     if not isinstance(text, str):
-        return None, None, (jsonify({"error": "'text' muss ein String sein."}), 400)
+        return None, (jsonify({"error": "'text' muss ein String sein."}), 400)
     if len(text) > MAX_INPUT_CHARS:
-        return None, None, (
+        return None, (
             jsonify({"error": f"Eingabe zu lang (max. {MAX_INPUT_CHARS} Zeichen)."}),
             400,
         )
+    return text, None
+
+
+def _extract_request(require_chat: bool):
+    """Liefert ``(text, chat_id, None)`` oder ``(None, None, error_response)``."""
+    data, err = _json_body()
+    if err is not None:
+        return None, None, err
+
+    text, err = _valid_text(data)
+    if err is not None:
+        return None, None, err
 
     raw_chat = data.get("chat_id")
     if CHAT_ID:
@@ -256,6 +515,8 @@ def index() -> str:
     return render_template(
         "index.html",
         configured=bool(BOT_TOKEN and CHAT_ID),
+        byob_enabled=BYOB_ENABLED,
+        shared_bot_handle=SHARED_BOT_HANDLE,
         version=__version__,
     )
 
@@ -316,6 +577,284 @@ def send():
         results.append({"kind": m.kind, "status": "ok"})
 
     return jsonify({"sent": len(results), "results": results})
+
+
+# --------------------------------------------------------------------------- #
+# BYOB: Eigener Bot in ephemeren Web-Sessions (keine zentrale Speicherung)
+# --------------------------------------------------------------------------- #
+def _byob_disabled() -> tuple | None:
+    """404-Antwort, wenn der Betreiber BYOB abgeschaltet hat."""
+    if not BYOB_ENABLED:
+        return jsonify({"error": "BYOB ist auf dieser Instanz deaktiviert."}), 404
+    return None
+
+
+def _byob_session_id(data: dict) -> tuple[str | None, tuple | None]:
+    """``session_id``-Feld prüfen: nicht-leerer String in sicherer Länge."""
+    sid = data.get("session_id")
+    if not isinstance(sid, str) or not 8 <= len(sid) <= 128:
+        return None, (jsonify({"error": "session_id fehlt oder ist ungültig."}), 400)
+    return sid, None
+
+
+@app.route("/api/byob/session", methods=["POST"])
+def byob_session_open():
+    """
+    Öffnet eine ephemere Session mit dem Bot des Nutzers (BYOB).
+
+    Ablauf: Token-Format prüfen → ``getMe``-Verifikation über die RAM-Registry
+    → ``SessionManager.open`` (TTL, Leerlauf-Timeout, Rate-Limit) → opaker
+    Session-Handle zurück. Das Token wird **nicht** gespeichert, geloggt oder
+    in der Antwort wiedergegeben; es lebt nur im RAM der Session.
+    """
+    disabled = _byob_disabled()
+    if disabled is not None:
+        return disabled
+    if _rate_limited("byob-open", BYOB_SESSIONS_PER_MINUTE):
+        return jsonify({"error": "Zu viele Anfragen — bitte kurz warten."}), 429
+
+    data, err = _json_body()
+    if err is not None:
+        return err
+
+    if data.get("consent") is not True:
+        return jsonify(
+            {"error": "Bitte bestätige den Hinweis zum Umgang mit dem Token (Checkbox)."}
+        ), 400
+
+    token_raw = data.get("token")
+    if not isinstance(token_raw, str):
+        return jsonify({"error": "'token' muss ein String sein."}), 400
+    try:
+        token = BotToken.parse(token_raw)
+    except TokenError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    chat = _valid_chat_id(data.get("chat_id"))
+    if chat is None:
+        return jsonify(
+            {"error": "chat_id muss eine Ganzzahl sein (z. B. -1001234567890 oder 4711)."}
+        ), 400
+
+    runtime = _byob()
+    runtime.manager.reap_expired()
+    runtime.prune()
+    ip = request.remote_addr or "unknown"
+    if runtime.manager.active_count >= BYOB_MAX_SESSIONS_TOTAL:
+        return jsonify(
+            {"error": "Zu viele aktive Sessions auf dieser Instanz — bitte später erneut versuchen."}
+        ), 429
+    if runtime.count_for_ip(ip) >= BYOB_MAX_SESSIONS_PER_IP:
+        return jsonify(
+            {"error": "Zu viele aktive Sessions von dieser Adresse — bitte zuerst eine beenden."}
+        ), 429
+
+    try:
+        session, bot_info = runtime.open_session(token, chat, ip=ip)
+    except RegistrationError as exc:
+        # Verifikation fehlgeschlagen (ungültig/widerrufen/Netzwerk) — die
+        # Meldung ist per Konstruktion token-frei.
+        return jsonify({"error": str(exc)}), 400
+    except SessionError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    cfg = runtime.config
+    return jsonify(
+        {
+            "session_id": session.session_id,
+            "bot": bot_info.as_dict(),
+            "chat_id": session.chat_id,
+            "limits": {
+                "ttl_seconds": cfg.ttl_seconds,
+                "idle_timeout_seconds": cfg.idle_timeout_seconds,
+                "max_messages_per_minute": cfg.max_messages_per_minute,
+                "max_input_chars": cfg.max_input_chars,
+            },
+        }
+    ), 201
+
+
+@app.route("/api/byob/discover", methods=["POST"])
+def byob_discover_chats():
+    """
+    Findet Chat-IDs, mit denen der Bot kürzlich Kontakt hatte (``getUpdates``).
+
+    Der Aufruf ist ein reiner *Blick* in die Update-Warteschlange: kein
+    ``offset`` ⇒ nichts wird bestätigt oder verbraucht. Zurück kommen
+    ausschließlich Chat-Metadaten (ID, Typ, Name) — **niemals**
+    Nachrichteninhalte. Zweck: die numerische Chat-ID für den Session-Start
+    ohne Handarbeit herauszufinden.
+    """
+    disabled = _byob_disabled()
+    if disabled is not None:
+        return disabled
+    if _rate_limited("byob-discover", BYOB_DISCOVER_PER_MINUTE):
+        return jsonify({"error": "Zu viele Anfragen — bitte kurz warten."}), 429
+
+    data, err = _json_body()
+    if err is not None:
+        return err
+
+    token_raw = data.get("token")
+    if not isinstance(token_raw, str):
+        return jsonify({"error": "'token' muss ein String sein."}), 400
+    try:
+        token = BotToken.parse(token_raw)
+    except TokenError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    try:
+        updates = get_updates(token.reveal(), limit=100, poll_timeout=0,
+                              timeout=BYOB_API_TIMEOUT)
+    except TelegramAPIError as exc:
+        # Meldung ist sanitisiert (kein Token, keine URL); typische Fälle:
+        # Webhook konfligiert (409) oder Token ungültig.
+        return jsonify({"error": f"Chat-Erkennung fehlgeschlagen: {exc}"}), 502
+
+    chats: list[dict] = []
+    seen: set[int] = set()
+    for update in updates.get("result", []) if isinstance(updates.get("result"), list) else []:
+        if not isinstance(update, dict):
+            continue
+        for key in ("message", "edited_message", "channel_post", "edited_channel_post",
+                    "my_chat_member"):
+            obj = update.get(key)
+            if not isinstance(obj, dict):
+                continue
+            chat = obj.get("chat")
+            if not isinstance(chat, dict) or "id" not in chat:
+                continue
+            chat_id = chat.get("id")
+            if not isinstance(chat_id, int) or chat_id in seen:
+                continue
+            seen.add(chat_id)
+            name = chat.get("title") or chat.get("first_name") or chat.get("username") or "?"
+            chats.append({"id": chat_id, "type": str(chat.get("type", "?")), "name": str(name)})
+            if len(chats) >= 20:
+                break
+        if len(chats) >= 20:
+            break
+
+    return jsonify({"chats": chats})
+
+
+@app.route("/api/byob/send", methods=["POST"])
+def byob_session_send():
+    """
+    Sendet Text über die eigene Bot-Session (``session.send``).
+
+    Die Session erzwingt ihre Grenzen selbst: TTL/Leerlauf, Rate-Limit pro
+    Minute, Eingabelänge. Fehler werden unterschieden in *Session weg*
+    (410 — neu öffnen), *Session-Limit* (429) und *Telegram-Fehler* (502/429
+    mit ``sent_before_error`` für Teilfortschritt).
+    """
+    disabled = _byob_disabled()
+    if disabled is not None:
+        return disabled
+    if _rate_limited("byob-send", BYOB_SENDS_PER_MINUTE):
+        return jsonify({"error": "Zu viele Sendeversuche — bitte kurz warten."}), 429
+
+    data, err = _json_body()
+    if err is not None:
+        return err
+
+    sid, err = _byob_session_id(data)
+    if err is not None or sid is None:
+        return err
+
+    text, err = _valid_text(data)
+    if err is not None or text is None:
+        return err
+
+    runtime = _byob()
+    runtime.manager.reap_expired()
+    session = runtime.manager.get(sid)
+    if session is None:
+        # Abgelaufen, geschlossen oder (Multi-Worker-Fehlkonfiguration) in
+        # einem anderen Prozess — für die Nutzerin ist das dasselbe: neu öffnen.
+        return jsonify(
+            {"error": "Session abgelaufen oder unbekannt — bitte erneut öffnen."}
+        ), 410
+
+    chunks_before = session.stats.chunks_sent
+    try:
+        responses = session.send(text)
+    except SessionExpired:
+        return jsonify({"error": "Session abgelaufen (TTL/Leerlauf) — bitte neu öffnen."}), 410
+    except RateLimitExceeded as exc:
+        return jsonify({"error": str(exc)}), 429
+    except SessionError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except SendError as exc:
+        # B-6-Äquivalent: Teilfortschritt offenlegen, kein blindes Neu-Senden.
+        payload = {"error": str(exc), "sent_before_error": session.stats.chunks_sent - chunks_before}
+        if exc.retry_after is not None:
+            payload["retry_after"] = exc.retry_after
+            payload["note"] = "Telegram-Rate-Limit: erst nach der Wartezeit erneut senden."
+        elif payload["sent_before_error"]:
+            payload["note"] = "Teile wurden bereits gesendet — kein kompletter Wiederholungsversand."
+        status = 429 if exc.retry_after is not None else 502
+        return jsonify(payload), status
+
+    return jsonify(
+        {
+            "sent": len(responses),
+            "session": {
+                "ttl_remaining_seconds": round(session.ttl_remaining_seconds),
+                "idle_remaining_seconds": round(session.idle_remaining_seconds),
+            },
+        }
+    )
+
+
+@app.route("/api/byob/status", methods=["POST"])
+def byob_session_status():
+    """Lebend-Status einer Session (Countdown/Zähler) — ohne Token-Bezug."""
+    disabled = _byob_disabled()
+    if disabled is not None:
+        return disabled
+
+    data, err = _json_body()
+    if err is not None:
+        return err
+    sid, err = _byob_session_id(data)
+    if err is not None or sid is None:
+        return err
+
+    runtime = _byob()
+    session = runtime.manager.get(sid)
+    if session is None:
+        return jsonify({"active": False})
+    bot = runtime.bot_info(sid)
+    return jsonify(
+        {
+            "active": True,
+            "bot": bot.as_dict() if bot else {"id": session.bot_id, "handle": f"id:{session.bot_id}"},
+            "chat_id": session.chat_id,
+            "ttl_remaining_seconds": round(session.ttl_remaining_seconds),
+            "idle_remaining_seconds": round(session.idle_remaining_seconds),
+            "messages_sent": session.stats.messages_sent,
+            "chunks_sent": session.stats.chunks_sent,
+        }
+    )
+
+
+@app.route("/api/byob/close", methods=["POST"])
+def byob_session_close():
+    """Beendet die Session sofort — die Token-Referenz fällt."""
+    disabled = _byob_disabled()
+    if disabled is not None:
+        return disabled
+
+    data, err = _json_body()
+    if err is not None:
+        return err
+    sid, err = _byob_session_id(data)
+    if err is not None or sid is None:
+        return err
+
+    closed = _byob().close(sid)
+    return jsonify({"closed": closed})
 
 
 if __name__ == "__main__":

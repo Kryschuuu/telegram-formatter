@@ -25,7 +25,10 @@ services:
     # Die Anführungszeichen um das Modul bleiben: Render führt den Befehl über
     # eine Shell aus, und das quoting hält "modul:objekt" als ein Argument
     # (identisch zu docs/DEPLOYMENT.md, Schritt 3).
-    startCommand: 'gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT'
+    # Genau EIN Worker-Prozess + Threads: die BYOB-Websessions (v2.2.0) leben
+    # prozesslokal im RAM — mehrere Worker würden Sessions "verlieren"
+    # (Details: docs/DEPLOYMENT.md, Hinweis zum Start Command).
+    startCommand: 'gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT --threads 8'
     healthCheckPath: /
     envVars:
       # Python-Version der Build-Umgebung (muss zu requires-python >= 3.10 passen).

@@ -1,0 +1,9 @@
+{
+  "name": "telegram-formatter-dev",
+  "private": true,
+  "description": "Dev-Abhängigkeiten für die funktionalen Frontend-Tests (tests/frontend/jsdom_spec.cjs). Kein Laufzeit-Code — das Python-Paket hat keine Node-Abhängigkeiten.",
+  "license": "GPL-3.0-or-later",
+  "devDependencies": {
+    "jsdom": "30.0.1"
+  }
+}

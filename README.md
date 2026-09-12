@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.1.0-blue)
+![Version](https://img.shields.io/badge/version-2.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -27,9 +27,10 @@ Nachrichten.
 - **Automatisches Splitting** — Nachrichten werden an Absatz-, Zeilen- und
   Wortgrenzen aufgeteilt (4096 Zeichen für klassische, 32768 für Rich
   Messages), ohne Formatierungen oder Tabellen zu zerreißen.
-- **Eigener Bot (dezentral, v1.3.0)** — BYOB über `telegram_formatter/botkit`
-  und das `botctl`-CLI:
-  eigener Bot registrieren, reviewen und in einer ephemeren Session
+- **Eigener Bot (dezentral, v1.3.0 / Web-Session seit v2.2.0)** — BYOB über
+  `telegram_formatter/botkit` direkt **auf der Website** (Token + Chat-ID im
+  Formular → ephemere RAM-Session) oder das `botctl`-CLI:
+  eigenen Bot registrieren, reviewen und in einer ephemeren Session
   nutzen — ohne zentrale Datenspeicherung.
 - **Unicode-sicher** — NFC-Normalisierung für Diakritika wie `ì`.
 - **Komfortable Web-Oberfläche** (v1.1.0, Redesign 2026-09) — Live-Vorschau
@@ -86,6 +87,13 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 | `TELEGRAM_FORMATTER_API_TOKEN` | gesetzt ⇒ alle POST-Endpunkte brauchen den Header `X-Auth-Token` |
 | `TELEGRAM_FORMATTER_MAX_INPUT_CHARS` | Eingabelimit (Standard 100000) |
 | `TELEGRAM_FORMATTER_SENDS_PER_MINUTE` | Rate-Limit pro IP für `/api/send` (Standard 6) |
+| `TELEGRAM_FORMATTER_BYOB_ENABLED` | BYOB-Websessions aktiv (Standard `1`; `0` blendet UI + API aus) |
+| `TELEGRAM_FORMATTER_BYOB_SESSIONS_PER_MINUTE` | Session-Öffnungen pro IP (Standard 3) |
+| `TELEGRAM_FORMATTER_BYOB_DISCOVER_PER_MINUTE` | Chat-ID-Erkennungen pro IP (Standard 3) |
+| `TELEGRAM_FORMATTER_BYOB_SENDS_PER_MINUTE` | Sendungen über eigene Sessions pro IP (Standard 6) |
+| `TELEGRAM_FORMATTER_BYOB_TTL_SECONDS` | Lebensdauer einer Web-Session (Standard 1800) |
+| `TELEGRAM_FORMATTER_BYOB_IDLE_SECONDS` | Leerlauf-Timeout einer Web-Session (Standard 600) |
+| `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` | Anzeige-Name des geteilten Bots in der Warnung (Standard `@mdtotxt_bot`) |
 
 Hintergrund der Härtungen: [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
 
@@ -115,7 +123,8 @@ flask --app telegram_formatter.app run   # http://127.0.0.1:5000
 ```
 
 Im Browser Markdown/LaTeX eingeben, die Payloads in Echtzeit prüfen und
-optional direkt senden.
+optional direkt senden — wahlweise über eine eigene Bot-Session (BYOB,
+empfohlen) oder den geteilten Bot (öffentlich, siehe unten).
 
 ### Beispiel-Eingabe
 
@@ -171,13 +180,50 @@ for msg in build_messages("**fett** und $x^2$", chat_id="-100123456789"):
 ```
 
 
+## Versand-Wege auf der Website (ab v2.2.0)
+
+Die Website kennt zwei Versand-Wege — der Editor wählt automatisch den
+aktiven:
+
+| | Geteilter Bot (Standard) | Eigener Bot — BYOB (empfohlen) |
+|---|---|---|
+| Einrichtung | keine | @BotFather → Token + Chat-ID (ca. 3 Min.) |
+| Absender | `@mdtotxt_bot` (bzw. konfigurierter Bot) | dein eigener Bot |
+| Sichtbarkeit | ⚠ **gemeinsamer Chat — alle Besucher sehen alles**, auch nachträglich | nur dein Ziel-Chat |
+| Token-Lagerung | Server-Environment | **nur RAM der Session** (max. 30 Min., dann verworfen) |
+| Rate-Limits | geteilt mit allen | eigenes Session-Limit (20/Min.) + IP-Limits |
+| Chat-ID finden | entfällt | „Chat-ID erkennen“ (`getUpdates`-Blick, nur Metadaten) |
+
+**Wichtig (Privatsphäre):** Solange keine eigene Session läuft, sendet der
+Senden-Button über den geteilten Bot in den gemeinsamen Chat — die
+Oberfläche warnt an beiden Stellen (am Button und im Abschnitt
+„Versandweg“). Für private Inhalte: eigene Bot-Session starten. Der Ablauf:
+
+1. **Bot anlegen:** [@BotFather](https://t.me/BotFather) → `/newbot` → Token kopieren.
+2. **Chat-ID ermitteln:** [@userinfobot](https://t.me/userinfobot) für die eigene ID
+   oder „Chat-ID erkennen“ (deinem Bot kurz eine Nachricht senden, dann
+   klicken — der Server liest nur Chat-Metadaten aus `getUpdates`).
+3. **Session starten:** Token + Chat-ID ins Formular, Hinweis bestätigen —
+   der Senden-Button versendet danach über deinen Bot. Statusanzeige zeigt
+   Bot, Chat und Restzeit; „Session beenden“ verwirft das Token sofort.
+
+API-seitig: `POST /api/byob/session` · `POST /api/byob/discover` ·
+`POST /api/byob/send` · `POST /api/byob/status` · `POST /api/byob/close`
+(Details im Modul-Docstring `telegram_formatter/app.py` und in
+[docs/DECENTRAL_BOT_ARCHITECTURE.md](docs/DECENTRAL_BOT_ARCHITECTURE.md)).
+Betriebshinweis: Sessions leben prozesslokal im RAM — Deployment mit **einem**
+Gunicorn-Worker plus `--threads` betreiben (siehe `render.yaml`).
+
 ## Eigener Bot statt Zentral-Bot (dezentral, ab v1.3.0)
 
 Standardmäßig sendet diese Anwendung über **einen** konfigurierten Bot
 (`TELEGRAM_BOT_TOKEN`). Wer seine Nachrichten nicht über fremde Infrastruktur
-laufen lassen will, nutzt stattdessen den eigenen Bot: Registrierung, Review
-und Session laufen lokal bzw. in einer ephemeren Session — **ohne
-Datenspeicherung**.
+laufen lassen will, nutzt stattdessen den eigenen Bot: **auf der Website**
+(Sektion „Versandweg“, siehe oben) oder über die CLI — Registrierung, Review
+und Session laufen lokal bzw. in einer ephemeren Session, **ohne
+Datenspeicherung**. Für eigenen Bot-Code, der tatsächlich ausgeführt wird,
+bleibt das Review-Gate Pflicht (Statik + Vier-Augen-Prinzip); in der
+Web-Session läuft ausschließlich der geprüfte Code dieses Projekts.
 
 ```bash
 # 1) Eigener Bot (Token von @BotFather) verifizieren — Token wird nicht gespeichert
@@ -214,7 +260,7 @@ Review-Checkliste: `python -m telegram_formatter.botctl checklist`
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                  # 259 Tests
+pytest -q                                  # 297 Tests
 ruff check .                               # Stil & offensichtliche Fehler
 bandit -c pyproject.toml -r telegram_formatter -ll   # Sicherheits-Scan
 ```
@@ -239,7 +285,10 @@ telegram-formatter/
 │   ├── utils.py                #   Konvertierungs- & Splitting-Logik (pure)
 │   ├── sender.py               #   HTTP-Versand an die Telegram-API
 │   ├── botctl.py               #   CLI für eigene Bots (register/review/approve/send)
-│   ├── templates/index.html    #   Editor-Seite
+│   ├── templates/index.html    #   Editor-Seite (inkl. BYOB-Sektion)
+│   ├── static/                 #   selbst-gehostetes UI (keine CDNs, CSP 'self')
+│   │   ├── css/                #     tokens → base → layout → components
+│   │   └── js/                 #     theme.js · app.js · byob.js (BYOB-Session)
 │   └── botkit/                 #   Dezentrale Bots (BYOB), seit v1.3.0
 │       ├── tokens.py           #     BotToken, RAM-Vaults, Formatvalidierung
 │       ├── privacy.py          #     Redaction, Fingerprints, audit()
@@ -307,5 +356,6 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.0.0** — die Struktur-Reorganisation
-(Importpfade/CLI-Aufrufe) ist dokumentiert in [MIGRATION.md](MIGRATION.md).
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.2.0** — Änderungen je Version im
+[CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
+CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).

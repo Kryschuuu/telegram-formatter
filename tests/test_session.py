@@ -167,6 +167,31 @@ def test_idle_timeout_expires_the_session():
     assert session.is_expired is True
 
 
+def test_remaining_seconds_properties_feed_web_countdown():
+    """ttl/idle_remaining_seconds: Basis für den BYOB-Web-Status (v2.2.0)."""
+    clock = FakeClock()
+    session = BotSession(BotToken.parse(SECRET), CHAT_ID,
+                         config=SessionConfig(ttl_seconds=100.0, idle_timeout_seconds=40.0,
+                                              require_review=False),
+                         clock=clock, sender_fn=RecordingSender())
+
+    assert session.ttl_remaining_seconds == 100.0
+    assert session.idle_remaining_seconds == 40.0
+
+    clock.advance(10.0)
+    session.send("aktivitaet")  # Leerlauf-Zähler zurücksetzen
+    assert session.ttl_remaining_seconds == 90.0
+    assert session.idle_remaining_seconds == 40.0
+
+    clock.advance(35.0)
+    assert session.ttl_remaining_seconds == 55.0
+    assert session.idle_remaining_seconds == 5.0
+
+    session.close()
+    assert session.ttl_remaining_seconds == 0.0
+    assert session.idle_remaining_seconds == 0.0
+
+
 def test_rate_limit_protects_against_flooding():
     clock = FakeClock()
     sender = RecordingSender()

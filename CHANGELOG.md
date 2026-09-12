@@ -4,67 +4,143 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
-## [Unreleased]
+## [2.2.0] - 2026-09-12
 
-### Behoben (Web-Oberfläche — Design-Bruch)
+**BYOB auf der Website — dezentrale Bot-Sessions statt geteiltem
+Öffentlich-Chat.** Umsetzung des in
+[docs/DECENTRAL_BOT_ARCHITECTURE.md](docs/DECENTRAL_BOT_ARCHITECTURE.md)
+beschriebenen Betriebsmodus B („gehostete Session“), der bislang als einziger
+Modus als *nicht implementiert* galt. Konzept-Entscheidung: Der geteilte
+Standard-Bot (`@mdtotxt_bot`) bleibt funktional (null Einrichtungshürde),
+bekommt aber eine **dominante Privatsphäre-Warnung** — alles darüber
+Gesendete landet im gemeinsamen Chat und ist für alle Besucher (und jeden, der
+den Bot auf Telegram hinzufügt) sichtbar. Für private Inhalte ist ab sofort
+der eigene Bot in einer ephemeren Web-Session der empfohlene Weg.
 
-- **Ungestylter Rohtext:** Die Seite hing am Tailwind-Play-CDN; dessen zur
-  Laufzeit injizierten Inline-`<style>`-Regeln blockierte die CSP
-  (`style-src` ohne `'unsafe-inline'`) — komplettes Layout fiel aus. Das UI
-  ist jetzt **vollständig selbst-gehostet** (4 CSS-Schichten + 2 JS-Module +
-  Inline-SVG-Icons unter `static/`), die CSP ist strikt `'self'` und jede
-  CDN-Whitelist ist entfallen. Damit ist die Klasse dieses Fehlers strukturell
-  ausgeschlossen; `tests/test_app.py` & `tests/test_frontend.py` erzwingen beides.
+### Hinzugefügt (BYOB-Websessions — `botkit`-Betriebsmodus B)
 
-### Hinzugefügt (Web-Oberfläche — Design-System „tf“ & Themes)
+- **Fünf API-Endpunkte** in `telegram_formatter/app.py` (alle POST, unter den
+  bestehenden Guards Origin-Check/`X-Auth-Token`/Body-Limit):
+  - `POST /api/byob/session` — Token-Formatprüfung, `getMe`-Verifikation über
+    die RAM-`BotRegistry`, Öffnen einer ephemeren `BotSession`
+    (TTL 30 min, Leerlauf 10 min, 20 Nachrichten/Min., Eingabelimit) und
+    Rückgabe eines opaken Session-Handles plus nicht-geheimer Bot-Identität.
+    Das Token wird nie gespeichert, geloggt oder in Antworten wiedergegeben.
+  - `POST /api/byob/discover` — Chat-ID-Erkennung über `getUpdates` als
+    reinen *Blick* (kein `offset`, nichts wird bestätigt/verbraucht);
+    zurück kommen ausschließlich Chat-Metadaten (ID, Typ, Name) — nie
+    Nachrichtentexte.
+  - `POST /api/byob/send` — Versand über die Session (`session.send`):
+    Teilfortschritt (`sent_before_error`), Telegram-429-Backoff
+    (`retry_after`), Session-Ablauf als 410 mit Handlungsanweisung.
+  - `POST /api/byob/status` — Live-Status (Restzeit TTL/Leerlauf, Zähler)
+    für den Countdown im UI; `{"active": false}` nach Ablauf.
+  - `POST /api/byob/close` — sofortiges Beenden; die Token-Referenz fällt.
+- **Review-Gate-Entscheidung dokumentiert:** In der Web-Session läuft *kein*
+  Nutzer-Code — nur die geprüften Konverter-/Versand-Module des Projekts.
+  `require_review=False` ist deshalb per Konstruktion sicher; das
+  Review-Verfahren (Statik BK001–BK012 + Vier-Augen-Prinzip) bleibt für
+  eigenen Bot-Code über `botctl`/CI unverändert Pflicht.
+- **Anti-Missbrauch:** separate IP-Rate-Limits für Öffnen/Erkennen/Senden,
+  harte Kappen für aktive Sessions (100 insgesamt, 3 pro IP) mit
+  `reap_expired`/`prune` vor jedem Öffnen; Schließen gibt Kappe sofort frei.
+- **Session-Handle im Request-Body statt Cookie** (bewusste Abweichung vom
+  Architektur-Entwurf): keine Ambient-Authority ⇒ kein CSRF-Risiko, kein
+  Cookie-Flag-Fußabdruck, funktioniert auch in Kontexten mit blockierten
+  Third-Party-Cookies. Der Handle lebt nur im JS-Speicher (kein
+  `localStorage`), das Token-Feld wird nach dem Session-Start geleert.
+- **Oberfläche:** neue Sektion „Versandweg: geteilter Bot oder eigener Bot
+  (BYOB)?“ mit roter Gefahren-Warnbox (`.tf-note--danger`, neue
+  `--danger-*`-Tokens in allen vier Themes + Auto-Fallback), 3-Schritte-
+  Anleitung (BotFather → Chat-ID → Session), Formular (Passwort-Feld ohne
+  Autocomplete, Consent-Checkbox), Chat-Erkennungs-Chips, Statuskarte mit
+  Countdown/Zählern und „Session beenden“; `#sendPathNote` zeigt am
+  Senden-Button den aktiven Weg an. Vier neue FAQ-Einträge (BYOB-Begriff,
+  Token-Handling, Session-Ablauf, Review-Pflicht) + Howto/NoScript-Updates.
+- **`static/js/byob.js`** — drittes JS-Modul neben `theme.js`/`app.js`:
+  Session-Lebenszyklus, Validierungen, Countdown/Status-Poll (30 s),
+  Chat-Erkennung; stellt `window.tfByob` bereit, an das `app.js` den
+  Senden-Button delegiert (Fallback: geteilter Bot). Button-Label-Vertrag
+  über `window.tfSendLabel`.
 
-- **Vier Themes + Auto-Modus:** Light (Standard), Dark (Telegram-Nacht),
-  Colorful (Verlauf + Glas-Karten), Minimal (monochrom/kantig); „Auto“ folgt
-  dem Betriebssystem ohne JavaScript-Anteil (reine `prefers-color-scheme`-
-  Media-Query in `tokens.css`).
-- **Theme-Switcher** im Sticky-Header (`#themeSwitcher`): `localStorage`
-  (`tf-theme`), `aria-pressed`-Status, Zustandsklasse `.is-active`,
-  Boot synchron im `<head>` (kein Flash of wrong theme), robust ohne
-  `localStorage`/`matchMedia`, No-JS-Fallback aufs Systemtheme.
-- **Selbst-gehostetes Design-System:** `static/css/tokens.css|base.css|
-  layout.css|components.css` (Token-Schicht, Reset/Typo, Responsive-Grid,
-  `.tf-*`-Komponenten) — Farbhartkodierung außerhalb der Tokens ist durch
-  Tests verboten; Themewechsel = ein Attribut, kein Markup.
-- **UX-Schmuck:** Zeichenzähler (warnend > 4096), Strg/Cmd+Enter = senden,
-  Skip-Link, `role="status"`-Live-Region, Noscript-Hinweis, Favicon (SVG),
-  reiche Live-Vorschau (Code, Durchstreichen, Links, Formel-Highlight —
-  weiterhin escaping-first, kein HTML-Injection-Weg).
-- **Dokumentation:** [docs/DESIGN.md](docs/DESIGN.md) (Architektur, Theme-
-  Rezept, Switcher-Verhalten, Teststrategie, Erweiterungs-Guide).
+### Behoben
 
-### Geändert (Web-Oberfläche)
+- **Wheel ohne Assets:** `[tool.setuptools.package-data]` nutzte die Globs
+  `static/*.css`/`static/*.js`, die nur direkte Kinder treffen — `pip install`
+  lieferte das Paket **ohne** `static/css/*`, `static/js/*` und `favicon.svg`
+  (ungestyltes UI ohne Skripte). Korrigiert auf
+  `static/css/*.css`/`static/js/*.js`/`static/favicon.svg`; neuer
+  Vertragstest `test_package_data_covers_all_assets` vergleicht die Globs
+  gegen den tatsächlichen Dateibestand.
+- **Rate-Limits hinter Plattform-Proxys wirkungslos:** `request.remote_addr`
+  war hinter Render & Co. die Proxy-Adresse — alle Besucher teilten sich
+  *einen* Rate-Limit-Eimer (convert/send), und die BYOB-Per-IP-Kappe wäre
+  zur Global-Kappe kollabiert. `ProxyFix(x_for=1, x_proto=1)` vertraut genau
+  einer Proxy-Ebene; das Trade-off (XFF ist spoofbar ⇒ Limits sind
+  Missbrauchs-Heuristik, keine Authentifizierung) ist im Code dokumentiert.
+- **`BotSession`-Countdown-Basis:** neue öffentliche Properties
+  `ttl_remaining_seconds`/`idle_remaining_seconds` (0 für geschlossene
+  Sessions) — vorher war die Restzeit nur über private Interna berechenbar.
 
-- `telegram_formatter/templates/index.html` neu geschrieben: semantische
-  `.tf-*`-Klassen statt Tailwind-Utilities; **alle Funktions-Hooks bleiben
-  contract-getestet erhalten** (`#input`, `#preview`, `#payloads`, `#sendBtn`,
-  `#resetBtn`, `#sendStatus`, `data-convert-url`/`data-send-url`, Howto/FAQ/
-  Disclaimer/Footer). `static/app.css`/`app.js` → `static/css/*` + `static/js/*`.
-- `telegram_formatter/app.py`: CSP vereinfacht (nur `'self'`, `data:` für
-  Favicons); Header-Text accordingly. Endpunkte, Limits, Rate-Limits,
-  Auth/Guards unverändert.
+### Geändert
+
+- **Betrieb:** BYOB-Sessions leben pro Prozess im RAM — der kanonische
+  Start ist jetzt **ein** Gunicorn-Worker mit Threads
+  (`gunicorn "telegram_formatter.app:app" --threads 8`, siehe `render.yaml`
+  und `docs/DEPLOYMENT.md`). `--workers 2` ohne Sticky-Routing würde
+  Sessions im anderen Prozess „verlieren“ (saubere 410-Meldung statt
+  stiller Fehlfunktion).
+- **`app.py`:** gemeinsame Validierungs-Helfer `_json_body()`/`_valid_text()`
+  für alle Sendewege (keine duplizierte Textprüfung); Modul-Docstring
+  dokumentiert beide Versand-Wege und die Guard-Abdeckung.
+- **Konfiguration (neue Umgebungsvariablen, alle mit Default):**
+  `TELEGRAM_FORMATTER_BYOB_ENABLED` (Abschalter für Betreiber),
+  `TELEGRAM_FORMATTER_BYOB_SESSIONS_PER_MINUTE` (3),
+  `TELEGRAM_FORMATTER_BYOB_DISCOVER_PER_MINUTE` (3),
+  `TELEGRAM_FORMATTER_BYOB_SENDS_PER_MINUTE` (6),
+  `TELEGRAM_FORMATTER_BYOB_TTL_SECONDS` (1800),
+  `TELEGRAM_FORMATTER_BYOB_IDLE_SECONDS` (600),
+  `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` (`@mdtotxt_bot`, Anzeige in der
+  Warnung).
+- **Doku:** README (Abschnitt „Versand-Wege auf der Website“, ENV-Tabelle,
+  Badge 2.2.0), `docs/DECENTRAL_BOT_ARCHITECTURE.md` (Modus B jetzt
+  implementiert; Endpunkte, Worker-Regel, Body-Handle-Begründung),
+  `docs/DEPLOYMENT.md`, `docs/ARCHITECTURE.md`, `docs/DESIGN.md`,
+  `botkit/tokens.py`-Hinweis N-5 aktualisiert; Changelog aufgeräumt — die
+  beiden verwaisten `[Unreleased]`-Blöcke sind nun der Version 2.1.0
+  zugeordnet, in der sie tatsächlich deployt wurden.
+- `render.yaml`: Start-Kommando um `--threads 8` ergänzt (BYOB-tauglich,
+  ein Prozess).
 
 ### Tests
 
-- `tests/test_frontend.py`: 20 Strukturverträge (Token-Vollständigkeit je
-  Theme, `var()`-Abdeckung, Asset-Existenz & Waisenfreiheit, JS↔HTML-IDs,
-  Switcher-Markup, mobile-first-Breakpoints, Kontrast-Heuristik,
-  Browser-Baseline-Verbotsliste, HTML-Wellformedness).
-- `tests/frontend/jsdom_spec.cjs` + `tests/test_jsdom_smoke.py`: funktionale
-  DOM-Tests (Theme-Boot/Klicks/Persistenz, Debounce+Fetch, Vorschau,
-  Sende-/Fehlerpfad, Reset) gegen das echt gerenderte Template — 37 Checks;
-  sauberer Skip ohne Node/jsdom.
-- Bestehende Suite unverändert grün: **259 passed** (`pytest -q`).
+- **Neu `tests/test_byob_web.py` (36 Tests):** Session-Öffnen (Happy-Path,
+  Consent, Token-/Chat-Validierung, Verifikationsfehler ohne Token-Leak,
+  Rate-Limit, IP-/Total-Kappe, Kappe-Freigabe nach Schließen, 404 bei
+  Deaktiviert), Senden (eigenes Token in Sender-Aufrufen, 410 für
+  abgelaufen/unbekannt, Session-Rate-Limit 429, Teilfortschritt 502,
+  Telegram-429 mit `retry_after`, Eingabelänge), Status/Schließen
+  (Token-Referenz fällt, Idempotenz, Meta-Prune), Chat-Erkennung (nur
+  Metadaten — Nachrichtentexte erscheinen nachweislich nicht in der
+  Antwort), Guards (Origin 403, Auth-Token 401, Non-JSON 400) und
+  Template-Verträge (Panel/Warnung je Konfiguration).
+- `tests/test_session.py`: Property-Test für die Restzeit-Berechnung.
+- `tests/test_frontend.py`: `byob.js` in die JS-Verträge (IDs, Waisenfreiheit)
+  aufgenommen; FAQ-/Hook-Vertrag um BYOB erweitert; neuer
+  Paketierungs-Vertragstest (Wheel deckt alle Assets ab).
+- `tests/frontend/jsdom_spec.cjs`: neuer Fall 5 — kompletter BYOB-Durchlauf
+  im echten DOM (Validierung, Öffnen, aktive Anzeige, Token-Feld-Leerung,
+  Senden-Routing, Chat-Chips, 410-Reset, Label-Wechsel).
+- Gesamtsuite: **297 passed** (+1 jsdom-Skip ohne Node) — `ruff check` und
+  `bandit -c pyproject.toml -r telegram_formatter` sauber.
 
 ## [2.1.0] - 2026-09-11
 
 Sicherheitshärtung und Fehlerbehebungen als Umsetzung des externen
-Code-Reviews (baut auf dem Stand des [Unreleased]-Blocks: Root-Shim + render.yaml) ([`SECURITY_AUDIT.md`](SECURITY_AUDIT.md)); die Nummern (K-*/H-*/
-M-*/B-*) verweisen auf die Befunde dort.
+Code-Reviews ([`SECURITY_AUDIT.md`](SECURITY_AUDIT.md)); die Nummern (K-*/H-*/
+M-*/B-*) verweisen auf die Befunde dort. Enthält zusätzlich die beiden
+vormaligen `[Unreleased]`-Blöcke (Design-System „tf“ & Themes sowie
+Root-Shim + Render-Blueprint), die mit diesem Stand auf main deployt wurden.
 
 ### Behoben (Sicherheit — kritisch/hoch)
 
@@ -122,11 +198,64 @@ M-*/B-*) verweisen auf die Befunde dort.
   `vars.BOT_ID`/`vars.BOT_PATH`); Dependabot (pip, actions).
 - Dependencies: `gunicorn` 23.0.0 → 26.2.0, `requests` 2.33.0 → 2.34.2.
 
-### Hinweise (bewusst nicht Teil dieses Releases)
+### Hinzugefügt (Web-Oberfläche — Design-System, aus dem vormaligen [Unreleased]-Block)
 
-- Parser-Ein-Pass-Rewrite (O-1) und Hash-Lockfiles (plattformabhängig) sind
-  als separate Änderungen vorgesehen; Details im Audit-Bericht.
-## [Unreleased]
+> Die folgenden Blöcke standen bis v2.2.0 noch unter `[Unreleased]` — ihr Inhalt
+> war jedoch bereits Teil des 2.1.0-Merges und wird hier der Version zugeordnet.
+
+### Behoben (Web-Oberfläche — Design-Bruch)
+
+- **Ungestylter Rohtext:** Die Seite hing am Tailwind-Play-CDN; dessen zur
+  Laufzeit injizierten Inline-`<style>`-Regeln blockierte die CSP
+  (`style-src` ohne `'unsafe-inline'`) — komplettes Layout fiel aus. Das UI
+  ist jetzt **vollständig selbst-gehostet** (4 CSS-Schichten + 2 JS-Module +
+  Inline-SVG-Icons unter `static/`), die CSP ist strikt `'self'` und jede
+  CDN-Whitelist ist entfallen. Damit ist die Klasse dieses Fehlers strukturell
+  ausgeschlossen; `tests/test_app.py` & `tests/test_frontend.py` erzwingen beides.
+
+### Hinzugefügt (Web-Oberfläche — Design-System „tf“ & Themes)
+
+- **Vier Themes + Auto-Modus:** Light (Standard), Dark (Telegram-Nacht),
+  Colorful (Verlauf + Glas-Karten), Minimal (monochrom/kantig); „Auto“ folgt
+  dem Betriebssystem ohne JavaScript-Anteil (reine `prefers-color-scheme`-
+  Media-Query in `tokens.css`).
+- **Theme-Switcher** im Sticky-Header (`#themeSwitcher`): `localStorage`
+  (`tf-theme`), `aria-pressed`-Status, Zustandsklasse `.is-active`,
+  Boot synchron im `<head>` (kein Flash of wrong theme), robust ohne
+  `localStorage`/`matchMedia`, No-JS-Fallback aufs Systemtheme.
+- **Selbst-gehostetes Design-System:** `static/css/tokens.css|base.css|
+  layout.css|components.css` (Token-Schicht, Reset/Typo, Responsive-Grid,
+  `.tf-*`-Komponenten) — Farbhartkodierung außerhalb der Tokens ist durch
+  Tests verboten; Themewechsel = ein Attribut, kein Markup.
+- **UX-Schmuck:** Zeichenzähler (warnend > 4096), Strg/Cmd+Enter = senden,
+  Skip-Link, `role="status"`-Live-Region, Noscript-Hinweis, Favicon (SVG),
+  reiche Live-Vorschau (Code, Durchstreichen, Links, Formel-Highlight —
+  weiterhin escaping-first, kein HTML-Injection-Weg).
+- **Dokumentation:** [docs/DESIGN.md](docs/DESIGN.md) (Architektur, Theme-
+  Rezept, Switcher-Verhalten, Teststrategie, Erweiterungs-Guide).
+
+### Geändert (Web-Oberfläche)
+
+- `telegram_formatter/templates/index.html` neu geschrieben: semantische
+  `.tf-*`-Klassen statt Tailwind-Utilities; **alle Funktions-Hooks bleiben
+  contract-getestet erhalten** (`#input`, `#preview`, `#payloads`, `#sendBtn`,
+  `#resetBtn`, `#sendStatus`, `data-convert-url`/`data-send-url`, Howto/FAQ/
+  Disclaimer/Footer). `static/app.css`/`app.js` → `static/css/*` + `static/js/*`.
+- `telegram_formatter/app.py`: CSP vereinfacht (nur `'self'`, `data:` für
+  Favicons); Header-Text accordingly. Endpunkte, Limits, Rate-Limits,
+  Auth/Guards unverändert.
+
+### Tests
+
+- `tests/test_frontend.py`: 20 Strukturverträge (Token-Vollständigkeit je
+  Theme, `var()`-Abdeckung, Asset-Existenz & Waisenfreiheit, JS↔HTML-IDs,
+  Switcher-Markup, mobile-first-Breakpoints, Kontrast-Heuristik,
+  Browser-Baseline-Verbotsliste, HTML-Wellformedness).
+- `tests/frontend/jsdom_spec.cjs` + `tests/test_jsdom_smoke.py`: funktionale
+  DOM-Tests (Theme-Boot/Klicks/Persistenz, Debounce+Fetch, Vorschau,
+  Sende-/Fehlerpfad, Reset) gegen das echt gerenderte Template — 37 Checks;
+  sauberer Skip ohne Node/jsdom.
+- Bestehende Suite unverändert grün: **259 passed** (`pytest -q`).
 
 ### Behoben (Deploy-Start nach der Paket-Umstellung)
 
@@ -138,7 +267,7 @@ M-*/B-*) verweisen auf die Befunde dort.
   Deployments leitet ab sofort ein Root-Shim weiter, der Blueprint stellt den
   Befehl dauerhaft richtig.
 
-### Hinzugefügt
+### Hinzugefügt (Deploy-Kompatibilität)
 
 - **`app.py` (Repository-Wurzel) — veralteter Kompatibilitäts-Shim.**
   Einzeilige, rein weiterleitende Adresse (`from telegram_formatter.app import
@@ -156,7 +285,7 @@ M-*/B-*) verweisen auf die Befunde dort.
   landen nie im Git). Blueprint-Sync gilt nur für aus dem Blueprint erzeugte
   Dienste; Ablauf für bestehende Services: `docs/DEPLOYMENT.md`, Schritt 3a.
 
-### Geändert
+### Geändert (Deploy-Kompatibilität)
 
 - **Doku nachgezogen:** `docs/DEPLOYMENT.md` (Blueprint-Alternative,
   Sync-Hinweis für bestehende Services, Troubleshooting-Eintrag zum
@@ -169,7 +298,7 @@ M-*/B-*) verweisen auf die Befunde dort.
   `app.py`/`render.yaml` aus. `.github/CODEOWNERS` markiert `/app.py` und
   `/render.yaml` als review-pflichtig (beide ändern den laufenden Dienst).
 
-### Verifiziert
+### Verifiziert (Deploy-Kompatibilität)
 
 - `pytest -q` → **180 passed** (178 Baseline aus 2.0.0 + 2 Shim-Tests);
   `ruff check app.py telegram_formatter examples tests` sauber; Bandit `-ll`
@@ -180,6 +309,10 @@ M-*/B-*) verweisen auf die Befunde dort.
   aus `telegram_formatter.__version__` und nicht mehr aus einer hartkodierten
   Angabe (zuvor auf „MIT · 1.2.0" verdriftet).
 
+### Hinweise (bewusst nicht Teil dieses Releases)
+
+- Parser-Ein-Pass-Rewrite (O-1) und Hash-Lockfiles (plattformabhängig) sind
+  als separate Änderungen vorgesehen; Details im Audit-Bericht.
 ## [2.0.0] - 2026-09-11
 
 ### Geändert (Repository-Reorganisation — verhaltensneutral)

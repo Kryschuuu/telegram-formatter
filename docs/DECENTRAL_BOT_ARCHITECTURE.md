@@ -5,7 +5,9 @@
 > Tokens oder Nutzerdaten zentral gespeichert werden.
 > **Status:** Design + lauffähiges Referenz-Paket
 > `telegram_formatter/botkit/` (eingeführt in v1.3.0; Pfade mit v2.0.0 an die
-> Paketstruktur angepasst, 175 Unit-Tests grün).
+> Paketstruktur angepasst, 175 Unit-Tests grün). **Seit v2.2.0 ist auch
+> Betriebsmodus B umgesetzt** — BYOB-Websessions auf der gehosteten
+> Oberfläche (Abschnitt 1.5.1), 297 Unit-Tests grün.
 
 ---
 
@@ -111,12 +113,61 @@ Nutzer                     botkit                          Telegram
 | Modus | Wer betreibt | Token-Ablage | Review-Pflicht |
 |---|---|---|---|
 | **A — Lokal / Self-Host** (`botctl`, eigener Server) | Nutzer | `PassthroughTokenVault` (nur im Session-Objekt) | Selbstreview oder PR (`--local-trust` macht den Verzicht explizit) |
-| **B — Gehostete Session** (Web-Wizard) | Projekt-Infrastruktur | `InMemoryTokenVault`, TTL 15 min, Handle im HttpOnly-Cookie | **Ja**, Gate vor jedem `open()` |
-| **C — Nur-Konvertierung** (wie heute, per `telegram_formatter/cli.py`) | Nutzer | Environment | nein (kein Bot nötig) |
+| **B — Gehostete Session** (Web, **seit v2.2.0 implementiert**) | Projekt-Infrastruktur | nur im RAM der `BotSession` (TTL 30 min / Leerlauf 10 min); opaker Handle im Request-Body | per Konstruktion erfüllt — es läuft **kein Nutzer-Code** auf dem Server, nur die geprüften Projekt-Module (`require_review=False`); für eigenen Bot-Code bleibt das Gate Pflicht (Modus A/CI) |
+| **C — Nur-Konvertierung** (per `telegram_formatter/cli.py`) | Nutzer | Environment | nein (kein Bot nötig) |
 
 Modus B ist der einzige, in dem fremde Infrastruktur das Token sieht. Deshalb
-gilt dort: Token wird pro Request nur im RAM gehalten, keine Persistenz, und
+gilt dort: Token wird pro Session nur im RAM gehalten, keine Persistenz, und
 `--api-base` erlaubt den Betrieb gegen einen privaten Bot-API-Server.
+
+### 1.5.1 Modus B im Detail — die BYOB-Websessions (v2.2.0)
+
+```
+Browser                          Flask (telegram_formatter/app.py)         Telegram
+  │  1 Token + chat_id + Consent   │                                        │
+  ├─ POST /api/byob/session ──────▶│ BotToken.parse → BotRegistry.register  │
+  │                                │  └─ getMe ────────────────────────────▶│
+  │                                │ SessionManager.open (RAM, TTL/Idle)    │
+  │◀─ 201 {session_id, bot, …} ────┤  (Token NUR im BotSession-Objekt)      │
+  │                                │                                        │
+  │  2 „Chat-ID erkennen“ (optional)│                                       │
+  ├─ POST /api/byob/discover ─────▶│ getUpdates (Blick ohne offset/bestätigt)│
+  │◀─ {chats: [{id, type, name}]} ─┤  (nur Metadaten, keine Texte)          │
+  │                                │                                        │
+  │  3 text senden                 │                                        │
+  ├─ POST /api/byob/send ─────────▶│ session.send → build_messages → sender │
+  │◀─ {sent, session{Restzeit}} ───┤  └─ sendMessage/sendRichMessage ──────▶│
+  │                                │                                        │
+  │  4 Ende (Button oder Timeout)  │                                        │
+  ├─ POST /api/byob/close ────────▶│ close(): Token-Referenz fällt          │
+  └────────────────────────────────┴────────────────────────────────────────┘
+```
+
+Sicherheitsentscheidungen (Abweichungen vom ursprünglichen Entwurf sind
+begründet):
+
+* **Session-Handle im Request-Body statt HttpOnly-Cookie:** kein Cookie ⇒
+  keine Ambient-Authority (CSRF-konstruktiv ausgeschlossen), kein
+  Cookie-Flag-Footprint, funktioniert in Third-Party-Kontexten mit
+  blockierten Cookies. Der Handle ist ein 128-Bit-Zufallswert, der nur den
+  Versand über den Bot der Session bis zum TTL-Ende erlaubt — nichts sonst.
+  Clientseitig lebt er nur im JS-Speicher (kein `localStorage`).
+* **`InMemoryTokenVault` wird nicht benötigt:** die `BotSession` *ist* die
+  flüchtige Ablage — sie hält das Token und verwirft die Referenz bei
+  `close()`/TTL/Leerlauf. Ein zusätzlicher Vault wäre reine Redundanz.
+* **Review-Gate:** Für die Web-Session existiert kein ausführbarer
+  Nutzer-Code — der Server verwendet ausschließlich `utils.build_messages`
+  und `sender.send_message` (dieser Code durchläuft das reguläre
+  Projekt-Review + CI). `SessionConfig(require_review=False)` dokumentiert
+  genau diese Konstruktion; das Gate selbst bleibt für Modus A und die
+  CI-Pipeline unverändert Pflicht.
+* **Anti-Missbrauch:** IP-Rate-Limits (Öffnen 3/min, Erkennen 3/min, Senden
+  6/min), Kappen (100 Sessions insgesamt, 3 pro IP), `reap_expired` +
+  Metadaten-Prune vor jedem Öffnen; Schließen gibt den Platz sofort frei.
+* **Deployment-Regel:** Sessions leben prozesslokal — der Dienst muss mit
+  **einem** Gunicorn-Worker (plus `--threads`) laufen. Ein unbekannter
+  Session-Handle antwortet mit einer eindeutigen 410-Meldung statt stiller
+  Fehlfunktion.
 
 ### 1.6 Unterschied zum zentralen Bot — auf einen Blick
 
@@ -476,8 +527,10 @@ Preis echter Dezentralisierung.
 
 **Nächste Schritte:**
 
-1. Web-Wizard (Modus B): Token-Eingabe im Browser, `InMemoryTokenVault`,
-   HttpOnly-Session-Cookie, Integration in `telegram_formatter/app.py` als Blueprint.
+1. ~~Web-Wizard (Modus B)~~ — **umgesetzt in v2.2.0** als BYOB-Websessions
+   (Abschnitt 1.5.1): Token-Eingabe im Browser, ephemere RAM-Session,
+   Handle im Request-Body (statt Cookie, siehe Begründung dort),
+   Integration in `telegram_formatter/app.py` + `static/js/byob.js`.
 2. Signierte Review-Entscheidungen (GPG/Sigstore), damit der Audit-Trail
    manipulationssicher wird.
 3. Sandbox-Laufzeit für User-Bots im gehosteten Modus (Container mit

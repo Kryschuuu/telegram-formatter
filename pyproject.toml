@@ -48,7 +48,16 @@ dependencies = { file = ["requirements.txt"] }
 include = ["telegram_formatter*"]
 
 [tool.setuptools.package-data]
-telegram_formatter = ["templates/*.html", "static/*.css", "static/*.js"]
+# Wichtig: die Assets liegen in Unterverzeichnissen (static/css, static/js) —
+# der frühere Glob "static/*.css" griff nur auf direkte Kinder und lieferete
+# das Wheel OHNE Styles/Skripte aus (Bugfix v2.2.0; Vertragstest:
+# tests/test_frontend.py::test_package_data_covers_all_assets).
+telegram_formatter = [
+    "templates/*.html",
+    "static/favicon.svg",
+    "static/css/*.css",
+    "static/js/*.js",
+]
 
 # ---------------------------------------------------------------------------
 # Ruff — bewusst explizit, damit CI-Ergebnisse reproduzierbar sind

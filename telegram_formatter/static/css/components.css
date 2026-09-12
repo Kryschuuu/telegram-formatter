@@ -668,3 +668,188 @@
     left: 0;
     color: var(--on-accent);
 }
+
+/* --- BYOB: Warnung für den geteilten Bot (rot statt bernstein) --------------- */
+.tf-note--danger {
+    border-color: var(--danger-border);
+    background: var(--danger-bg);
+    color: var(--danger-text);
+}
+
+/* --- BYOB: Einleitung + Versandweg-Hinweis ----------------------------------- */
+.tf-byob__lead {
+    margin: 0 0 1rem;
+    font-size: .88rem;
+    line-height: 1.65;
+    color: var(--text-muted);
+}
+
+.tf-send-path {
+    margin: .55rem 0 0;
+    font-size: .8rem;
+    line-height: 1.55;
+    color: var(--danger-text);
+}
+
+.tf-send-path.is-private {
+    color: var(--ok);
+}
+
+/* --- BYOB: Formular (Felder, Hinweise, Checkbox) ------------------------------ */
+.tf-form {
+    display: grid;
+    gap: .9rem;
+    margin-top: 1rem;
+}
+
+.tf-field {
+    display: grid;
+    gap: .35rem;
+}
+
+.tf-field > label {
+    font-size: .85rem;
+    font-weight: 700;
+    color: var(--heading);
+}
+
+.tf-input {
+    width: 100%;
+    padding: .6rem .8rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: .85rem;
+}
+
+.tf-input:focus {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+    border-color: var(--accent);
+}
+
+.tf-field__hint {
+    margin: 0;
+    font-size: .76rem;
+    line-height: 1.55;
+    color: var(--text-faint);
+}
+
+.tf-check {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: .55rem;
+    align-items: start;
+    font-size: .8rem;
+    line-height: 1.6;
+    color: var(--text-muted);
+}
+
+.tf-check input[type="checkbox"] {
+    width: 1.15rem;
+    height: 1.15rem;
+    margin-top: .1rem;
+    accent-color: var(--accent);
+}
+
+.tf-form-msg {
+    min-height: 1.2rem;
+    margin: .4rem 0 0;
+    font-size: .82rem;
+    line-height: 1.55;
+    color: var(--text-muted);
+}
+
+.tf-form-msg.is-error {
+    color: var(--err);
+}
+
+.tf-form-msg.is-ok {
+    color: var(--ok);
+}
+
+/* --- BYOB: Chat-Vorschläge als klickbare Chips -------------------------------- */
+.tf-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+}
+
+.tf-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    padding: .35rem .7rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    cursor: pointer;
+}
+
+.tf-chip:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.tf-chip__meta {
+    font-family: var(--font-sans);
+    font-size: .7rem;
+    color: var(--text-faint);
+}
+
+/* --- BYOB: Statuskarte der aktiven Session ------------------------------------ */
+.tf-session {
+    display: grid;
+    gap: .5rem;
+    margin-top: 1rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--ok, var(--border-strong));
+    border-left: .3rem solid var(--ok, var(--accent));
+    border-radius: var(--radius);
+    background: var(--surface-2);
+}
+
+.tf-session__title {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin: 0;
+    font-size: .9rem;
+    font-weight: 800;
+    color: var(--ok);
+}
+
+.tf-session__info {
+    margin: 0;
+    font-size: .85rem;
+    color: var(--text);
+}
+
+.tf-session__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .8rem;
+    margin: 0;
+    font-size: .78rem;
+    color: var(--text-muted);
+}
+
+.tf-session__stats {
+    color: var(--text-faint);
+}
+
+.tf-session__meta .is-warn {
+    color: var(--warn);
+}
+
+/* --- BYOB: kompakte Schrittliste (drei Schritte im Formular) ------------------ */
+.tf-steps--compact {
+    display: grid;
+    gap: .55rem;
+    margin: 0 0 .4rem;
+}

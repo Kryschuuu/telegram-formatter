@@ -22,7 +22,8 @@
        ersten Paint — siehe static/js/theme.js. #}
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
 </head>
-<body data-convert-url="{{ url_for('convert') }}" data-send-url="{{ url_for('send') }}">
+<body data-convert-url="{{ url_for('convert') }}" data-send-url="{{ url_for('send') }}"
+      data-byob-base="{{ url_for('byob_session_open').rsplit('/', 1)[0] }}">
 
 <a class="tf-skip-link" href="#editor">Direkt zum Editor springen</a>
 
@@ -94,7 +95,8 @@
 <noscript>
     <p class="tf-container tf-noscript">
         JavaScript ist deaktiviert: Das Theme folgt deinen Systemeinstellungen, alle
-        Texte sind lesbar — Live-Vorschau und Payloads benötigen jedoch JavaScript.
+        Texte sind lesbar — Live-Vorschau, Payloads und der Versand (inkl. eigener
+        Bot-Session/BYOB) benötigen jedoch JavaScript.
     </p>
 </noscript>
 
@@ -135,6 +137,18 @@
                 </button>
             </div>
             <p class="tf-card__hint">Tipp: Strg/Cmd + Enter sendet direkt aus dem Editor.</p>
+
+            <!-- ===== Aktiver Versandweg (byob.js hält den Text aktuell) ===== -->
+            <p id="sendPathNote" class="tf-send-path">
+                {%- if configured -%}
+                    ⚠ Versand über den geteilten Bot {{ shared_bot_handle }} — <strong>öffentlich
+                    sichtbar für alle!</strong> Für private Inhalte: eigene Bot-Session starten
+                    (Abschnitt „Eigener Bot — BYOB“ unten).
+                {%- else -%}
+                    Kein geteilter Bot konfiguriert — unten eine eigene Bot-Session (BYOB)
+                    starten, um zu senden.
+                {%- endif -%}
+            </p>
 
             <!-- ===== Disclaimer (Hinweisbox unter dem Editor) ===== -->
             <aside class="tf-note" aria-label="Haftungsausschluss">
@@ -179,6 +193,157 @@
             <pre id="payloads" class="tf-payloads" aria-labelledby="payload-title">—</pre>
         </section>
     </div>
+
+    <!-- ===== Eigener Bot (BYOB): private Versand-Alternative ===== -->
+    <section id="byob" class="tf-card tf-section" aria-labelledby="byob-title">
+        <h2 class="tf-card__title" id="byob-title">
+            <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+            Versandweg: geteilter Bot oder eigener Bot (BYOB)?
+        </h2>
+
+        {%- if byob_enabled %}
+        {%- if configured %}
+        <!-- WICHTIGER Hinweis: Der geteilte Bot sendet in einen gemeinsamen,
+             öffentlich einsehbaren Chat. Diese Warnung ist bewusst dominant. -->
+        <aside class="tf-note tf-note--danger" role="note" aria-label="Wichtiger Hinweis zum geteilten Bot">
+            <p class="tf-note__title">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                Wichtig — der geteilte Bot ist öffentlich!
+            </p>
+            <p>
+                Solange keine eigene Session läuft, sendet der Standard-Bot
+                <strong>{{ shared_bot_handle }}</strong> in <strong>einen gemeinsamen Chat</strong>:
+                Alles, was du darüber sendest, sehen <strong>alle Besucher dieser Seite</strong> —
+                und jeder, der den Bot auf Telegram hinzufügt, kann den bisherigen Verlauf lesen.
+                Nutze den geteilten Bot nur für öffentliche Tests, <strong>niemals für private
+                Inhalte</strong>. Für private Nachrichten gehört dein eigener Bot in eine Session
+                (unten, ca. 3 Minuten Einrichtung).
+            </p>
+        </aside>
+        {%- endif %}
+
+        <div id="byobPanel">
+            <p class="tf-byob__lead">
+                <strong>Bring Your Own Bot:</strong> Verbinde einmalig deinen eigenen
+                Telegram-Bot — danach sendet der Editor über deine eigene, ephemere Session.
+                Dein Token liegt ausschließlich im Arbeitsspeicher (max. 30 Minuten), wird
+                nie gespeichert, nie geloggt und nach Session-Ende verworfen. Auf dem Server
+                läuft ausschließlich der geprüfte Code dieses Projekts — dein eigener
+                Bot-Code wird nirgendwo ausgeführt (für eigenen Code gibt es
+                <code>botctl</code> mit Review-Gate).
+            </p>
+
+            <ol class="tf-steps tf-steps--compact">
+                <li class="tf-step">
+                    <span class="tf-step__num" aria-hidden="true">1</span>
+                    <div>
+                        <p class="tf-step__title">Eigenen Bot anlegen</p>
+                        <p class="tf-step__text">
+                            <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>
+                            anschreiben, <code>/newbot</code> ausführen, Name + Benutzername wählen —
+                            und den angezeigten Token kopieren.
+                        </p>
+                    </div>
+                </li>
+                <li class="tf-step">
+                    <span class="tf-step__num" aria-hidden="true">2</span>
+                    <div>
+                        <p class="tf-step__title">Chat-ID ermitteln</p>
+                        <p class="tf-step__text">
+                            Eigene ID: <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>
+                            starten. Gruppe/Kanal: eigenen Bot dort hinzufügen, eine kurze Nachricht
+                            senden und unten auf <em>„Chat-ID erkennen“</em> klicken.
+                        </p>
+                    </div>
+                </li>
+                <li class="tf-step">
+                    <span class="tf-step__num" aria-hidden="true">3</span>
+                    <div>
+                        <p class="tf-step__title">Session starten &amp; senden</p>
+                        <p class="tf-step__text">
+                            Token + Chat-ID eintragen, Hinweis bestätigen, Session starten —
+                            der Senden-Button versendet danach automatisch über deinen Bot.
+                        </p>
+                    </div>
+                </li>
+            </ol>
+
+            <!-- ===== BYOB-Formular ===== -->
+            <form id="byobForm" class="tf-form" autocomplete="off" novalidate>
+                <div class="tf-field">
+                    <label for="byobToken">Bot-Token (deines eigenen Bots)</label>
+                    <input id="byobToken" name="token" type="password" inputmode="text"
+                           class="tf-input" spellcheck="false" autocomplete="off"
+                           placeholder="z. B. 123456789:AAE…(von @BotFather)"
+                           aria-describedby="byobTokenHint">
+                    <p class="tf-field__hint" id="byobTokenHint">
+                        Format: <code>Bot-ID:Doppelpunkt:35 Zeichen</code>. Wird nur im RAM der
+                        Session gehalten — nie gespeichert, nie geloggt, nach Ablauf verworfen.
+                    </p>
+                </div>
+                <div class="tf-field">
+                    <label for="byobChat">Chat-ID (Ziel-Chat)</label>
+                    <input id="byobChat" name="chat_id" type="text" inputmode="numeric"
+                           class="tf-input" spellcheck="false" autocomplete="off"
+                           placeholder="z. B. 4711 (privat) oder -1001234567890 (Gruppe/Kanal)"
+                           aria-describedby="byobChatHint">
+                    <p class="tf-field__hint" id="byobChatHint">
+                        Der Bot muss Mitglied im Ziel-Chat sein (Gruppe/Kanal: Bot hinzufügen).
+                    </p>
+                    <button type="button" id="byobDiscoverBtn" class="tf-btn tf-btn--ghost">
+                        <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                        Chat-ID erkennen
+                    </button>
+                </div>
+                <div id="byobDiscoverResult" class="tf-chip-row" role="status" aria-live="polite"></div>
+
+                <label class="tf-check">
+                    <input type="checkbox" id="byobConsent">
+                    <span>Ich verstehe: Mein Token wird einmalig gegen Telegram geprüft
+                        (<code>getMe</code>) und nur im Arbeitsspeicher der Session gehalten
+                        (endet automatisch nach max. 30 Minuten bzw. 10 Minuten Inaktivität).
+                        Es wird nicht gespeichert, nicht geloggt und nicht an Dritte weitergegeben.</span>
+                </label>
+
+                <div class="tf-btn-row">
+                    <button type="submit" id="byobStartBtn" class="tf-btn tf-btn--primary">
+                        <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                        Eigene Bot-Session starten
+                    </button>
+                </div>
+            </form>
+            <p id="byobError" class="tf-form-msg" role="alert" aria-live="assertive"></p>
+
+            <!-- ===== Aktive Session (Statusanzeige) ===== -->
+            <div id="byobActive" class="tf-session" hidden>
+                <p class="tf-session__title">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+                    Eigene Bot-Session aktiv — Versand läuft über deinen Bot
+                </p>
+                <p class="tf-session__info">
+                    Sendet als <strong id="byobBotName"></strong>
+                    in den Chat <code id="byobChatLabel"></code>
+                </p>
+                <p class="tf-session__meta">
+                    <span id="byobCountdown" role="timer"></span>
+                    <span id="byobStats" class="tf-session__stats"></span>
+                </p>
+                <div class="tf-btn-row">
+                    <button type="button" id="byobCloseBtn" class="tf-btn tf-btn--ghost"
+                            title="Beendet die Session sofort und verwirft die Token-Referenz">
+                        <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/></svg>
+                        Session beenden (Token verwerfen)
+                    </button>
+                </div>
+            </div>
+        </div>
+        {%- else %}
+        <p class="tf-byob__lead">
+            BYOB ist auf dieser Instanz deaktiviert. Versand ausschließlich über den
+            konfigurierten geteilten Bot bzw. lokal über <code>botctl</code>.
+        </p>
+        {%- endif %}
+    </section>
 
     <!-- ===== Howto ===== -->
     <section id="howto" class="tf-card tf-section" aria-labelledby="howto-title">
@@ -238,10 +403,13 @@
             <li class="tf-step">
                 <span class="tf-step__num" aria-hidden="true">5</span>
                 <div>
-                    <p class="tf-step__title">Senden</p>
+                    <p class="tf-step__title">Senden — Versandweg wählen</p>
                     <p class="tf-step__text">
-                        Auf „An Telegram senden“ klicken — der Status unter dem Button zeigt Erfolg
-                        oder Fehlermeldung. Mit „Zurücksetzen“ lässt sich alles wieder leeren.
+                        Läuft eine eigene Bot-Session (Abschnitt BYOB), sendet der Button automatisch
+                        über <strong>deinen</strong> Bot — privat. Ohne Session geht es über den
+                        geteilten Bot in den <strong>öffentlichen</strong> Chat (Warnhinweis beachten!).
+                        Der Status unter dem Button zeigt Erfolg oder Fehler, mit „Zurücksetzen“
+                        lässt sich alles leeren.
                     </p>
                 </div>
             </li>
@@ -363,6 +531,75 @@
             </details>
             <details class="tf-faq__item faq-item">
                 <summary>
+                    Was bedeutet „BYOB“ — und wer sieht meine Nachrichten?
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </summary>
+                <div class="tf-faq__answer">
+                    <p>
+                        BYOB heißt <em>Bring Your Own Bot</em>: Du verbindest deinen eigenen
+                        Telegram-Bot (Token von @BotFather) in einer ephemeren Session —
+                        deine Nachrichten laufen dann im Namen deines Bots direkt in deinen
+                        Ziel-Chat, ohne geteilte Historie. Der geteilte Standard-Bot
+                        dagegen sendet in <strong>einen gemeinsamen Chat</strong>: Alle Besucher
+                        sehen alles, was damit gesendet wurde — auch nachträglich, wenn sie
+                        den Bot auf Telegram hinzufügen. Deshalb die Warnung im Abschnitt
+                        „Versandweg“.
+                    </p>
+                </div>
+            </details>
+            <details class="tf-faq__item faq-item">
+                <summary>
+                    Was passiert in der Web-Session mit meinem Bot-Token?
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </summary>
+                <div class="tf-faq__answer">
+                    <p>
+                        Der Server prüft es einmalig gegen Telegram (<code>getMe</code>) und hält
+                        es danach <strong>ausschließlich im Arbeitsspeicher der Session</strong>:
+                        keine Datei, keine Datenbank, kein Log, kein Cookie. Die Session endet
+                        automatisch (max. 30 Minuten, bzw. 10 Minuten ohne Aktivität) oder sofort
+                        über „Session beenden“ — dann fällt die Token-Referenz. Im Browser wird
+                        das Eingabefeld nach dem Session-Start geleert; der Session-Handle wird
+                        nur im Arbeitsspeicher der Seite gehalten (ein Neuladen beendet die
+                        Nutzung; auf dem Server läuft die Session höchstens bis zum Timeout weiter).
+                        Trotzdem gilt: Ein Token ist ein Schlüssel — bei Verdacht auf Leak
+                        sofort bei @BotFather neu erzeugen (<code>/revoke</code>).
+                    </p>
+                </div>
+            </details>
+            <details class="tf-faq__item faq-item">
+                <summary>
+                    Warum endet meine eigene Session plötzlich?
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </summary>
+                <div class="tf-faq__answer">
+                    <p>
+                        Sessions sind bewusst kurzlebig: Nach 30 Minuten Lebensdauer oder
+                        10 Minuten ohne Versand enden sie automatisch, danach ist das Token
+                        verworfen. Die Statusanzeige zeigt die Restzeit — bei Ablauf einfach
+                        eine neue Session starten (Token erneut eintragen).
+                    </p>
+                </div>
+            </details>
+            <details class="tf-faq__item faq-item">
+                <summary>
+                    Muss mein eigener Bot-Code reviewt werden?
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </summary>
+                <div class="tf-faq__answer">
+                    <p>
+                        In der Web-Session läuft <strong>kein eigener Code</strong> — der Server
+                        nutzt ausschließlich die geprüften Konverter- und Versand-Module dieses
+                        Projekts; dein Bot steuert nur Identität und Token bei. Das
+                        Review-Verfahren (statische Regeln, Vier-Augen-Prinzip) gilt für eigenen
+                        Bot-Code, der tatsächlich ausgeführt werden soll: über
+                        <code>botctl review/approve</code> und die CI — Details in
+                        <code>docs/DECENTRAL_BOT_ARCHITECTURE.md</code>.
+                    </p>
+                </div>
+            </details>
+            <details class="tf-faq__item faq-item">
+                <summary>
                     Es klappt nicht — was kann ich bei Fehlern tun?
                     <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </summary>
@@ -420,5 +657,6 @@
 </footer>
 
 <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/byob.js') }}" defer></script>
 </body>
 </html>

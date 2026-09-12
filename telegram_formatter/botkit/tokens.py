@@ -225,10 +225,14 @@ class InMemoryTokenVault:
     * :meth:`purge_expired` wird vom Session-Manager regelmäßig aufgerufen;
     * alle Operationen laufen unter einem Lock (Thread-safety, Audit M-7).
 
-    Hinweis (Audit N-5): Dieser Vault ist ein **Baustein** für einen
-    gehosteten Modus (Handle statt Token im Request). Ein solcher Modus —
-    inkl. HttpOnly-Cookie-Schicht — ist aktuell **nicht implementiert**;
-    die Flask-App referenziert Tokens nicht über Handles.
+    Hinweis (Audit N-5): Dieser Vault ist ein **Baustein** für
+    Handle-basierte Integrationen. Der seit v2.2.0 implementierte gehostete
+    Modus (BYOB-Websessions, ``telegram_formatter/app.py``) nutzt ihn
+    bewusst **nicht**: Die ``BotSession`` selbst ist die flüchtige Ablage —
+    sie hält das Token im RAM und verwirft die Referenz bei ``close()``/TTL;
+    ein zusätzlicher Vault wäre Redundanz. Der Session-Handle wandert als
+    opaker Zufallswert im Request-Body (kein Cookie) — Begründung:
+    ``docs/DECENTRAL_BOT_ARCHITECTURE.md`` §1.5.1.
     """
 
     def __init__(
