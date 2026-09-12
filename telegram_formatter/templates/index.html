@@ -23,7 +23,8 @@
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
 </head>
 <body data-convert-url="{{ url_for('convert') }}" data-send-url="{{ url_for('send') }}"
-      data-byob-base="{{ url_for('byob_session_open').rsplit('/', 1)[0] }}">
+      data-byob-base="{{ url_for('byob_session_open').rsplit('/', 1)[0] }}"
+      data-shared-bot="{{ shared_bot_handle }}" data-configured="{{ '1' if configured else '0' }}">
 
 <a class="tf-skip-link" href="#editor">Direkt zum Editor springen</a>
 
@@ -100,6 +101,32 @@
     </p>
 </noscript>
 
+{%- if configured %}
+<!-- ===== Top-Warnung (bewusst GANZ OBEN): geteilter Bot ist öffentlich =====
+     Diese Warnung stand vormals im BYOB-Abschnitt — sie gehört an den
+     Seitenanfang, weil der geteilte Bot der DEFAULT-Versandweg ist. -->
+<section class="tf-top-warning" aria-labelledby="top-warning-title">
+    <div class="tf-container">
+        <aside class="tf-note tf-note--danger tf-note--top" role="note"
+               aria-label="Wichtiger Hinweis zum geteilten Bot">
+            <p class="tf-note__title">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                <span id="top-warning-title">Wichtig — der geteilte Bot ist öffentlich!</span>
+            </p>
+            <p>
+                Solange keine eigene Session läuft, sendet der Standard-Bot
+                <strong>{{ shared_bot_handle }}</strong> in <strong>einen gemeinsamen Chat</strong>:
+                Alles, was du darüber sendest, sehen <strong>alle Besucher dieser Seite</strong> —
+                und jeder, der den Bot auf Telegram hinzufügt, kann den bisherigen Verlauf lesen.
+                Nutze den geteilten Bot nur für öffentliche Tests, <strong>niemals für private
+                Inhalte</strong>. Für private Nachrichten gehört dein eigener Bot in eine
+                <a href="#byob">Session</a> (unten, ca. 3 Minuten Einrichtung).
+            </p>
+        </aside>
+    </div>
+</section>
+{%- endif %}
+
 <main id="top" class="tf-container tf-page">
 
     <!-- ===== Hero: was das Tool tut, auf einen Blick ===== -->
@@ -136,7 +163,7 @@
                     Zurücksetzen
                 </button>
             </div>
-            <p class="tf-card__hint">Tipp: Strg/Cmd + Enter sendet direkt aus dem Editor.</p>
+            <p class="tf-card__hint">Tipp: Strg/Cmd + Enter öffnet die Senden-Bestätigung direkt aus dem Editor.</p>
 
             <!-- ===== Aktiver Versandweg (byob.js hält den Text aktuell) ===== -->
             <p id="sendPathNote" class="tf-send-path">
@@ -194,6 +221,90 @@
         </section>
     </div>
 
+    <!-- ===== Sende-Bestätigung (Modal): welcher Bot? wohin? abbrechen? =====
+         Vor jedem Versand wird der konkrete Weg angezeigt — geteilter Bot
+         (öffentlich) vs. eigene Bot-Session (privat). app.js befüllt die
+         Fakten beim Öffnen; Abbrechen/Escape/Backdrop-Klick sendet nichts. -->
+    <div id="sendConfirm" class="tf-modal" hidden role="dialog" aria-modal="true"
+         aria-labelledby="sendConfirmTitle">
+        <div id="sendConfirmBackdrop" class="tf-modal__backdrop"></div>
+        <div class="tf-modal__panel">
+            <h2 class="tf-modal__title" id="sendConfirmTitle">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>
+                Vor dem Senden prüfen
+            </h2>
+            <p class="tf-modal__lead">
+                Deine Nachricht geht über genau diesen Bot an genau dieses Ziel —
+                bitte prüfen, dann senden oder abbrechen:
+            </p>
+            <dl class="tf-facts">
+                <div class="tf-facts__row">
+                    <dt>Bot (Absender)</dt>
+                    <dd id="sendConfirmBot">—</dd>
+                </div>
+                <div class="tf-facts__row">
+                    <dt>Ziel (Wohin?)</dt>
+                    <dd id="sendConfirmTarget">—</dd>
+                </div>
+                <div class="tf-facts__row">
+                    <dt>Nachricht</dt>
+                    <dd>
+                        <span id="sendConfirmPreview" class="tf-modal__preview">—</span>
+                        <span id="sendConfirmLength" class="tf-modal__length"></span>
+                    </dd>
+                </div>
+            </dl>
+
+            <!-- Genau einer der drei Hinweise ist sichtbar (app.js schaltet): -->
+            <div id="sendConfirmWarning" class="tf-note tf-note--danger" role="note" hidden>
+                <p class="tf-note__title">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                    Öffentlich sichtbar!
+                </p>
+                <p>
+                    Der geteilte Bot sendet in den <strong>gemeinsamen Chat</strong> dieser
+                    Seite: Alle Besucher sehen diese Nachricht — und jeder, der den Bot auf
+                    Telegram hinzufügt, kann sie auch nachträglich lesen. Für private Inhalte
+                    zuerst eine eigene Bot-Session starten
+                    (Abschnitt <a href="#byob">„Eigener Bot — BYOB“</a> unten).
+                </p>
+            </div>
+            <div id="sendConfirmPrivate" class="tf-note tf-note--ok" role="note" hidden>
+                <p class="tf-note__title">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+                    Privat — dein eigener Bot
+                </p>
+                <p>
+                    Gesendet wird über deine eigene Bot-Session direkt in deinen
+                    Ziel-Chat. Der geteilte Bot wird nicht genutzt; den Verlauf
+                    sieht nur, wer Mitglied in deinem Ziel-Chat ist.
+                </p>
+            </div>
+            <div id="sendConfirmUnavailable" class="tf-note" role="note" hidden>
+                <p class="tf-note__title">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+                    Kein Versandweg aktiv
+                </p>
+                <p>
+                    Auf dieser Instanz ist kein geteilter Bot konfiguriert — der Versand
+                    wird fehlschlagen. Starte unten eine eigene Bot-Session (BYOB), um
+                    senden zu können.
+                </p>
+            </div>
+
+            <div class="tf-btn-row">
+                <button type="button" id="sendConfirmCancel" class="tf-btn tf-btn--ghost">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                    Abbrechen
+                </button>
+                <button type="button" id="sendConfirmOk" class="tf-btn tf-btn--primary">
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>
+                    <span id="sendConfirmOkLabel">Jetzt senden</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- ===== Eigener Bot (BYOB): private Versand-Alternative ===== -->
     <section id="byob" class="tf-card tf-section" aria-labelledby="byob-title">
         <h2 class="tf-card__title" id="byob-title">
@@ -202,25 +313,10 @@
         </h2>
 
         {%- if byob_enabled %}
-        {%- if configured %}
-        <!-- WICHTIGER Hinweis: Der geteilte Bot sendet in einen gemeinsamen,
-             öffentlich einsehbaren Chat. Diese Warnung ist bewusst dominant. -->
-        <aside class="tf-note tf-note--danger" role="note" aria-label="Wichtiger Hinweis zum geteilten Bot">
-            <p class="tf-note__title">
-                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-                Wichtig — der geteilte Bot ist öffentlich!
-            </p>
-            <p>
-                Solange keine eigene Session läuft, sendet der Standard-Bot
-                <strong>{{ shared_bot_handle }}</strong> in <strong>einen gemeinsamen Chat</strong>:
-                Alles, was du darüber sendest, sehen <strong>alle Besucher dieser Seite</strong> —
-                und jeder, der den Bot auf Telegram hinzufügt, kann den bisherigen Verlauf lesen.
-                Nutze den geteilten Bot nur für öffentliche Tests, <strong>niemals für private
-                Inhalte</strong>. Für private Nachrichten gehört dein eigener Bot in eine Session
-                (unten, ca. 3 Minuten Einrichtung).
-            </p>
-        </aside>
-        {%- endif %}
+        <!-- Die Privatsphäre-Warnung für den geteilten Bot steht bewusst GANZ
+             OBEN auf der Seite (unter dem Header) — der geteilte Bot ist der
+             Default-Versandweg, die Warnung darf nicht erst hier im Detail
+             gefunden werden. -->
 
         <div id="byobPanel">
             <p class="tf-byob__lead">
@@ -345,6 +441,94 @@
         {%- endif %}
     </section>
 
+    <!-- ===== Privatsphäre-Aufklärung: BotFather, Bots & Sichtbarkeit ===== -->
+    <section id="privacy" class="tf-card tf-section" aria-labelledby="privacy-title">
+        <h2 class="tf-card__title" id="privacy-title">
+            <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
+            Privatsphäre: Was sind BotFather &amp; Bots — und wer sieht was?
+        </h2>
+        <p class="tf-privacy__lead">
+            Bevor du hier irgendetwas sendest, sollst du verstehen, mit wem du es
+            zu tun hast: <strong>@BotFather</strong> ist Telegrams offizieller
+            Verwaltungsbot, ein <strong>Bot</strong> ist ein Telegram-Account, den
+            Software über einen Token steuert. Die entscheidende Frage ist immer:
+            Wer hält den Token — und in welchem Chat landet die Nachricht?
+        </p>
+        <div class="tf-privacy__grid">
+            <article class="tf-privacy__item">
+                <h3>
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/></svg>
+                    Was ist @BotFather?
+                </h3>
+                <p>
+                    Telegrams offizielle Verwaltungsstelle für Bots: Mit
+                    <code>/newbot</code> legst du einen Bot an, mit
+                    <code>/revoke</code> ziehst du dessen Token zurück. Der Bot
+                    gehört fest zu <strong>deinem</strong> Telegram-Konto — nur du
+                    erhältst den Token, nur du kannst ihn verwalten oder löschen.
+                    BotFather sieht ausschließlich die Verwaltungsdaten (Name,
+                    Benutzername, Beschreibung) — <strong>nie</strong> die
+                    Nachrichten, die dein Bot später empfängt oder sendet.
+                </p>
+            </article>
+            <article class="tf-privacy__item">
+                <h3>
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                    Was ist ein Bot — und was ist öffentlich?
+                </h3>
+                <p>
+                    Das Bot-Profil (Name, @Benutzername, Beschreibung) ist
+                    <strong>öffentlich</strong>: Jeder kann den Bot auf Telegram
+                    finden und in eigene Chats einladen. Die Inhalte eines Chats
+                    sehen nur dessen Mitglieder — aber Chats mit Bots sind
+                    <strong>nicht Ende-zu-Ende-verschlüsselt</strong>: Wer den
+                    Token besitzt, kann alles mitlesen, was dem Bot geschrieben
+                    wird, und alles, was er sendet. Der Token ist also ein
+                    Schlüssel — behandle ihn wie ein Passwort.
+                </p>
+            </article>
+            <article class="tf-privacy__item tf-privacy__item--danger">
+                <h3>
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                    Der geteilte Bot dieser Seite
+                </h3>
+                <p>
+                    {%- if configured %}
+                        Der Standard-Bot <strong>{{ shared_bot_handle }}</strong> sendet in
+                        <strong>einen gemeinsamen Chat</strong>: Alles Gesendete sehen alle
+                        Besucher dieser Seite — und jeder, der den Bot auf Telegram hinzufügt,
+                        kann den bisherigen Verlauf nachlesen. Der Token liegt beim Betreiber
+                        dieser Instanz; für private Inhalte ist dieser Weg ungeeignet.
+                    {%- else %}
+                        Auf dieser Instanz ist kein geteilter Bot konfiguriert — gesendet
+                        werden kann ausschließlich über die eigene Bot-Session (BYOB) bzw.
+                        lokal über <code>botctl</code>.
+                    {%- endif %}
+                </p>
+            </article>
+            <article class="tf-privacy__item tf-privacy__item--ok">
+                <h3>
+                    <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    Dein eigener Bot (BYOB)
+                </h3>
+                <p>
+                    Du bist Betreiber: Nachrichten laufen im Namen <strong>deines</strong>
+                    Bots direkt in <strong>deinen</strong> Ziel-Chat — ohne geteilte
+                    Historie. Dein Token wird nur im Arbeitsspeicher der ephemeren
+                    Session gehalten (max. 30 Minuten, nie gespeichert, nie geloggt)
+                    und beim Session-Ende verworfen. Weder andere Besucher noch der
+                    Betreiber dieser Seite können deine Session einsehen.
+                </p>
+            </article>
+        </div>
+        <p class="tf-privacy__note">
+            Merksatz: Der Bot-<strong>Name</strong> ist öffentlich, der
+            Bot-<strong>Token</strong> ist geheim. Wer den Token hat, handelt im
+            Namen deines Bots — deshalb bei Verdacht auf Leak sofort bei
+            @BotFather neu erzeugen (<code>/revoke</code>).
+        </p>
+    </section>
+
     <!-- ===== Howto ===== -->
     <section id="howto" class="tf-card tf-section" aria-labelledby="howto-title">
         <h2 class="tf-card__title" id="howto-title">
@@ -403,11 +587,13 @@
             <li class="tf-step">
                 <span class="tf-step__num" aria-hidden="true">5</span>
                 <div>
-                    <p class="tf-step__title">Senden — Versandweg wählen</p>
+                    <p class="tf-step__title">Senden — Versandweg prüfen &amp; bestätigen</p>
                     <p class="tf-step__text">
                         Läuft eine eigene Bot-Session (Abschnitt BYOB), sendet der Button automatisch
                         über <strong>deinen</strong> Bot — privat. Ohne Session geht es über den
                         geteilten Bot in den <strong>öffentlichen</strong> Chat (Warnhinweis beachten!).
+                        Vor dem Absenden erscheint eine <strong>Bestätigung</strong>, die den konkreten
+                        Bot und das Ziel anzeigt — dort kannst du den Versand jederzeit noch abbrechen.
                         Der Status unter dem Button zeigt Erfolg oder Fehler, mit „Zurücksetzen“
                         lässt sich alles leeren.
                     </p>
@@ -544,6 +730,24 @@
                         sehen alles, was damit gesendet wurde — auch nachträglich, wenn sie
                         den Bot auf Telegram hinzufügen. Deshalb die Warnung im Abschnitt
                         „Versandweg“.
+                    </p>
+                </div>
+            </details>
+            <details class="tf-faq__item faq-item">
+                <summary>
+                    Sind Bots und BotFather öffentlich einsehbar?
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </summary>
+                <div class="tf-faq__answer">
+                    <p>
+                        Das Bot-<strong>Profil</strong> (Name, @Benutzername, Beschreibung) ist
+                        öffentlich — jeder kann jeden Bot auf Telegram finden und hinzufügen.
+                        Chat-<strong>Inhalte</strong> sehen nur die Mitglieder des jeweiligen
+                        Chats. Aber: Chats mit Bots sind nicht Ende-zu-Ende-verschlüsselt —
+                        wer den Token besitzt, kann mitlesen, was der Bot empfängt und sendet.
+                        @BotFather selbst sieht nur Verwaltungsdaten (Name, Beschreibung),
+                        niemals Nachrichten deiner Bot-Chats. Ausführlich erklärt im Abschnitt
+                        <a href="#privacy">„Privatsphäre“</a>.
                     </p>
                 </div>
             </details>

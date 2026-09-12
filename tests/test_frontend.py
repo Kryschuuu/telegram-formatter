@@ -303,12 +303,61 @@ def test_faq_and_hooks_present(page: str):
         'id="input"', 'id="preview"', 'id="payloads"', 'id="sendBtn"',
         'id="resetBtn"', 'id="sendStatus"', 'id="status"', 'id="howto"', 'id="faq"',
         'id="byob"', 'id="byobForm"', 'id="sendPathNote"',
+        'id="sendConfirm"', 'id="sendConfirmOk"', 'id="sendConfirmCancel"',
+        'id="privacy"',
         "data-convert-url", "data-send-url", "data-byob-base",
+        "data-shared-bot", "data-configured",
     ):
         assert token in page, f"Funktions-Hook fehlt: {token}"
     assert page.count("<details") >= 11
     assert "Vorschau erscheint hier…" in page
     assert page.index('js/theme.js"') < page.index("<body")  # synchron im <head>
+
+
+def test_send_confirm_dialog_contract(page: str):
+    """Der Sende-Bestätigungsdialog zeigt Bot + Ziel + Vorschau und hat einen
+    echten Abbrechen-Weg (v2.3.0). Er ist im Markup versteckt (JS öffnet ihn)."""
+    assert 'id="sendConfirm" class="tf-modal" hidden role="dialog" aria-modal="true"' in page
+    for fact in ("sendConfirmBot", "sendConfirmTarget", "sendConfirmPreview",
+                 "sendConfirmLength"):
+        assert f'id="{fact}"' in page, f"Dialog-Fakt fehlt: {fact}"
+    # Abbrechen als eigener Button …
+    assert 'id="sendConfirmCancel"' in page and "Abbrechen" in page
+    # … und alle drei Hinweis-Varianten, per Markup versteckt (JS schaltet).
+    assert 'id="sendConfirmWarning" class="tf-note tf-note--danger" role="note" hidden' in page
+    assert 'id="sendConfirmPrivate" class="tf-note tf-note--ok" role="note" hidden' in page
+    assert 'id="sendConfirmUnavailable" class="tf-note" role="note" hidden' in page
+
+
+def test_privacy_section_educates_about_botfather(page: str):
+    """Die Aufklärungs-Sektion zu BotFather/Bots/Privatsphäre ist immer
+    vorhanden (auch ohne konfigurierten geteilten Bot)."""
+    assert 'id="privacy"' in page
+    assert "Was ist @BotFather?" in page
+    assert "nicht Ende-zu-Ende-verschlüsselt" in page
+    assert "Dein eigener Bot (BYOB)" in page
+    assert "Der geteilte Bot dieser Seite" in page
+
+
+def test_top_warning_only_when_configured(page: str, monkeypatch):
+    """Die öffentlich-Bot-Warnung steht GANZ OBEN — aber nur, wenn der
+    geteilte Bot tatsächlich aktiv ist."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "123456789:" + "A" * 35)
+    monkeypatch.setattr(app_module, "CHAT_ID", "-1001234567890")
+    app_module.app.config["TESTING"] = True
+    with app_module.app.test_client() as client:
+        cfg_page = client.get("/").data.decode("utf-8")
+
+    assert "Wichtig — der geteilte Bot ist öffentlich!" in cfg_page
+    # Ganz oben: nach dem Header, vor Hero, Editor und BYOB-Abschnitt.
+    assert 'class="tf-top-warning"' in cfg_page
+    assert cfg_page.index('class="tf-top-warning"') < cfg_page.index('class="tf-hero"')
+    assert cfg_page.index('class="tf-top-warning"') < cfg_page.index('id="editor"')
+    assert cfg_page.index('class="tf-top-warning"') < cfg_page.index('id="byob"')
+    assert "alle Besucher dieser Seite" in cfg_page
+    assert "@mdtotxt_bot" in cfg_page
+    # … und im unkonfigurierten Zustand (page-Fixture) fehlt sie.
+    assert 'class="tf-top-warning"' not in page
 
 
 # --------------------------------------------------------------------------- #

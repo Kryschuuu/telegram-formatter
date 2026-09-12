@@ -40,7 +40,7 @@ telegram_formatter/
     │   └── components.css  Ebene 4: Bausteine (.tf-*), nur mit var(--token)
     └── js/
         ├── theme.js        Theme-Switcher (läuft synchron im <head>)
-        ├── app.js          Editor-Funktionen (Vorschau, /api/convert, Senden)
+        ├── app.js          Editor-Funktionen (Vorschau, /api/convert, Sende-Bestätigung, Senden)
         └── byob.js         BYOB-Session-UI (v2.2.0): Session-Start/Status/
                             Chat-Erkennung; stellt window.tfByob bereit, an
                             das app.js den Senden-Button delegiert
@@ -213,7 +213,11 @@ Zustandsklassen, die JS an Stellschrauben klebt (nur diese drei, alle in
 
 1. **Sticky-Header** = permanente Orientierung: Marke (links), Bot-Status
    (Badge mit Statuspunkt), Theme-Switcher, Unterstützen-Button (rechts).
-2. **Hero-Zeile** erklärt in einem Satz + Tagline, was das Tool tut — vor
+2. **Top-Warnung** (`.tf-top-warning`, nur wenn ein geteilter Bot
+   konfiguriert ist): rotes Vollbreite-Band direkt unter dem Header — die
+   „geteilte Bot ist öffentlich“-Warnung steht bewusst VOR Hero und Editor,
+   weil der geteilte Bot der Default-Versandweg ist (v2.3.0).
+3. **Hero-Zeile** erklärt in einem Satz + Tagline, was das Tool tut — vor
    jedem Eingriff.
 3. **Zwei-Spalten-Arbeitsbereich** (`≥ 64rem`): links Eingabe (Erzeugen),
    rechts Ausgabe (Prüfen) — Lesereihenfolge = Arbeitsfluss. Die Ausgabespalte
@@ -226,7 +230,11 @@ Zustandsklassen, die JS an Stellschrauben klebt (nur diese drei, alle in
    in der niedrigsten Textstufe der Editor-Karte.
 5. **Payloads** als dunkles Terminal (`--code-bg`) — visueller Bruch, der
    signalisiert: „rohe API-Daten, hier nichts ändern“.
-6. **Howto & FAQ** darunter (scrollend nachrangig), Footer mit
+6. **Sende-Bestätigung** (`.tf-modal`, v2.3.0): Modal über neutralem
+   Backdrop, das vor jedem Versand Absender-Bot, Ziel und Vorschau zeigt —
+   bewusst als Sperre zwischen „Senden klicken“ und „wirklich senden“.
+7. **Howto & FAQ** darunter (scrollend nachrangig), inkl.
+   Privatsphäre-Sektion (`.tf-privacy*`) zwischen BYOB und Howto; Footer mit
    Version/Lizenz/Kurz-Disclaimer.
 
 ## 5. Responsive-Strategie
@@ -249,7 +257,7 @@ Zustandsklassen, die JS an Stellschrauben klebt (nur diese drei, alle in
 | Ebene | Ort | prüft |
 |---|---|---|
 | Struktur-Verträge | `tests/test_frontend.py` (pytest, ohne Browser) | Token-Vollständigkeit je Theme, var()-Abdeckung, Asset-Existenz/-Orphanings, JS↔HTML-ID-Verträge, Swatch-Whitelist, mobile-first, `min-width` only, HTML-Wellformedness, Kontrast-Heuristik, Feature-Baseline |
-| Funktionale DOM-Tests | `tests/frontend/jsdom_spec.cjs` via `tests/test_jsdom_smoke.py` | echtes theme.js/app.js/byob.js-Verhalten: Boot aus localStorage, Switcher-Klicks + Persistenz, Markdown-Vorschau, Debounce + ein POST pro Tipppause, Senden/Erfolg/Fehler (429-Merge), Reset sowie kompletter BYOB-Durchlauf (Session öffnen/senden/beenden, Chat-Chips, 410-Reset); Skippt sauber ohne Node/jsdom (`npm install` — jsdom ist als Dev-Dependency in `package.json` gepinnt) |
+| Funktionale DOM-Tests | `tests/frontend/jsdom_spec.cjs` via `tests/test_jsdom_smoke.py` | echtes theme.js/app.js/byob.js-Verhalten: Boot aus localStorage, Switcher-Klicks + Persistenz, Markdown-Vorschau, Debounce + ein POST pro Tipppause, Senden-Bestätigung (Dialog-Inhalte, Abbrechen, Escape, Bestätigen), Erfolg/Fehler (429-Merge), Reset sowie kompletter BYOB-Durchlauf (Session öffnen/senden/beenden, Chat-Chips, 410-Reset — jeweils durch den Bestätigungsdialog); Skippt sauber ohne Node/jsdom (`npm install` — jsdom ist als Dev-Dependency in `package.json` gepinnt) |
 | API/Security | `tests/test_app.py` | CSP strikt `'self'`, keine Inline-Skripte/Styles, alle Formatter-Endpunkte unverändert |
 | Syntax-Check (manuell/local) | `css-tree` + `node --check` | Parse-Fehlerfreiheit von CSS/JS (in CI durch pytest-Strukturtests abgedeckt) |
 | Menschlich | Dev-Server (`flask --app telegram_formatter.app run` + Browser) | reales Rendering; Browser-Matrix s. unten |
@@ -298,13 +306,28 @@ diese Bausteine (alle in `components.css`, nur mit `var(--token)`):
 | `.tf-session`, `.tf-session__title/__info/__meta/__stats` | Statuskarte der aktiven Session (Countdown `role="timer"`, Zähler, „Session beenden“) |
 | `.tf-steps--compact` | drei Schritte im BYOB-Panel (dichter als die Howto-Liste) |
 
+Zusätzlich seit v2.3.0 (Sende-Bestätigung, Top-Warnung, Privatsphäre):
+
+| Klasse | Zweck |
+|---|---|
+| `.tf-top-warning` | rotes Vollbreite-Band unter dem Header für die öffentliche-Bot-Warnung (nur bei konfiguriertem geteilten Bot im Template) |
+| `.tf-modal`, `.tf-modal__backdrop/__panel/__title/__lead/__preview/__length` | Sende-Bestätigungsdialog: Fixed-Overlay, neutraler Backdrop `rgba(127,127,127,α)` (dokumentierte Ausnahme), Panel mit `margin: auto` (zentriert UND bei Überhöhe scrollbar) |
+| `.tf-facts`, `.tf-facts__row` | dt/dd-Faktenliste im Dialog (Bot, Ziel, Nachricht); ab `40rem` zweispaltig Label/Wert |
+| `.tf-note--ok` | grüne Gegenbox zu `.tf-note--danger` (Titel `--ok`, Fließtext normal) |
+| `.tf-privacy__grid/__item/__lead/__note` | Privatsphäre-Sektion: 2×2 Erklär-Karten (BotFather, Bots, geteilter Bot, BYOB) mit `--danger`/`--ok` Akzentkante |
+
 JS-Vertrag zwischen `app.js` und `byob.js` (bewusst minimal, kein Framework):
 
-* `window.tfByob = { isActive(): bool, sendText(text): Promise }` — ist eine
+* `window.tfByob = { isActive(): bool, describeTarget(): {bot, chat}|null, sendText(text): Promise }` — ist eine
   Session aktiv, delegiert `app.js#send()` an `sendText` (gleiche Antwortform
   `{ok, status, data}`), sonst gilt der klassische `/api/send`-Weg.
+  `describeTarget()` liefert Bot-Handle + Chat-ID der aktiven Session für
+  die Senden-Bestätigung (`null` ohne Session).
 * `window.tfSendLabel` — optionaler Button-Text („Über eigenen Bot senden“),
   den `app.js#setBusy` beim Zurücksetzen übernimmt.
+* `<body>`-Datatribute: `data-shared-bot` (Anzeige-Handle des geteilten
+  Bots) und `data-configured` (`"1"`/`"0"`) — daraus baut `app.js` den
+  Dialog-Zustand, wenn keine Session läuft.
 * Statusanzeigen teilen sich `#sendStatus` (Editor) und `#byobError` (BYOB).
 
 ## 9. Umgebungs-/Deployment-Hinweise
