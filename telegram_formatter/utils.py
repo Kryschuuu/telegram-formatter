@@ -391,8 +391,12 @@ class _PlaceholderStore:
         return token
 
     def restore(self, text: str) -> str:
-        for i, value in enumerate(self._items):
-            text = text.replace(f"\x00{i}\x00", value)
+        # In reverse order to correctly handle nested placeholders:
+        # e.g. code placeholder \x000\x00 inside a link placeholder
+        # \x001\x00. Forward replacement would leave inner token
+        # unreplaced after outer has been expanded.
+        for i in range(len(self._items) - 1, -1, -1):
+            text = text.replace(f"\x00{i}\x00", self._items[i])
         return text
 
 
@@ -481,23 +485,35 @@ def markdown_to_html(text: str) -> str:
     # 7. Blockquotes ("> " am Zeilenanfang).
     text = _wrap_blockquotes(text)
 
-    # 8. Links.
-    text = re.sub(
-        r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text
-    )
-
-    # 9. Listenpunkte — Einrückung bleibt erhalten (Audit B-12), sonst
+    # 8. Listenpunkte — Einrückung bleibt erhalten (Audit B-12), sonst
     #    kollabieren verschachtelte Listen auf eine Ebene.
     text = re.sub(r"^(\s*)[-*+]\s+", r"\1• ", text, flags=re.M)
     text = re.sub(r"^(\s*)\d+[.)]\s+", r"\1• ", text, flags=re.M)
 
-    # 10. Inline-Formatierung (Reihenfolge wichtig: fett vor kursiv,
-    #     Unterstreichen vor Kursiv-_).
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-    text = re.sub(r"__(.+?)__", r"<u>\1</u>", text)
-    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", text)
-    text = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", r"<i>\1</i>", text)
-    text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
+    # 9. Inline-Formatierung & Links — Links müssen VOR der Formatierung
+    #    geschützt werden, sonst interpretiert die Kursiv-Regex
+    #    Unterstriche in URLs als Formatierung (z. B.
+    #    https://.../watch?v=730MtctOC_w) und erzeugt überlappendes HTML
+    #    wie <a href="...OC<i>w">...OC</i>w</a>, das Telegram mit
+    #    "Unmatched end tag ... expected </a> found </i>" ablehnt.
+    #    Daher: Link-Text separat formatieren, URL nie anfassen, Link als
+    #    Platzhalter schützen, danach restlichen Text formatieren.
+    def _apply_inline_html(s: str) -> str:
+        s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+        s = re.sub(r"__(.+?)__", r"<u>\1</u>", s)
+        s = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", s)
+        s = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", r"<i>\1</i>", s)
+        s = re.sub(r"~~(.+?)~~", r"<s>\1</s>", s)
+        return s
+
+    def _link_repl(m: re.Match) -> str:
+        raw_text = m.group(1)
+        url = m.group(2)
+        formatted = _apply_inline_html(raw_text)
+        return store(f'<a href="{url}">{formatted}</a>')
+
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", _link_repl, text)
+    text = _apply_inline_html(text)
 
     return store.restore(text)
 
@@ -666,8 +682,21 @@ def markdown_to_rich_markdown(text: str) -> str:
     #    (\(...\) -> $...$, \[...\] -> $$...$$). Code ist bereits geschützt.
     text = convert_deepseek_latex_syntax(text)
 
-    # 3. Unterstreichen __x__ -> <u>x</u>.
-    text = re.sub(r"__([^_\n]+)__", r"<u>\1</u>", text)
+    # 3. Unterstreichen __x__ -> <u>x</u> — URLs dürfen dabei nicht
+    #    angefasst werden (z. B. https://.../__foo__ würde sonst zu
+    #    https://.../<u>foo</u>). Links werden daher über Platzhalter geschützt;
+    #    der Link-Text selbst darf __ enthalten und wird separat formatiert.
+    def _apply_underline_rich(s: str) -> str:
+        return re.sub(r"__([^_\n]+)__", r"<u>\1</u>", s)
+
+    def _rich_link_repl(m: re.Match) -> str:
+        raw_text = m.group(1)
+        url = m.group(2)
+        formatted = _apply_underline_rich(raw_text)
+        return store(f"[{formatted}]({url})")
+
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", _rich_link_repl, text)
+    text = _apply_underline_rich(text)
 
     # 4. Tabellen blockweise normalisieren; alles andere bleibt GFM.
     blocks = re.split(r"\n\s*\n", text)
