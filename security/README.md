@@ -17,7 +17,8 @@ Projekt **strukturell** durchsetzt (nicht nur dokumentarisch).
 | S5 | Freigaben sind an Code gebunden | `ReviewGate` prüft SHA-256 der reviewten Datei bei **jeder** Session-Öffnung; eine Zeile Änderung ⇒ kein Access | `tests/test_session.py` |
 | S6 | Vier-Augen-Prinzip | `ReviewTicket.is_approved`: ≥2 unabhängige Handles, ≥1 Maintainer; `CODEOWNERS` + Branch-Protection im Git-Flow | `tests/test_review.py`, GitHub-Settings |
 | S7 | Session-Ende hinterlässt keinen Zustand | `BotSession.close()` verwirft Token-Referenz; `deleteWebhook(drop_pending_updates=True)` als Pflicht im Referenz-Bot | `tests/test_session.py` |
-| S8 | Dependency-Register sauber | pip-audit (Laufzeit + Dev) pro PR **und** wöchentlich via cron | CI-Job `code-quality` |
+| S8 | Dependency-Register sauber | pip-audit (Laufzeit + Dev) pro PR **und** wöchentlich via cron; CI-Actions und Security-Tools sind commit-/versionsgepinnt | CI-Job `code-quality` |
+| S9 | Web-Versand autorisiert | `/api/send` ist ohne `TELEGRAM_FORMATTER_API_TOKEN` deaktiviert; BYOB verlangt Handle plus `session_secret` | `tests/test_app.py`, `tests/test_byob_web.py` |
 
 ## Token-Bedarfsminimierung
 
@@ -61,7 +62,7 @@ Versionen, in denen sie behoben wurden. Befund-IDs wie im Bericht
 | Befund | Status | Behoben in | Anmerkung |
 |---|---|---|---|
 | K-1 · Token-Leak im Fehlerpfad | ✅ behoben | 2.1.0 | Fehlermeldungen ohne URL/Token |
-| K-2 · Open Relay (`/api/send`) | ✅ behoben | 2.1.0 + 2.4.0 | Chat-Pinning (2.1.0); Selbstbetrieb Fail-Closed (2.4.0, R-1) |
+| K-2 · Open Relay (`/api/send`) | ✅ behoben | 2.1.0 + 2.4.0 + 2.5.0 | Chat-Pinning (2.1.0); Selbstbetrieb Fail-Closed (2.4.0); Shared-Versand ohne API-Token deaktiviert (2.5.0) |
 | H-1 · Review-Gate-Umgehungen | ✅ behoben | 2.1.0 + 2.4.0 | Alias/Konstanten-Faltung (2.1.0); BK010=Blocker, `os.open`/`os.write`, `getattr` (2.4.0, R-2) |
 | H-2 · DoS ohne Limits | ✅ behoben | 2.1.0 | Body-/Input-/Rate-Limits |
 | H-3 · `response.text`-Leak | ✅ behoben | 2.1.0 | gekürzte Description |
@@ -72,7 +73,7 @@ Versionen, in denen sie behoben wurden. Befund-IDs wie im Bericht
 | M-3 · `api_base` http:// | ✅ behoben | 2.1.0 | HTTPS-Pflicht |
 | M-4 · Audit-Trail-Trust | 🟡 teilweise | 2.1.0/2.2.0 | CI-`verify` aktiv, `flock`; Rollen-Selbstattestation + 1 CODEOWNER offen (Governance) |
 | M-5 · gunicorn veraltet | ✅ behoben | 2.1.0 | 26.2.0; Hash-Lockfile offen (Roadmap) |
-| M-6 · CSRF/Origin | ✅ behoben | 2.1.0/2.2.0 | Origin-Check, Body-Handle |
+| M-6 · CSRF/Origin | ✅ behoben | 2.1.0/2.2.0/2.5.0 | Origin-Check, Body-Handle; BYOB-Proof-of-Possession mit `session_secret` |
 | M-7 · Thread-Safety | ✅ behoben | 2.1.0 | Locks |
 | N-1 · NUL-Kollision | ✅ behoben | 2.1.0 + 2.4.0 | Server (2.1.0), Client-Vorschau (2.4.0, R-4) |
 | N-2 · Gitleaks-Allowlist | ✅ behoben | 2.1.0 + 2.4.0 | `matchAll` (2.1.0), Exakt-Literal (2.4.0, R-5) |
@@ -92,7 +93,8 @@ Versionen, in denen sie behoben wurden. Befund-IDs wie im Bericht
 | B-13 · `repr` geschlossener Sessions | ✅ behoben | 2.1.0 | kosmetisch |
 | B-14 · `has_table`-Toleranz | 🟡 akzeptiert | — | dokumentiert |
 
-> Offene Punkte sind **Governance/Roadmap**, keine offenen Code-Schwachstellen:
-> zweiter CODEOWNER-Maintainer (M-4), Hash-Lockfile für PyPI (M-5), echte
-> Rate-Limit-Infrastruktur statt In-Process-Heuristik (R-7). Details im
-> jeweiligen Changelog-Eintrag.
+> Offene Punkte sind **Governance/Deployment-Roadmap**, keine offenen Findings
+> aus diesem Review: zweiter CODEOWNER-Maintainer (M-4), Hash-Lockfile für
+> PyPI (M-5) und ein verteilter Rate-Limit-Store für Multi-Instance-Betrieb.
+> Der direkte Betrieb vertraut standardmäßig keinen Forwarding-Headern; eine
+> Proxy-Topologie muss `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` explizit setzen.

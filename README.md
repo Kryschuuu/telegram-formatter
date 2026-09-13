@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.4.0-blue)
+![Version](https://img.shields.io/badge/version-2.5.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -83,8 +83,9 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 
 | Variable | Wirkung |
 |---|---|
-| `TELEGRAM_CHAT_ID` | **pinnt** den Zielchat von `/api/send`; ohne sie verlangt die API eine numerische `chat_id` im Request |
-| `TELEGRAM_FORMATTER_API_TOKEN` | gesetzt ⇒ alle POST-Endpunkte brauchen den Header `X-Auth-Token`. **Im Selbstbetrieb** (Bot-Token ohne `TELEGRAM_CHAT_ID`) **Pflicht** — sonst ist `/api/send` deaktiviert (Fail-Closed, 503) |
+| `TELEGRAM_CHAT_ID` | **pinnt** den Zielchat von `/api/send`; ein abweichender Request-Wert wird abgewiesen |
+| `TELEGRAM_FORMATTER_API_TOKEN` | **Pflicht für `/api/send`**. Alle POST-Endpunkte verlangen bei gesetztem Wert den Header `X-Auth-Token`; ohne diesen Token bleibt der Shared-Versand deaktiviert (503). Der Browser erhält den Token nie — authentifizierter Shared-Versand ist API-only |
+| `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` | Anzahl vertrauenswürdiger Proxy-Hops für Client-IP-Erkennung; Standard `0` (sicherer Direktbetrieb), Render-Blueprint setzt `1` |
 | `TELEGRAM_FORMATTER_MAX_INPUT_CHARS` | Eingabelimit (Standard 100000) |
 | `TELEGRAM_FORMATTER_SENDS_PER_MINUTE` | Rate-Limit pro IP für `/api/send` (Standard 6) |
 | `TELEGRAM_FORMATTER_BYOB_ENABLED` | BYOB-Websessions aktiv (Standard `1`; `0` blendet UI + API aus) |
@@ -96,6 +97,23 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 | `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` | Anzeige-Name des geteilten Bots in der Warnung (Standard `@mdtotxt_bot`) |
 
 Hintergrund der Härtungen: [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
+
+Der Shared-Versand ist absichtlich nicht browseröffentlich. Für einen
+serverseitigen, authentifizierten Aufruf muss der Betreiber `TELEGRAM_CHAT_ID`
+und `TELEGRAM_FORMATTER_API_TOKEN` setzen und den Token ausschließlich über
+`X-Auth-Token` übermitteln:
+
+```bash
+curl -X POST https://example.invalid/api/send \
+  -H 'Content-Type: application/json' \
+  -H 'X-Auth-Token: <operator-secret>' \
+  --data '{"text":"öffentliche Testnachricht"}'
+```
+
+Der Wert `session_secret` aus `POST /api/byob/session` ist ein zusätzlicher
+Proof-of-Possession-Wert für `/api/byob/send`, `/api/byob/status` und
+`/api/byob/close`. Er wird wie die Session-ID nur flüchtig im Browser gehalten
+und darf nicht geloggt oder persistiert werden.
 
 ## Nutzungsbeispiele
 

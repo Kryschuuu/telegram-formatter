@@ -160,14 +160,15 @@ def test_send_ignores_body_chat_id_when_pinned(client, monkeypatch):
     überschreibbar — andernfalls wäre der Endpunkt ein offener Relay."""
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:secretsecretsecretsecretsecretsec")
     monkeypatch.setattr(app_module, "CHAT_ID", "-100999")
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
     seen = []
     monkeypatch.setattr(app_module, "send_message",
                         lambda m, t, **kw: seen.append(m.payload["chat_id"]) or {"ok": True})
 
-    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "42"})
+    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "42"}, headers={"X-Auth-Token": "s3cret"})
     assert resp.status_code == 400  # Fremd-Chat abgelehnt
 
-    resp = client.post("/api/send", json={"text": "hallo"})
+    resp = client.post("/api/send", json={"text": "hallo"}, headers={"X-Auth-Token": "s3cret"})
     assert resp.status_code == 200
     assert seen == ["-100999"]
 
@@ -189,6 +190,14 @@ def test_send_requires_valid_chat_in_selfhosted_mode(client, monkeypatch):
     assert seen == ["77"]
     resp = client.post("/api/send", json={"text": "hallo", "chat_id": "4;2"}, headers=headers)
     assert resp.status_code == 400  # numerisches Format erzwungen
+
+
+def test_shared_send_fails_closed_without_api_token(client, monkeypatch):
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:secretsecretsecretsecretsecretsec")
+    monkeypatch.setattr(app_module, "CHAT_ID", "-100999")
+    resp = client.post("/api/send", json={"text": "hallo"})
+    assert resp.status_code == 503
+    assert "deaktiviert" in resp.get_json()["error"]
 
 
 def test_selfhosted_send_fails_closed_without_api_token(client, monkeypatch):
@@ -324,12 +333,13 @@ def test_send_error_body_never_contains_token(client, monkeypatch):
     token = "123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345"
     monkeypatch.setattr(app_module, "BOT_TOKEN", token)
     monkeypatch.setattr(app_module, "CHAT_ID", "-1")
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
 
     def boom(message, bot_token, **kw):
         raise SendError(f"Netzwerkfehler beim Versand ({'ConnectionError'}).")
 
     monkeypatch.setattr(app_module, "send_message", boom)
-    resp = client.post("/api/send", json={"text": "hi"})
+    resp = client.post("/api/send", json={"text": "hi"}, headers={"X-Auth-Token": "s3cret"})
     assert resp.status_code == 502
     assert token not in resp.get_data(as_text=True)
 
@@ -338,6 +348,7 @@ def test_send_reports_partial_progress_and_backoff(client, monkeypatch):
     """B-6/B-7: bereits gesendete Chunks + retry_after werden kommuniziert."""
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123:x")
     monkeypatch.setattr(app_module, "CHAT_ID", "-1")
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
     calls = {"n": 0}
 
     def flaky(message, bot_token, **kw):
@@ -348,7 +359,7 @@ def test_send_reports_partial_progress_and_backoff(client, monkeypatch):
 
     monkeypatch.setattr(app_module, "send_message", flaky)
     long_bold = "**" + "x" * 5_000 + "**"  # erzwingt > 1 Chunk
-    resp = client.post("/api/send", json={"text": long_bold})
+    resp = client.post("/api/send", json={"text": long_bold}, headers={"X-Auth-Token": "s3cret"})
     data = resp.get_json()
     assert resp.status_code == 429
     assert data["retry_after"] == 37
@@ -386,12 +397,14 @@ def test_body_size_limit_rejected(client):
 def test_send_rate_limit_per_ip(client, monkeypatch):
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123:x")
     monkeypatch.setattr(app_module, "CHAT_ID", "-1")
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
     monkeypatch.setattr(app_module, "SENDS_PER_MINUTE", 2)
     monkeypatch.setattr(app_module, "send_message", lambda m, t, **kw: {"ok": True})
 
-    assert client.post("/api/send", json={"text": "a"}).status_code == 200
-    assert client.post("/api/send", json={"text": "b"}).status_code == 200
-    blocked = client.post("/api/send", json={"text": "c"})
+    headers = {"X-Auth-Token": "s3cret"}
+    assert client.post("/api/send", json={"text": "a"}, headers=headers).status_code == 200
+    assert client.post("/api/send", json={"text": "b"}, headers=headers).status_code == 200
+    blocked = client.post("/api/send", json={"text": "c"}, headers=headers)
     assert blocked.status_code == 429
 
 

@@ -35,9 +35,9 @@ jobs:
     name: Lint & Security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11"
           cache: pip
@@ -45,7 +45,7 @@ jobs:
       - name: Werkzeuge installieren
         run: |
           python -m pip install --upgrade pip
-          pip install ruff bandit pip-audit
+          pip install ruff==0.16.7 bandit==1.9.4 pip-audit==2.10.1
           pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Ruff (Stil & Fehler)
@@ -72,14 +72,14 @@ jobs:
       pull-requests: write  # Kommentar mit den Funden am PR
       actions: write        # SARIF-Report als Artefakt hochladen
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       # Findet versehentlich committete Bot-Tokens, API-Keys, .env-Dateien.
       # Konfiguration (Freigaben für Negativbeispiele): .gitleaks.toml
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
@@ -88,11 +88,11 @@ jobs:
     name: Review-Gate (botkit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11"
 
@@ -142,7 +142,7 @@ jobs:
 
       - name: jsdom für funktionale Frontend-Tests (optional, gepinnt)
         # Aktiviert tests/test_jsdom_smoke.py (überspringt sauber ohne Node).
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
 

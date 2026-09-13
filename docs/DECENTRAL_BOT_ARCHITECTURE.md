@@ -113,7 +113,7 @@ Nutzer                     botkit                          Telegram
 | Modus | Wer betreibt | Token-Ablage | Review-Pflicht |
 |---|---|---|---|
 | **A — Lokal / Self-Host** (`botctl`, eigener Server) | Nutzer | `PassthroughTokenVault` (nur im Session-Objekt) | Selbstreview oder PR (`--local-trust` macht den Verzicht explizit) |
-| **B — Gehostete Session** (Web, **seit v2.2.0 implementiert**) | Projekt-Infrastruktur | nur im RAM der `BotSession` (TTL 30 min / Leerlauf 10 min); opaker Handle im Request-Body | per Konstruktion erfüllt — es läuft **kein Nutzer-Code** auf dem Server, nur die geprüften Projekt-Module (`require_review=False`); für eigenen Bot-Code bleibt das Gate Pflicht (Modus A/CI) |
+| **B — Gehostete Session** (Web, **seit v2.2.0 implementiert**) | Projekt-Infrastruktur | nur im RAM der `BotSession` (TTL 30 min / Leerlauf 10 min); Handle plus `session_secret` im Request-Body | per Konstruktion erfüllt — es läuft **kein Nutzer-Code** auf dem Server, nur die geprüften Projekt-Module (`require_review=False`); für eigenen Bot-Code bleibt das Gate Pflicht (Modus A/CI) |
 | **C — Nur-Konvertierung** (per `telegram_formatter/cli.py`) | Nutzer | Environment | nein (kein Bot nötig) |
 
 Modus B ist der einzige, in dem fremde Infrastruktur das Token sieht. Deshalb
@@ -146,12 +146,13 @@ Browser                          Flask (telegram_formatter/app.py)         Teleg
 Sicherheitsentscheidungen (Abweichungen vom ursprünglichen Entwurf sind
 begründet):
 
-* **Session-Handle im Request-Body statt HttpOnly-Cookie:** kein Cookie ⇒
-  keine Ambient-Authority (CSRF-konstruktiv ausgeschlossen), kein
-  Cookie-Flag-Footprint, funktioniert in Third-Party-Kontexten mit
-  blockierten Cookies. Der Handle ist ein 128-Bit-Zufallswert, der nur den
-  Versand über den Bot der Session bis zum TTL-Ende erlaubt — nichts sonst.
-  Clientseitig lebt er nur im JS-Speicher (kein `localStorage`).
+* **Session-Handle plus `session_secret` im Request-Body statt HttpOnly-Cookie:**
+  kein Cookie ⇒ keine Ambient-Authority (CSRF-konstruktiv ausgeschlossen),
+  kein Cookie-Flag-Footprint, funktioniert in Third-Party-Kontexten mit
+  blockierten Cookies. Handle und zufälliges Session-Secret müssen gemeinsam
+  vorgelegt werden; serverseitig wird nur der SHA-256-Digest des Secrets
+  gespeichert. Clientseitig leben beide Werte nur im JS-Speicher (kein
+  `localStorage`).
 * **`InMemoryTokenVault` wird nicht benötigt:** die `BotSession` *ist* die
   flüchtige Ablage — sie hält das Token und verwirft die Referenz bei
   `close()`/TTL/Leerlauf. Ein zusätzlicher Vault wäre reine Redundanz.

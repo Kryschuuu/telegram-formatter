@@ -41,9 +41,13 @@ Härtungen (Security-Audit 2026-09, Befunde K-1/K-2/H-2/H-5/M-6/B-5/B-6):
   ``TELEGRAM_CHAT_ID``, ist der Zugangsschutz Pflicht — fehlt auch
   ``TELEGRAM_FORMATTER_API_TOKEN``, antwortet der Endpunkt mit 503 statt
   anonym beliebige Chats zu beliefern.
-* **Optionaler API-Token:** ist ``TELEGRAM_FORMATTER_API_TOKEN`` gesetzt,
-  verlangen alle POST-Endpunkte einen passenden ``X-Auth-Token``-Header
-  (zeitkonstanter Vergleich).
+* **Shared-Versand geschlossen:** ``/api/send`` ist ohne
+  ``TELEGRAM_FORMATTER_API_TOKEN`` immer deaktiviert (503). Mit Token ist der
+  Endpunkt nur über ``X-Auth-Token`` nutzbar; der Browser erhält dieses Secret
+  nicht. Der authentifizierte Shared-Versand ist damit API-only.
+* **Optionaler API-Token für übrige POSTs:** ist
+  ``TELEGRAM_FORMATTER_API_TOKEN`` gesetzt, verlangen alle POST-Endpunkte einen
+  passenden ``X-Auth-Token``-Header (zeitkonstanter Vergleich).
 * **Größen- & Mengengrenzen:** Request-Body hart auf ``MAX_BODY_BYTES``
   begrenzt (413 statt OOM), Text auf ``MAX_INPUT_CHARS`` (wie
   ``botkit.SessionConfig``), pro IP ein einfaches Frequenzlimit für
@@ -74,9 +78,11 @@ Starten::
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import os
+import secrets
 import threading
 import time
 from collections import defaultdict, deque
@@ -112,7 +118,13 @@ app = Flask(__name__)
 # der Standard-Topologie der Hosting-Plattform. Die Rate-Limits sind
 # Missbrauchs-Heuristik (keine Authentifizierung); ein gefälschter
 # Forward-Header kann sie aufblähen, aber keine Sicherheitsgrenze überwinden.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)  # type: ignore[method-assign]
+# Direct deployments must not trust a client-controlled forwarding header.
+# Proxy deployments set the exact trusted hop count explicitly.
+TRUSTED_PROXY_HOPS = int(os.environ.get("TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS", "0"))
+if TRUSTED_PROXY_HOPS > 0:
+    app.wsgi_app = ProxyFix(  # type: ignore[method-assign]
+        app.wsgi_app, x_for=TRUSTED_PROXY_HOPS, x_proto=TRUSTED_PROXY_HOPS
+    )
 LOGGER = logging.getLogger("telegram_formatter.app")
 
 # --- harte Grenzen ----------------------------------------------------------
@@ -290,9 +302,16 @@ class _ByobRuntime:
         self._registry = registry
         self._manager = manager
         self._config = config
-        #: session_id -> {"ip": Absender-IP, "bot": _BotInfo}
+        #: session_id -> metadata; session_secret is stored only as a digest.
         self._meta: dict[str, dict[str, object]] = {}
         self._lock = threading.RLock()
+        # Serializes capacity checks with session creation. Without this,
+        # concurrent opens could all pass the same active-count check.
+        self._capacity_lock = threading.Lock()
+
+    @property
+    def capacity_lock(self) -> threading.Lock:
+        return self._capacity_lock
 
     @property
     def manager(self) -> SessionManager:
@@ -328,9 +347,25 @@ class _ByobRuntime:
             display_name=record.identity.display_name,
         )
         session = self._manager.open(token, chat_id)
+        session_secret = secrets.token_urlsafe(32)
+        secret_digest = hashlib.sha256(session_secret.encode("ascii")).digest()
         with self._lock:
-            self._meta[session.session_id] = {"ip": ip, "bot": bot_info}
-        return session, bot_info
+            self._meta[session.session_id] = {
+                "ip": ip,
+                "bot": bot_info,
+                "secret_digest": secret_digest,
+            }
+        return session, bot_info, session_secret
+
+    def authenticate(self, session_id: str, session_secret: str) -> bool:
+        """Validate the second, per-session proof without storing it in plaintext."""
+        with self._lock:
+            meta = self._meta.get(session_id)
+            expected = meta.get("secret_digest") if meta else None
+        if not isinstance(expected, bytes) or not isinstance(session_secret, str):
+            return False
+        supplied = hashlib.sha256(session_secret.encode("utf-8")).digest()
+        return hmac.compare_digest(supplied, expected)
 
     def bot_info(self, session_id: str) -> _BotInfo | None:
         with self._lock:
@@ -529,7 +564,11 @@ def index() -> str:
     """Rendert die Editor-Seite (Markdown/LaTeX -> Telegram-Vorschau)."""
     return render_template(
         "index.html",
+        # ``configured`` controls privacy/status messaging. The browser never
+        # receives the operator API token, so shared sending is never enabled
+        # in this UI; authenticated shared calls remain API-only.
         configured=bool(BOT_TOKEN and CHAT_ID),
+        shared_send_available=False,
         byob_enabled=BYOB_ENABLED,
         shared_bot_handle=SHARED_BOT_HANDLE,
         version=__version__,
@@ -566,18 +605,9 @@ def send():
     """
     if not BOT_TOKEN:
         return jsonify({"error": "TELEGRAM_BOT_TOKEN nicht konfiguriert."}), 400
-    if not CHAT_ID and not API_TOKEN:
-        # R-1 (Fail-Closed): Ohne gepinnten Zielchat UND ohne Zugangsschutz
-        # wäre /api/send ein offener Relay — jede:r könnte über den Bot des
-        # Betreibers beliebige Chats anschreiben. Der Selbstbetrieb (chat_id
-        # im Body) ist deshalb nur mit TELEGRAM_FORMATTER_API_TOKEN erlaubt.
+    if not API_TOKEN:
         return jsonify(
-            {
-                "error": (
-                    "Selbstbetrieb ohne Zielchat erfordert den Zugangsschutz: "
-                    "TELEGRAM_FORMATTER_API_TOKEN setzen (oder TELEGRAM_CHAT_ID pinnen)."
-                )
-            }
+            {"error": "Der Shared-Versand ist deaktiviert: TELEGRAM_FORMATTER_API_TOKEN fehlt."}
         ), 503
     if _rate_limited("send", SENDS_PER_MINUTE):
         return jsonify({"error": "Zu viele Sendeversuche — bitte kurz warten."}), 429
@@ -617,12 +647,15 @@ def _byob_disabled() -> tuple | None:
     return None
 
 
-def _byob_session_id(data: dict) -> tuple[str | None, tuple | None]:
-    """``session_id``-Feld prüfen: nicht-leerer String in sicherer Länge."""
+def _byob_session_id(data: dict) -> tuple[str | None, str | None, tuple | None]:
+    """Validate the session handle and its second proof-of-possession secret."""
     sid = data.get("session_id")
+    session_secret = data.get("session_secret")
     if not isinstance(sid, str) or not 8 <= len(sid) <= 128:
-        return None, (jsonify({"error": "session_id fehlt oder ist ungültig."}), 400)
-    return sid, None
+        return None, None, (jsonify({"error": "session_id fehlt oder ist ungültig."}), 400)
+    if not isinstance(session_secret, str) or not 32 <= len(session_secret) <= 128:
+        return None, None, (jsonify({"error": "session_secret fehlt oder ist ungültig."}), 400)
+    return sid, session_secret, None
 
 
 @app.route("/api/byob/session", methods=["POST"])
@@ -665,31 +698,36 @@ def byob_session_open():
         ), 400
 
     runtime = _byob()
-    runtime.manager.reap_expired()
-    runtime.prune()
     ip = request.remote_addr or "unknown"
-    if runtime.manager.active_count >= BYOB_MAX_SESSIONS_TOTAL:
-        return jsonify(
-            {"error": "Zu viele aktive Sessions auf dieser Instanz — bitte später erneut versuchen."}
-        ), 429
-    if runtime.count_for_ip(ip) >= BYOB_MAX_SESSIONS_PER_IP:
-        return jsonify(
-            {"error": "Zu viele aktive Sessions von dieser Adresse — bitte zuerst eine beenden."}
-        ), 429
+    # Keep the capacity check and creation together. Telegram verification is
+    # intentionally inside the lock: otherwise concurrent opens can all pass
+    # the cap before any of them is inserted into the manager.
+    with runtime.capacity_lock:
+        runtime.manager.reap_expired()
+        runtime.prune()
+        if runtime.manager.active_count >= BYOB_MAX_SESSIONS_TOTAL:
+            return jsonify(
+                {"error": "Zu viele aktive Sessions auf dieser Instanz — bitte später erneut versuchen."}
+            ), 429
+        if runtime.count_for_ip(ip) >= BYOB_MAX_SESSIONS_PER_IP:
+            return jsonify(
+                {"error": "Zu viele aktive Sessions von dieser Adresse — bitte zuerst eine beenden."}
+            ), 429
 
-    try:
-        session, bot_info = runtime.open_session(token, chat, ip=ip)
-    except RegistrationError as exc:
-        # Verifikation fehlgeschlagen (ungültig/widerrufen/Netzwerk) — die
-        # Meldung ist per Konstruktion token-frei.
-        return jsonify({"error": str(exc)}), 400
-    except SessionError as exc:
-        return jsonify({"error": str(exc)}), 400
+        try:
+            session, bot_info, session_secret = runtime.open_session(token, chat, ip=ip)
+        except RegistrationError as exc:
+            # Verifikation fehlgeschlagen (ungültig/widerrufen/Netzwerk) — die
+            # Meldung ist per Konstruktion token-frei.
+            return jsonify({"error": str(exc)}), 400
+        except SessionError as exc:
+            return jsonify({"error": str(exc)}), 400
 
     cfg = runtime.config
     return jsonify(
         {
             "session_id": session.session_id,
+            "session_secret": session_secret,
             "bot": bot_info.as_dict(),
             "chat_id": session.chat_id,
             "limits": {
@@ -788,8 +826,8 @@ def byob_session_send():
     if err is not None:
         return err
 
-    sid, err = _byob_session_id(data)
-    if err is not None or sid is None:
+    sid, session_secret, err = _byob_session_id(data)
+    if err is not None or sid is None or session_secret is None:
         return err
 
     text, err = _valid_text(data)
@@ -798,10 +836,12 @@ def byob_session_send():
 
     runtime = _byob()
     runtime.manager.reap_expired()
+    if not runtime.authenticate(sid, session_secret):
+        return jsonify({"error": "Session-Zugangsdaten ungültig."}), 401
     session = runtime.manager.get(sid)
     if session is None:
-        # Abgelaufen, geschlossen oder (Multi-Worker-Fehlkonfiguration) in
-        # einem anderen Prozess — für die Nutzerin ist das dasselbe: neu öffnen.
+        # A valid proof for an expired/closed session reaches this branch.
+        # Invalid proofs were rejected above without revealing session state.
         return jsonify(
             {"error": "Session abgelaufen oder unbekannt — bitte erneut öffnen."}
         ), 410
@@ -847,11 +887,13 @@ def byob_session_status():
     data, err = _json_body()
     if err is not None:
         return err
-    sid, err = _byob_session_id(data)
-    if err is not None or sid is None:
+    sid, session_secret, err = _byob_session_id(data)
+    if err is not None or sid is None or session_secret is None:
         return err
 
     runtime = _byob()
+    if not runtime.authenticate(sid, session_secret):
+        return jsonify({"error": "Session-Zugangsdaten ungültig."}), 401
     session = runtime.manager.get(sid)
     if session is None:
         return jsonify({"active": False})
@@ -879,11 +921,14 @@ def byob_session_close():
     data, err = _json_body()
     if err is not None:
         return err
-    sid, err = _byob_session_id(data)
-    if err is not None or sid is None:
+    sid, session_secret, err = _byob_session_id(data)
+    if err is not None or sid is None or session_secret is None:
         return err
 
-    closed = _byob().close(sid)
+    runtime = _byob()
+    if not runtime.authenticate(sid, session_secret):
+        return jsonify({"error": "Session-Zugangsdaten ungültig."}), 401
+    closed = runtime.close(sid)
     return jsonify({"closed": closed})
 
 

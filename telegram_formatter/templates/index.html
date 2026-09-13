@@ -24,7 +24,7 @@
 </head>
 <body data-convert-url="{{ url_for('convert') }}" data-send-url="{{ url_for('send') }}"
       data-byob-base="{{ url_for('byob_session_open').rsplit('/', 1)[0] }}"
-      data-shared-bot="{{ shared_bot_handle }}" data-configured="{{ '1' if configured else '0' }}">
+      data-shared-bot="{{ shared_bot_handle }}" data-configured="{{ '1' if shared_send_available else '0' }}">
 
 <a class="tf-skip-link" href="#editor">Direkt zum Editor springen</a>
 
@@ -41,10 +41,12 @@
 
         <span class="tf-header__spacer"></span>
 
-        <span id="status" class="tf-status {{ 'tf-status--ok' if configured else 'tf-status--warn' }}"
-              title="{{ 'Zielchat konfiguriert — Versand bereit' if configured else 'Ohne TELEGRAM_BOT_TOKEN nur Konvertierung/Vorschau' }}">
-            {%- if configured -%}
+        <span id="status" class="tf-status {{ 'tf-status--ok' if shared_send_available else 'tf-status--warn' }}"
+              title="{{ 'Zielchat konfiguriert — Versand bereit' if shared_send_available else 'Shared-Versand nur API-authentifiziert; BYOB für den Browser' }}">
+            {%- if shared_send_available -%}
                 Bot konfiguriert — senden bereit
+            {%- elif configured -%}
+                Shared-Bot konfiguriert — Browser nutzt BYOB
             {%- else -%}
                 Kein Bot-Token gesetzt — nur Vorschau
             {%- endif -%}
