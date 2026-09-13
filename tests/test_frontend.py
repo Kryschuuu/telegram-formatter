@@ -344,6 +344,7 @@ def test_top_warning_only_when_configured(page: str, monkeypatch):
     geteilte Bot tatsächlich aktiv ist."""
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123456789:" + "A" * 35)
     monkeypatch.setattr(app_module, "CHAT_ID", "-1001234567890")
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as client:
         cfg_page = client.get("/").data.decode("utf-8")

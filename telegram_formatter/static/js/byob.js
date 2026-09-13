@@ -54,6 +54,7 @@
 
     // Session-Zustand (nur RAM — bewusst nicht persistiert).
     var sessionId = null;
+    var sessionSecret = null;
     var limits = null;
     var ttlRemaining = 0;
     var idleRemaining = 0;
@@ -160,6 +161,7 @@
 
     function activateSession(data) {
         sessionId = data.session_id;
+        sessionSecret = data.session_secret;
         limits = data.limits || null;
         ttlRemaining = limits ? limits.ttl_seconds : 1800;
         idleRemaining = limits ? limits.idle_timeout_seconds : 600;
@@ -180,6 +182,7 @@
     function deactivateSession(message, kind) {
         var had = sessionId !== null;
         sessionId = null;
+        sessionSecret = null;
         limits = null;
         sessionBot = null;
         sessionChat = null;
@@ -195,7 +198,10 @@
         if (!sessionId) {
             return Promise.resolve();
         }
-        return postJson(base + "/status", { session_id: sessionId }).then(function (res) {
+        return postJson(base + "/status", {
+            session_id: sessionId,
+            session_secret: sessionSecret
+        }).then(function (res) {
             var data = res.data || {};
             if (!data.active) {
                 deactivateSession("Session abgelaufen (Timeout) — bitte neu öffnen.", "error");
@@ -259,7 +265,10 @@
             return;
         }
         var sid = sessionId;
-        postJson(base + "/close", { session_id: sid }).then(function () {
+        postJson(base + "/close", {
+            session_id: sid,
+            session_secret: sessionSecret
+        }).then(function () {
             /* Auch bei Fehler: clientseitig beenden — die Server-Session
                endet spätestens mit ihrem Timeout. */
             deactivateSession();
@@ -332,7 +341,11 @@
         },
         sendText: function (text) {
             var sid = sessionId;
-            return postJson(base + "/send", { session_id: sid, text: text })
+            return postJson(base + "/send", {
+                session_id: sid,
+                session_secret: sessionSecret,
+                text: text
+            })
                 .then(function (res) {
                     if (res.status === 410 || res.status === 404) {
                         deactivateSession(

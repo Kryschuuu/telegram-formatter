@@ -11,6 +11,7 @@ Details zum Was/Warum: docs/DESIGN.md, Abschnitt „Testing“.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -49,12 +50,15 @@ def test_jsdom_functional_smoke(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123456789:AAHx24" + "a" * 29)
     monkeypatch.setattr(app_module, "CHAT_ID", "-1001234567890")
     html_file = _render_index(tmp_path)
+    env = dict(os.environ)
+    env["NODE_PATH"] = str(REPO_ROOT / "node_modules")
     proc = subprocess.run(
         [NODE, str(SPEC), str(html_file)],
         capture_output=True,
         text=True,
         timeout=120,
-        cwd=str(SPEC.parent),
+        cwd=str(REPO_ROOT),
+        env=env,
     )
     if proc.returncode == 77 or "MISSING_JSDOM" in proc.stdout:
         pytest.skip("jsdom nicht installiert — `npm install jsdom` im Repo-Root aktiviert den Test")

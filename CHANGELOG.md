@@ -4,6 +4,40 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.5.0] - 2026-09-13
+
+**Security-Härtung für Web-Versand, BYOB-Session-Zugriff, Limits und CI.**
+
+### Behoben
+
+- **Shared-Chat-Versand geschlossen:** `POST /api/send` ist ohne
+  `TELEGRAM_FORMATTER_API_TOKEN` deaktiviert. Mit gesetztem Token wird ein
+  zeitkonstanter `X-Auth-Token`-Header verlangt. Der Browser erhält das
+  Operator-Secret nicht; Shared-Versand ist API-only.
+- **BYOB-Proof-of-Possession:** Jede Session liefert zusätzlich zum opaken
+  Handle ein zufälliges `session_secret`. Send, Status und Close verlangen
+  beide Werte; serverseitig wird nur ein SHA-256-Digest des Secrets gehalten.
+  Das Frontend hält beide Werte ausschließlich im RAM.
+- **Atomare BYOB-Kapazitätsprüfung:** Session-Limit, Per-IP-Kappe und
+  Session-Erzeugung werden unter einem gemeinsamen Lock serialisiert, sodass
+  parallele Requests die Kapazitätsgrenzen nicht überschreiten.
+- **Proxy-Vertrauen:** `ProxyFix` ist im Direktbetrieb standardmäßig deaktiviert.
+  `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` muss explizit gesetzt werden; der
+  Render-Blueprint setzt für seine bekannte Proxy-Topologie `1`.
+- **CI-Supply-Chain:** GitHub Actions sind auf vollständige Commit-SHAs
+  gepinnt; Ruff, Bandit und pip-audit verwenden feste Versionen.
+
+### Geändert
+
+- BYOB-API-Dokumentation, Deployment-Hinweise, README und Sicherheitskommentare
+  an das neue Session-Proof- und Shared-Auth-Modell angepasst.
+- Version auf `2.5.0` erhöht.
+
+### Tests
+
+- BYOB-Tests senden nun das zusätzliche `session_secret`.
+- Bestehende Testfälle für Shared-Versand müssen einen API-Token verwenden.
+
 ## [2.4.0] - 2026-09-13
 
 **Security-Delta-Review: Fail-Closed für den Selbstbetrieb und

@@ -80,8 +80,9 @@ Unter **Environment → Environment Variables** diese Einträge hinzufügen:
 | Variable | Wert |
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Dein Token von BotFather, z. B. `123456:ABC-...` |
-| `TELEGRAM_CHAT_ID` | **empfohlen & sicherheitsrelevant:** pinnt den Zielchat von `/api/send`; ohne sie akzeptiert die API nur eine gültige numerische `chat_id` pro Request |
-| `TELEGRAM_FORMATTER_API_TOKEN` | (seit v2.1.0) gesetzt ⇒ `POST /api/*` verlangt passenden `X-Auth-Token`-Header. **Seit v2.4.0 Pflicht im Selbstbetrieb** (Bot-Token ohne `TELEGRAM_CHAT_ID`): fehlt er dort, ist `/api/send` deaktiviert (Fail-Closed, 503) — ansonsten wäre der Endpunkt ein offener Relay |
+| `TELEGRAM_CHAT_ID` | **sicherheitsrelevant:** pinnt den Zielchat von `/api/send`; abweichende Request-Werte werden abgewiesen |
+| `TELEGRAM_FORMATTER_API_TOKEN` | **Pflicht für `/api/send`**: passender `X-Auth-Token`-Header erforderlich. Ohne Token bleibt der Shared-Versand deaktiviert (503). Der Browser erhält diesen Operator-Token nicht; authentifizierter Shared-Versand ist API-only |
+| `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` | Vertrauenswürdige Proxy-Hops für Client-IP-Rate-Limits. Standard `0`; im Render-Blueprint `1`. Nur setzen, wenn der Proxy Client-Header überschreibt |
 | `TELEGRAM_FORMATTER_BYOB_ENABLED` | (optional, seit v2.2.0) `0` ⇒ BYOB-Websessions & UI aus (Standard: an) |
 | `TELEGRAM_FORMATTER_BYOB_TTL_SECONDS` / `…_IDLE_SECONDS` | (optional) Lebensdauer/Leerlauf der Web-Sessions (Standard 1800/600) |
 | `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` | (optional) Anzeige-Name des geteilten Bots in der Privatsphäre-Warnung (Standard `@mdtotxt_bot`) |

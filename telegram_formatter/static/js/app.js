@@ -234,10 +234,18 @@
     }
 
     function send() {
+        if (!(window.tfByob && window.tfByob.isActive()) && !sharedConfigured) {
+            setSendStatus(
+                "Kein authentifizierter Versandweg aktiv — starte eine BYOB-Session.",
+                "error"
+            );
+            return;
+        }
         setBusy(true);
         // BYOB aktiv? Dann versendet byob.js über die eigene Session —
         // Antwortform ist identisch (ok/status/data), die Auswertung bleibt
-        // hier zentral.
+        // hier zentral. Der Shared-Versand ist absichtlich API-only und wird
+        // im Browser nicht mit einem Operator-Secret ausgestattet.
         var request = (window.tfByob && window.tfByob.isActive())
             ? window.tfByob.sendText(input.value)
             : postJson(sendUrl, { text: input.value });

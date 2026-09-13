@@ -8,7 +8,8 @@ Die Tests härten die Sicherheitsversprechen ab:
 
 * Token taucht in **keiner** Antwort auf (auch nicht in Fehlern),
 * Sessions sind an IP-Kappen und Rate-Limits gebunden,
-* abgelaufene/geschlossene Sessions sind weg (410) und geben RAM frei,
+* abgelaufene/geschlossene Sessions sind weg und geben RAM frei; fehlende
+  Proof-of-Possession-Daten werden als 401/400 abgewiesen,
 * die Chat-Erkennung liefert ausschließlich Metadaten (keine Nachrichtentexte),
 * Origin-/Auth-Guards greifen auch für die neuen Endpunkte.
 """
@@ -88,6 +89,24 @@ def test_open_session_returns_handle_and_identity(byob_client):
     assert limits["max_messages_per_minute"] == 20
     # Kernversprechen: kein Token in der Antwort.
     assert TOKEN not in resp.data.decode()
+    assert len(data["session_secret"]) >= 32
+
+
+def test_session_secret_is_required_and_not_interchangeable(byob_client):
+    data = _open_session(byob_client).json
+    sid = data["session_id"]
+    missing = byob_client.post("/api/byob/status", json={"session_id": sid})
+    assert missing.status_code == 400
+    wrong = byob_client.post(
+        "/api/byob/status",
+        json={"session_id": sid, "session_secret": "x" * 43},
+    )
+    assert wrong.status_code == 401
+    valid = byob_client.post(
+        "/api/byob/status",
+        json={"session_id": sid, "session_secret": data["session_secret"]},
+    )
+    assert valid.status_code == 200
 
 
 def test_open_session_requires_consent(byob_client):
@@ -162,7 +181,7 @@ def test_open_session_caps_total(byob_client, monkeypatch):
 def test_close_frees_per_ip_cap(byob_client, monkeypatch):
     monkeypatch.setattr(app_module, "BYOB_MAX_SESSIONS_PER_IP", 1)
     data = _open_session(byob_client).json
-    assert byob_client.post("/api/byob/close", json={"session_id": data["session_id"]}).status_code == 200
+    assert byob_client.post("/api/byob/close", json={"session_id": data["session_id"], "session_secret": data["session_secret"]}).status_code == 200
     # Nach dem Schließen ist der Platz wieder frei.
     assert _open_session(byob_client, token=OTHER_TOKEN).status_code == 201
 
@@ -197,7 +216,7 @@ def fake_sender(monkeypatch):
 def test_send_via_session_uses_own_token(byob_client, fake_sender):
     data = _open_session(byob_client).json
     resp = byob_client.post(
-        "/api/byob/send", json={"session_id": data["session_id"], "text": "**Hallo** $x^2$"}
+        "/api/byob/send", json={"session_id": data["session_id"], "session_secret": data["session_secret"], "text": "**Hallo** $x^2$"}
     )
     assert resp.status_code == 200
     assert resp.json["sent"] == 1
@@ -210,9 +229,9 @@ def test_send_via_session_uses_own_token(byob_client, fake_sender):
 
 
 def test_send_unknown_session_gives_410(byob_client):
-    resp = byob_client.post("/api/byob/send", json={"session_id": "f" * 32, "text": "hi"})
-    assert resp.status_code == 410
-    assert "abgelaufen oder unbekannt" in resp.json["error"]
+    resp = byob_client.post("/api/byob/send", json={"session_id": "f" * 32, "session_secret": "s" * 43, "text": "hi"})
+    assert resp.status_code == 401
+    assert "Zugangsdaten ungültig" in resp.json["error"]
 
 
 def test_send_requires_session_id(byob_client):
@@ -224,7 +243,7 @@ def test_send_rejects_oversized_text(byob_client, monkeypatch):
     monkeypatch.setattr(app_module, "MAX_INPUT_CHARS", 10)
     data = _open_session(byob_client).json
     resp = byob_client.post(
-        "/api/byob/send", json={"session_id": data["session_id"], "text": "x" * 11}
+        "/api/byob/send", json={"session_id": data["session_id"], "session_secret": data["session_secret"], "text": "x" * 11}
     )
     assert resp.status_code == 400
     assert "zu lang" in resp.json["error"]
@@ -238,7 +257,7 @@ def test_send_expired_session_gives_410(byob_client, monkeypatch):
     session = runtime.manager.get(data["session_id"])
     session._config = SessionConfig(ttl_seconds=0.0, idle_timeout_seconds=0.0)
     assert runtime.manager.get(data["session_id"]) is None
-    resp = byob_client.post("/api/byob/send", json={"session_id": data["session_id"], "text": "hi"})
+    resp = byob_client.post("/api/byob/send", json={"session_id": data["session_id"], "session_secret": data["session_secret"], "text": "hi"})
     assert resp.status_code == 410
 
 
@@ -246,9 +265,9 @@ def test_send_rate_limited_per_ip(byob_client, fake_sender, monkeypatch):
     monkeypatch.setattr(app_module, "BYOB_SENDS_PER_MINUTE", 1)
     data = _open_session(byob_client).json
     assert byob_client.post(
-        "/api/byob/send", json={"session_id": data["session_id"], "text": "a"}
+        "/api/byob/send", json={"session_id": data["session_id"], "session_secret": data["session_secret"], "text": "a"}
     ).status_code == 200
-    resp = byob_client.post("/api/byob/send", json={"session_id": data["session_id"], "text": "b"})
+    resp = byob_client.post("/api/byob/send", json={"session_id": data["session_id"], "session_secret": data["session_secret"], "text": "b"})
     assert resp.status_code == 429
 
 
@@ -263,11 +282,11 @@ def test_send_maps_session_rate_limit_to_429(byob_client, fake_sender, monkeypat
 
     data = _open_session(byob_client).json
     first = byob_client.post(
-        "/api/byob/send", json={"session_id": data["session_id"], "text": "eins"}
+        "/api/byob/send", json={"session_id": data["session_id"], "session_secret": data["session_secret"], "text": "eins"}
     )
     assert first.status_code == 200
     second = byob_client.post(
-        "/api/byob/send", json={"session_id": data["session_id"], "text": "zwei"}
+        "/api/byob/send", json={"session_id": data["session_id"], "session_secret": data["session_secret"], "text": "zwei"}
     )
     assert second.status_code == 429
     assert "Rate-Limit" in second.json["error"]
@@ -289,7 +308,7 @@ def test_send_reports_partial_progress_on_send_error(byob_client, monkeypatch):
     # Ausreichend langer Plain-Text => Regular-Pfad, mehrere 4096-Chunks.
     text = "**fett** und ganz viel Text\n\n" * 900
     data = _open_session(byob_client).json
-    resp = byob_client.post("/api/byob/send", json={"session_id": data["session_id"], "text": text})
+    resp = byob_client.post("/api/byob/send", json={"session_id": data["session_id"], "session_secret": data["session_secret"], "text": text})
     assert resp.status_code == 502
     assert resp.json["sent_before_error"] >= 1
     assert "kein kompletter Wiederholungsversand" in resp.json["note"]
@@ -304,7 +323,7 @@ def test_send_retries_reported_on_429_from_telegram(byob_client, monkeypatch):
 
     monkeypatch.setattr(session_module, "send_message", limited)
     data = _open_session(byob_client).json
-    resp = byob_client.post("/api/byob/send", json={"session_id": data["session_id"], "text": "hi"})
+    resp = byob_client.post("/api/byob/send", json={"session_id": data["session_id"], "session_secret": data["session_secret"], "text": "hi"})
     assert resp.status_code == 429
     assert resp.json["retry_after"] == 13.0
 
@@ -316,7 +335,7 @@ def test_status_active_and_gone(byob_client):
     data = _open_session(byob_client).json
     sid = data["session_id"]
 
-    resp = byob_client.post("/api/byob/status", json={"session_id": sid})
+    resp = byob_client.post("/api/byob/status", json={"session_id": sid, "session_secret": data["session_secret"]})
     assert resp.status_code == 200
     body = resp.json
     assert body["active"] is True
@@ -326,15 +345,15 @@ def test_status_active_and_gone(byob_client):
     assert body["idle_remaining_seconds"] <= 600
     assert body["messages_sent"] == 0
 
-    assert byob_client.post("/api/byob/close", json={"session_id": sid}).json["closed"] is True
-    assert byob_client.post("/api/byob/status", json={"session_id": sid}).json == {"active": False}
+    assert byob_client.post("/api/byob/close", json={"session_id": sid, "session_secret": data["session_secret"]}).json["closed"] is True
+    assert byob_client.post("/api/byob/status", json={"session_id": sid, "session_secret": data["session_secret"]}).status_code == 401
 
 
 def test_close_is_idempotent(byob_client):
     data = _open_session(byob_client).json
     sid = data["session_id"]
-    assert byob_client.post("/api/byob/close", json={"session_id": sid}).json["closed"] is True
-    assert byob_client.post("/api/byob/close", json={"session_id": sid}).json["closed"] is False
+    assert byob_client.post("/api/byob/close", json={"session_id": sid, "session_secret": data["session_secret"]}).json["closed"] is True
+    assert byob_client.post("/api/byob/close", json={"session_id": sid, "session_secret": data["session_secret"]}).status_code == 401
 
 
 def test_close_drops_token_reference(byob_client):
@@ -343,7 +362,7 @@ def test_close_drops_token_reference(byob_client):
     runtime = app_module._BYOB_RUNTIME
     session = runtime.manager.get(sid)
     assert session is not None and not session.closed
-    assert byob_client.post("/api/byob/close", json={"session_id": sid}).json["closed"] is True
+    assert byob_client.post("/api/byob/close", json={"session_id": sid, "session_secret": data["session_secret"]}).json["closed"] is True
     assert session.closed
     assert session._token is None  # Token-Referenz gefallen
     assert runtime.manager.active_count == 0
@@ -478,6 +497,7 @@ def test_byob_rejects_non_json_body(byob_client):
 def test_index_renders_byob_panel_and_warning(byob_client, monkeypatch):
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123456789:" + "A" * 35)
     monkeypatch.setattr(app_module, "CHAT_ID", "-1001234567890")
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
     page = byob_client.get("/").data.decode("utf-8")
 
     assert 'id="byob"' in page

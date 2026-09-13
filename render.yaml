@@ -39,3 +39,10 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      # Required for the authenticated, API-only shared send endpoint.
+      - key: TELEGRAM_FORMATTER_API_TOKEN
+        sync: false
+      # Render provides exactly one trusted proxy hop. The application
+      # defaults to zero for safe direct/self-hosted deployments.
+      - key: TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS
+        value: "1"

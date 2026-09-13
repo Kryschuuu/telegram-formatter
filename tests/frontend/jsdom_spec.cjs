@@ -196,19 +196,18 @@ async function main() {
     await sleep(20);
     check("Dialog: öffnet sich beim Klick auf Senden",
         doc.getElementById("sendConfirm").hidden === false);
-    check("Dialog: nennt den konkreten (geteilten) Bot",
-        doc.getElementById("sendConfirmBot").textContent.includes("@mdtotxt_bot") &&
-        doc.getElementById("sendConfirmBot").textContent.includes("geteilter Bot"),
+    check("Dialog: Shared-Versand wird als deaktiviert angezeigt",
+        doc.getElementById("sendConfirmBot").textContent.includes("kein geteilter Bot") &&
+        doc.getElementById("sendConfirmUnavailable").hidden === false,
         doc.getElementById("sendConfirmBot").textContent);
-    check("Dialog: nennt das Ziel (gemeinsamer Chat, öffentlich)",
-        doc.getElementById("sendConfirmTarget").textContent.includes("Gemeinsamer Chat") &&
-        doc.getElementById("sendConfirmTarget").textContent.includes("öffentlich"),
+    check("Dialog: BYOB wird als Versandweg genannt",
+        doc.getElementById("sendConfirmTarget").textContent.includes("BYOB"),
         doc.getElementById("sendConfirmTarget").textContent);
     check("Dialog: Nachrichtenvorschau + Zeichenzahl",
         doc.getElementById("sendConfirmPreview").textContent.includes("**viel** text") &&
         doc.getElementById("sendConfirmLength").textContent.includes("Zeichen"));
-    check("Dialog: öffentliche Warnung sichtbar",
-        doc.getElementById("sendConfirmWarning").hidden === false &&
+    check("Dialog: öffentliche Warnung bleibt ohne Shared-Auth verborgen",
+        doc.getElementById("sendConfirmWarning").hidden === true &&
         doc.getElementById("sendConfirmPrivate").hidden === true);
 
     /* Abbrechen: Dialog zu, kein POST, Fokus zurück */
@@ -223,12 +222,13 @@ async function main() {
     await sleep(20);
     doc.getElementById("sendConfirmOk").click();
     await sleep(60);
-    check("Senden: POST /api/send mit aktuellem Text",
-        calls.some((c) => c.url.includes("api/send") && String(c.body).includes("**viel** text")));
-    check("Senden: Erfolgs-Status mit Anzahl", sendStatus.textContent.includes("2 Nachricht(en) gesendet"),
-        sendStatus.textContent);
-    check("Senden: Button danach wieder aktiv", doc.getElementById("sendBtn").disabled === false);
-    check("Senden: Statuszeile bekommt is-ok", sendStatus.classList.contains("is-ok"));
+    check("Senden: Shared-POST wird ohne Operator-Secret nicht ausgelöst",
+        !calls.some((c) => c.url.includes("api/send")));
+    check("Senden: Hinweis fordert BYOB",
+        sendStatus.textContent.includes("BYOB"), sendStatus.textContent);
+    check("Senden: Button bleibt bedienbar", doc.getElementById("sendBtn").disabled === false);
+    check("Senden: Statuszeile bekommt is-error ohne Shared-Auth",
+        sendStatus.classList.contains("is-error"));
 
     /* Fehlerpfad (mit Dialog) */
     sendResult = { ok: false, body: { error: "Zu viele Sendeversuche", retry_after: 7, sent_before_error: 1 } };
@@ -236,11 +236,8 @@ async function main() {
     await sleep(20);
     doc.getElementById("sendConfirmOk").click();
     await sleep(60);
-    check("Fehler: Meldung + Wartezeit + Teilsende-Hinweis",
-        sendStatus.textContent.includes("Zu viele Sendeversuche") &&
-        sendStatus.textContent.includes("Warte 7 s") &&
-        sendStatus.textContent.includes("Bereits gesendet: 1"),
-        sendStatus.textContent);
+    check("Fehler: Shared-Versand bleibt ohne Secret deaktiviert",
+        sendStatus.textContent.includes("BYOB"), sendStatus.textContent);
     check("Fehler: Statuszeile bekommt is-error", sendStatus.classList.contains("is-error"));
 
     /* Escape schließt den Dialog wie Abbrechen */
@@ -250,7 +247,7 @@ async function main() {
     doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     check("Escape: Dialog geschlossen ohne Senden",
         doc.getElementById("sendConfirm").hidden === true &&
-        calls.filter((c) => c.url.includes("api/send")).length === 2,
+        calls.filter((c) => c.url.includes("api/send")).length === 0,
         `send-calls=${calls.filter((c) => c.url.includes("api/send")).length}`);
 
 
