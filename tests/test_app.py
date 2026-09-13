@@ -173,20 +173,33 @@ def test_send_ignores_body_chat_id_when_pinned(client, monkeypatch):
 
 
 def test_send_requires_valid_chat_in_selfhosted_mode(client, monkeypatch):
-    """Ohne ENV-Chat (Selbstbetrieb): numerische chat_id im Body ist Pflicht."""
+    """Ohne ENV-Chat (Selbstbetrieb): API-Token Pflicht (R-1) + numerische chat_id."""
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:x")
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
     seen = []
     monkeypatch.setattr(
         app_module, "send_message",
         lambda m, t, **kw: seen.append(m.payload["chat_id"]) or {"ok": True},
     )
-    resp = client.post("/api/send", json={"text": "hallo"})
+    headers = {"X-Auth-Token": "s3cret"}
+    resp = client.post("/api/send", json={"text": "hallo"}, headers=headers)
     assert resp.status_code == 400  # ohne chat_id gar nicht sendefähig
-    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "77"})
+    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "77"}, headers=headers)
     assert resp.status_code == 200
     assert seen == ["77"]
-    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "4;2"})
+    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "4;2"}, headers=headers)
     assert resp.status_code == 400  # numerisches Format erzwungen
+
+
+def test_selfhosted_send_fails_closed_without_api_token(client, monkeypatch):
+    """R-1: BOT_TOKEN ohne CHAT_ID und ohne API_TOKEN ⇒ /api/send ist 503 —
+    andernfalls wäre der Endpunkt ein offener Relay auf den Betreiber-Bot."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:x")
+    monkeypatch.setattr(app_module, "CHAT_ID", "")
+    monkeypatch.setattr(app_module, "API_TOKEN", "")
+    resp = client.post("/api/send", json={"text": "hallo", "chat_id": "77"})
+    assert resp.status_code == 503
+    assert "TELEGRAM_FORMATTER_API_TOKEN" in resp.get_json()["error"]
 
 
 def test_send_missing_token(client):

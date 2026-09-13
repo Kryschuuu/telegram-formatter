@@ -25,6 +25,11 @@ useDefault = true
 # damit Tokenförmiges mit ID 123456789 im GESAMTEN Repo. Mit matchAll=true
 # müssen beide Bedingungen treffen ( fixtures-Pfad UND Dummy-Muster );
 # historisch belastete Doku-Pfade sind zusätzlich explizit aufgenommen.
+#
+# R-5: das Muster ist auf das EXAKTE Dummy-Literal beschränkt (nicht mehr die
+# ganze Klasse "123456789:*"). Ein echtes Token mit zufälliger ID 123456789,
+# aber anderem Secret, wird damit weiterhin gemeldet — freigegeben ist nur
+# der eine, öffentlich bekannte Negativbeispiel-Wert.
 [[allowlists]]
 description = "Absichtliche Negativbeispiele (BK006) und Dokumentations-Dummy"
 matchAll = true
@@ -35,5 +40,5 @@ paths = [
   '''docs/.*''',
 ]
 regexes = [
-  '''123456789:[A-Za-z0-9_-]{35}''',
+  '''123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345''',
 ]

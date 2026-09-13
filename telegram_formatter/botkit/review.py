@@ -113,6 +113,10 @@ SHELL_CALLS = frozenset(
     {"system", "popen", "run", "call", "check_call", "check_output", "getoutput", "Popen"}
 )
 
+#: ``os.open``/``io.open``-Flags, die Schreibzugriff oder Persistenz bedeuten
+#: (für BK002, R-2 — Deskriptor-Persistenz statt Dateinamen-Pfad).
+_WRITE_FLAG_NAMES = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"})
+
 #: Logger-Methoden, deren Argumente auf Inhalte geprüft werden.
 LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "exception", "critical", "log"})
 
@@ -138,7 +142,8 @@ RULES: dict[str, Rule] = {
         Rule("BK006", BLOCKER, "Hartkodiertes Geheimnis", "Token/Schlüssel nie im Quelltext."),
         Rule("BK007", BLOCKER, "Shell-/Prozessausführung", "Keine externen Prozesse starten."),
         Rule("BK008", BLOCKER, "Eigener Netzwerk-Server", "Webhook nur hinter geprüftem TLS-Terminator."),
-        Rule("BK010", WARNING, "URL nicht prüfbar", "Ziel-URL als Konstante übergeben."),
+        Rule("BK010", BLOCKER, "Nicht prüfbare Ziel-URL",
+             "URL als Konstante übergeben (nur api.telegram.org)."),
         Rule("BK011", WARNING, "Ausgabe von Inhalten", "print() von Inhalten vermeiden."),
         Rule("BK012", WARNING, "Unsicherer Zufall", "secrets statt random für Token/Noncen."),
     )
@@ -315,6 +320,14 @@ def collect_facts(tree: ast.Module) -> _ModuleFacts:
     return facts
 
 
+def _has_write_flags(expr: ast.AST) -> bool:
+    """``True``, wenn ``expr`` einen Schreib-Flag enthält (z. B. ``os.O_WRONLY``)."""
+    return any(
+        isinstance(node, ast.Attribute) and node.attr in _WRITE_FLAG_NAMES
+        for node in ast.walk(expr)
+    )
+
+
 class _SecurityVisitor(ast.NodeVisitor):
     """Sammelt Regelverstöße in einem Modul (rein, ohne I/O)."""
 
@@ -415,6 +428,24 @@ class _SecurityVisitor(ast.NodeVisitor):
         elif short in DYNAMIC_EXEC_CALLS and root in {"builtins", "importlib"}:
             self._add("BK003", node, f"Deserialisierung/Exec über '{name}' ist untersagt.")
 
+        # Indirekter Dispatch via getattr(obj, "name") — R-2: Der Zielname
+        # steht im zweiten Argument, der Namespace im ersten; der normale
+        # Namen-Match (`_dotted`) sieht ein verschachteltes Call-Objekt nicht.
+        if isinstance(node.func, ast.Call):
+            inner = node.func
+            if self._resolve_call_name(_dotted(inner.func)) == "getattr" and len(inner.args) >= 2:
+                obj = _dotted(inner.args[0])
+                attr = inner.args[1]
+                if isinstance(attr, ast.Constant) and isinstance(attr.value, str) and obj:
+                    full = f"{obj}.{attr.value}"
+                    obj_root = obj.split(".")[0]
+                    if attr.value in SHELL_CALLS and obj_root in {"os", "subprocess"}:
+                        self._add("BK007", node, f"Indirekter Shell-Aufruf '{full}' ist untersagt.")
+                    if attr.value in DYNAMIC_EXEC_CALLS and obj_root in {
+                        "builtins", "__builtins__", "importlib",
+                    }:
+                        self._add("BK003", node, f"Indirekte Code-Ausführung '{full}' ist untersagt.")
+
         # Shell / Prozesse
         if root in {"os", "subprocess"} and short in SHELL_CALLS:
             self._add("BK007", node, f"Prozess-/Shell-Aufruf '{name}' ist untersagt.")
@@ -434,6 +465,23 @@ class _SecurityVisitor(ast.NodeVisitor):
                     mode = str(kw.value.value)
             if any(flag in mode for flag in ("w", "a", "x")):
                 self._add("BK002", node, f"Datei wird zum Schreiben geöffnet (mode='{mode}').")
+
+        # os.open/io.open mit Schreib-Flags sowie os.write/os.pwrite — R-2:
+        # Persistenz über Datei-Deskriptoren statt Dateinamen. Der Mode-Check
+        # oben sieht nur builtins.open, nicht die os/io-Varianten.
+        if short == "open" and root in {"os", "posix", "io"}:
+            flags: ast.AST | None = None
+            if len(node.args) > 1:
+                flags = node.args[1]
+            else:
+                for kw in node.keywords:
+                    if kw.arg == "flags":
+                        flags = kw.value
+                        break
+            if flags is not None and _has_write_flags(flags):
+                self._add("BK002", node, f"'{name}' öffnet eine Datei zum Schreiben.")
+        if short in {"write", "pwrite"} and root in {"os", "posix"}:
+            self._add("BK002", node, f"Schreibzugriff via '{name}' ist untersagt.")
 
         # Netzwerk-Server
         if name in {"socket.socket", "socket.create_server"} or short == "serve_forever":
@@ -464,11 +512,18 @@ class _SecurityVisitor(ast.NodeVisitor):
             return self.facts.str_consts[expr.id]
         if isinstance(expr, ast.JoinedStr):
             # f"api.telegram.org/bot{token}/x" → konstanter Präfix reicht
-            # zur Host-Bestimmung; sonst None (nicht prüfbar → BK010).
+            # zur Host-Bestimmung. Bekannte Namen (Modul-Konstanten) werden
+            # mitgefaltet; der erste dynamische Teil stoppt (R-2) — sonst
+            # None (nicht prüfbar → BK010, Blocker).
             prefix: list[str] = []
             for part in expr.values:
                 if isinstance(part, ast.Constant) and isinstance(part.value, str):
                     prefix.append(part.value)
+                elif isinstance(part, ast.FormattedValue):
+                    folded = self._fold_string(part.value)
+                    if folded is None:
+                        break
+                    prefix.append(folded)
                 else:
                     break
             return "".join(prefix) if prefix else None
@@ -480,7 +535,9 @@ class _SecurityVisitor(ast.NodeVisitor):
         Audit H-1: Vorher zählten nur Literal-Argumente — eine URL in einer
         Variable oder einem f-String hebelte BK004 vollständig aus. Jetzt
         werden Modul-Konstanten gefaltet und f-String-Köpfe ausgewertet;
-        wirklich unauflösbare Ziele bleiben BK010 (Warning, Checkliste C4).
+        wirklich unauflösbare Ziele sind BK010 — seit v2.4.0 ein BLOCKER
+        (R-2): ein nicht prüfbares Ziel ist nicht „sicher“, sondern nur
+        nicht verifizierbar.
         """
         target = None
         if node.args:

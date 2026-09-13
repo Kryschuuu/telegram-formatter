@@ -81,7 +81,7 @@ Unter **Environment → Environment Variables** diese Einträge hinzufügen:
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Dein Token von BotFather, z. B. `123456:ABC-...` |
 | `TELEGRAM_CHAT_ID` | **empfohlen & sicherheitsrelevant:** pinnt den Zielchat von `/api/send`; ohne sie akzeptiert die API nur eine gültige numerische `chat_id` pro Request |
-| `TELEGRAM_FORMATTER_API_TOKEN` | (optional, seit v2.1.0) gesetzt ⇒ `POST /api/*` verlangt passenden `X-Auth-Token`-Header — sinnvoll, wenn die Instanz öffentlich erreichbar ist |
+| `TELEGRAM_FORMATTER_API_TOKEN` | (seit v2.1.0) gesetzt ⇒ `POST /api/*` verlangt passenden `X-Auth-Token`-Header. **Seit v2.4.0 Pflicht im Selbstbetrieb** (Bot-Token ohne `TELEGRAM_CHAT_ID`): fehlt er dort, ist `/api/send` deaktiviert (Fail-Closed, 503) — ansonsten wäre der Endpunkt ein offener Relay |
 | `TELEGRAM_FORMATTER_BYOB_ENABLED` | (optional, seit v2.2.0) `0` ⇒ BYOB-Websessions & UI aus (Standard: an) |
 | `TELEGRAM_FORMATTER_BYOB_TTL_SECONDS` / `…_IDLE_SECONDS` | (optional) Lebensdauer/Leerlauf der Web-Sessions (Standard 1800/600) |
 | `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` | (optional) Anzeige-Name des geteilten Bots in der Privatsphäre-Warnung (Standard `@mdtotxt_bot`) |
@@ -117,7 +117,7 @@ Alternativ per Kommandozeile (Dry-Run zeigt nur die Payloads):
 
 ```bash
 python -m telegram_formatter.cli beispiel_input.txt  # Dry-Run
-python -m telegram_formatter.cli beispiel_input.txt --send --token <TOKEN> --chat-id <CHAT_ID>
+TELEGRAM_BOT_TOKEN=... python -m telegram_formatter.cli beispiel_input.txt --send --chat-id <CHAT_ID>
 ```
 
 ## Lokale Entwicklung (optional)

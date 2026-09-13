@@ -36,8 +36,8 @@ python -m telegram_formatter.botctl verify <bot-datei> --bot-id <id>        # To
 
 ### Statische Befunde
 
-- [ ] `botctl review --check` ist grün (keine Blocker BK001–BK008)
-- [ ] Warnungen (BK010–BK012) sind behoben oder begründet
+- [ ] `botctl review --check` ist grün (keine Blocker BK001–BK008, BK010)
+- [ ] Warnungen (BK011–BK012) sind behoben oder begründet
 - [ ] Suppressions (`# botkit:allow …`) sind aufgeführt **und** begründet:
 
 <!-- Regel-ID, Zeile, Grund -->

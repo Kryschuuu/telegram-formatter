@@ -4,6 +4,65 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.4.0] - 2026-09-13
+
+**Security-Delta-Review: Fail-Closed für den Selbstbetrieb und
+Review-Gate-Nachschärfung.** Umsetzung der Restbefunde (R-1/R-2) aus dem
+Re-Triage des Audits 2.0.0 → 2.3.0 (siehe Status-Tabelle in
+[`security/README.md`](security/README.md)): der letzte Relay-Pfad von
+`/api/send` wird geschlossen und die AST-Statik fängt die zuvor noch offenen
+Umgehungen (dynamische Ziel-URL, Deskriptor-Persistenz, `getattr`-Dispatch).
+
+### Behoben (Sicherheit)
+
+- **R-1 — Fail-Closed im Selbstbetrieb:** Läuft `TELEGRAM_BOT_TOKEN` **ohne**
+  `TELEGRAM_CHAT_ID`, ist `TELEGRAM_FORMATTER_API_TOKEN` jetzt **Pflicht** —
+  fehlt beides, antwortet `POST /api/send` mit `503` statt anonym beliebige
+  Chats zu beliefern (vorher: offener Relay auf den Betreiber-Bot).
+  Zusätzlich warnt der Start (Log), wenn die Konstellation ungeschützt ist.
+- **R-2 — Review-Gate-Nachschärfung** (`botkit/review.py`):
+  - **BK010 ist jetzt ein Blocker** (vorher Warnung): eine nicht statisch
+    prüfbare Ziel-URL gilt nicht mehr als „sicher“, sondern als nicht
+    verifizierbar — `requests.post(url)` / `f"https://{host}/…"` stoppen den
+    Vorgang. Die f-String-Faltung löst bekannte Modul-Konstanten zusätzlich
+    auf, damit legitime `f"{API_BASE}/bot{token}/…"`-Muster sauber bleiben.
+  - **Deskriptor-Persistenz:** `os.open`/`io.open` mit Schreib-Flags
+    (`O_WRONLY`, `O_RDWR`, `O_CREAT`, …) sowie `os.write`/`os.pwrite` lösen
+    BK002 aus.
+  - **Indirekter Dispatch:** `getattr(os, "system")(…)` (BK007) und
+    `getattr(__builtins__, "eval")(…)` (BK003) werden erkannt.
+- **R-3 — `cli.py --token` entfernt:** der Parameter legte den Bot-Token im
+  Klartext in `ps` und Shell-Historie ab (Audit M-2). Token jetzt
+  ausschließlich über `TELEGRAM_BOT_TOKEN` oder interaktiv (`botctl`).
+- **R-4 — Client-Vorschau:** `app.js` entfernt NUL-Zeichen vor dem
+  Platzhalter-Protokoll (Parität zu `utils.normalize_text`, Audit N-1) —
+  Nutzer-NULs können den Vorschau-Restore nicht mehr kollidieren lassen.
+- **R-5 — Gitleaks-Allowlist präzisiert:** freigegeben ist nur noch das
+  exakte, öffentlich bekannte Negativbeispiel-Literal statt der ganzen
+  Klasse `123456789:*` (ein echtes Token mit dieser Bot-ID bliebe sonst in
+  README/CHANGELOG/docs unentdeckt).
+
+### Geändert
+
+- **Doku:** `security/README.md` enthält jetzt eine vollständige
+  Findings-Status-Tabelle (K-1 … B-14 → behoben in welcher Version);
+  `SECURITY_AUDIT.md` trägt einen Status-Banner, der auf diese Tabelle
+  verweist. `docs/DECENTRAL_BOT_ARCHITECTURE.md` (BK-Tabelle),
+  `.github/pull_request_template.md` (BK010 = Blocker), README und
+  `docs/DEPLOYMENT.md` (API-Token-Pflicht im Selbstbetrieb) nachgezogen.
+- **Version:** `telegram_formatter.__version__` auf `2.4.0`.
+
+### Tests
+
+- `tests/test_review.py`: BK010-als-Blocker, Deskriptor-Persistenz,
+  `getattr`-Dispatch, readonly-`os.open`- und legitime-f-String-Gegentests.
+- `tests/test_app.py`: Fail-Closed-Test (503 ohne Zugangsschutz im
+  Selbstbetrieb); der Selbstbetrieb-Test setzt jetzt das API-Token voraus.
+- `tests/fixtures/insecure_bot.py`: neue R-2-Negativmuster
+  (`persist_via_descriptors`, `shell_via_getattr`, `exec_via_getattr`).
+- Gesamtsuite: **305 passed**; `ruff check`, `bandit` (Voll) und `pip-audit`
+  ohne Befund.
+
 ## [2.3.0] - 2026-09-12
 
 **Sende-Bestätigung, Top-Warnung & Privatsphäre-Aufklärung.** Drei

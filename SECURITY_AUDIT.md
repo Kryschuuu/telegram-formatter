@@ -1,5 +1,13 @@
 # Security-Audit & Code Review — `telegram-formatter` v2.0.0
 
+> **Status-Hinweis (2026-09-13):** Dies ist der **historische** Audit-Bericht
+> zum Stand v2.0.0 (Commit `f955550`) und wird unverändert aufbewahrt. Die
+> Behebung der Befunde ist in den Folge-Release-Changelogs (`CHANGELOG.md`)
+> dokumentiert; eine komplette Zuordnung „Befund → behobene Version“ steht in
+> [`security/README.md`](security/README.md#audit-findings-status-security_auditmd-v200).
+> Die beiden letzten Restbefunde (Relay im Selbstbetrieb, Rest-Umgehungen der
+> Review-Statik) sind mit **v2.4.0** geschlossen.
+
 | | |
 |---|---|
 | **Projekt** | https://github.com/Kryschuuu/telegram-formatter |

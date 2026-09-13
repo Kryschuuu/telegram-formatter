@@ -426,14 +426,14 @@ class BotSession:
 | Regel | Findet | Schwere |
 |---|---|---|
 | BK001 | Importe mit Persistenz/Shell/Socket (`sqlite3`, `pickle`, `subprocess`, …) | Blocker |
-| BK002 | Schreibzugriffe (`open(…,'w')`, `write_text`, `json.dump`, `sqlite3.connect`) | Blocker |
-| BK003 | Dynamische Ausführung (`eval`, `exec`, `pickle.loads`) | Blocker |
+| BK002 | Schreibzugriffe (`open(…,'w')`, `write_text`, `json.dump`, `sqlite3.connect`, `os.open(…, O_WRONLY\|O_CREAT)`, `os.write`) | Blocker |
+| BK003 | Dynamische Ausführung (`eval`, `exec`, `pickle.loads`, `getattr(__builtins__, "eval")`) | Blocker |
 | BK004 | Ausgehende HTTP-Aufrufe an andere Hosts als `api.telegram.org` | Blocker |
 | BK005 | Nachrichteninhalte in Log-Aufrufen | Blocker |
 | BK006 | Hartkodierte Tokens/Secrets | Blocker |
-| BK007 | Shell-/Prozessausführung | Blocker |
+| BK007 | Shell-/Prozessausführung (`os.system`, `getattr(os, "system")`) | Blocker |
 | BK008 | Eigener Socket-Server (Webhook ohne geprüften TLS-Terminator) | Blocker |
-| BK010 | Nicht statisch prüfbare Ziel-URL | Warnung |
+| BK010 | Nicht statisch prüfbare Ziel-URL (seit v2.4.0) | Blocker |
 | BK011 | `print()` von Inhalten | Warnung |
 | BK012 | `random` statt `secrets` | Warnung |
 

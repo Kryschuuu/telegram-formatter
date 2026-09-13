@@ -109,3 +109,23 @@ def persist_tempfile(text: str) -> None:
     """BK001/BK002 via tempfile."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
         fh.write(text)
+
+
+# --- Regressionen aus dem Security-Review 2026-09-13 (R-2): Deskriptor-  ---
+# --- Persistenz und indirekter getattr-Dispatch müssen ebenfalls erkannt  ---
+# --- werden (BK002 bzw. BK007/BK003).                                      ---
+
+def persist_via_descriptors(text: str) -> None:
+    """BK002 via os.open (Schreib-Flags) + os.write."""
+    fd = os.open("/tmp/leak.bin", os.O_WRONLY | os.O_CREAT)
+    os.write(fd, text.encode())
+
+
+def shell_via_getattr(command: str) -> None:
+    """BK007 trotz indirektem Dispatch über getattr."""
+    getattr(os, "system")(command)
+
+
+def exec_via_getattr(code: str) -> None:
+    """BK003 trotz indirektem Dispatch über getattr(__builtins__, …)."""
+    getattr(__builtins__, "eval")(code)
