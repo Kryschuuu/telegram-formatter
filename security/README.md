@@ -51,3 +51,48 @@ Projekt **strukturell** durchsetzt (nicht nur dokumentarisch).
 - `--local-trust` in `botctl send` überspringt das Review **nur** für privat
   betriebene Bots des Nutzenden selbst; im gehosteten Modus ist es die
   fail-closed-Standardabweichung und im Audit-Trail sichtbar.
+
+## Audit-Findings-Status (SECURITY_AUDIT.md v2.0.0)
+
+Zuordnung der Befunde aus dem Audit v2.0.0 (Commit `f955550`) zu den
+Versionen, in denen sie behoben wurden. Befund-IDs wie im Bericht
+(`K-*` Kritisch, `H-*` Hoch, `M-*` Mittel, `N-*` Niedrig, `B-*` Bugs).
+
+| Befund | Status | Behoben in | Anmerkung |
+|---|---|---|---|
+| K-1 · Token-Leak im Fehlerpfad | ✅ behoben | 2.1.0 | Fehlermeldungen ohne URL/Token |
+| K-2 · Open Relay (`/api/send`) | ✅ behoben | 2.1.0 + 2.4.0 | Chat-Pinning (2.1.0); Selbstbetrieb Fail-Closed (2.4.0, R-1) |
+| H-1 · Review-Gate-Umgehungen | ✅ behoben | 2.1.0 + 2.4.0 | Alias/Konstanten-Faltung (2.1.0); BK010=Blocker, `os.open`/`os.write`, `getattr` (2.4.0, R-2) |
+| H-2 · DoS ohne Limits | ✅ behoben | 2.1.0 | Body-/Input-/Rate-Limits |
+| H-3 · `response.text`-Leak | ✅ behoben | 2.1.0 | gekürzte Description |
+| H-4 · Traceback-Leak | ✅ behoben | 2.1.0 | `exc_info`-Redaction |
+| H-5 · CDN/CSP | ✅ behoben | 2.1.0/2.2.0 | Self-Hosting, CSP `'self'` |
+| M-1 · `"`-Attribut-Injection | ✅ behoben | 2.1.0 | `&quot;`, Fence-Allowlist |
+| M-2 · `--token` in ps/Historie | ✅ behoben | 2.4.0 | Parameter entfernt (R-3) |
+| M-3 · `api_base` http:// | ✅ behoben | 2.1.0 | HTTPS-Pflicht |
+| M-4 · Audit-Trail-Trust | 🟡 teilweise | 2.1.0/2.2.0 | CI-`verify` aktiv, `flock`; Rollen-Selbstattestation + 1 CODEOWNER offen (Governance) |
+| M-5 · gunicorn veraltet | ✅ behoben | 2.1.0 | 26.2.0; Hash-Lockfile offen (Roadmap) |
+| M-6 · CSRF/Origin | ✅ behoben | 2.1.0/2.2.0 | Origin-Check, Body-Handle |
+| M-7 · Thread-Safety | ✅ behoben | 2.1.0 | Locks |
+| N-1 · NUL-Kollision | ✅ behoben | 2.1.0 + 2.4.0 | Server (2.1.0), Client-Vorschau (2.4.0, R-4) |
+| N-2 · Gitleaks-Allowlist | ✅ behoben | 2.1.0 + 2.4.0 | `matchAll` (2.1.0), Exakt-Literal (2.4.0, R-5) |
+| N-3 · Dev-Server-Debug | ✅ behoben | 2.1.0 | `debug=False` |
+| N-4 · Registry-Wanduhr | 🟡 akzeptiert | — | bewusst dokumentiert |
+| N-5 · Doku-Drift (Vault) | ✅ behoben | 2.2.0 | Vault als Baustein markiert |
+| B-1 · Chunking zerreißt Tags | ✅ behoben | 2.1.0 | Tag-Balance + atomare Bereiche |
+| B-2 · `--local-trust` defekt | ✅ behoben | 2.1.0 | |
+| B-3 · Reject invalidiert nicht | ✅ behoben | 2.1.0 | |
+| B-4 · Preis-`$` als LaTeX | ✅ behoben | 2.1.0 | GFM-Randregeln |
+| B-5 · `text:int` → 500 | ✅ behoben | 2.1.0 | 400 |
+| B-6 · Teilversand | ✅ behoben | 2.1.0 | `sent_before_error` |
+| B-7 · `retry_after`/`ok` | ✅ behoben | 2.1.0 | |
+| B-8/B-9/B-10 · botctl/Lost Update | ✅ behoben | 2.1.0 | `flock` |
+| B-11 · Test-Isolation | ✅ behoben | 2.1.0 | Fixture-Restore |
+| B-12 · Listen-Einrückung | ✅ behoben | 2.1.0 | |
+| B-13 · `repr` geschlossener Sessions | ✅ behoben | 2.1.0 | kosmetisch |
+| B-14 · `has_table`-Toleranz | 🟡 akzeptiert | — | dokumentiert |
+
+> Offene Punkte sind **Governance/Roadmap**, keine offenen Code-Schwachstellen:
+> zweiter CODEOWNER-Maintainer (M-4), Hash-Lockfile für PyPI (M-5), echte
+> Rate-Limit-Infrastruktur statt In-Process-Heuristik (R-7). Details im
+> jeweiligen Changelog-Eintrag.

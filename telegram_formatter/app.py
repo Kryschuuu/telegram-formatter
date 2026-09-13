@@ -37,7 +37,11 @@ Härtungen (Security-Audit 2026-09, Befunde K-1/K-2/H-2/H-5/M-6/B-5/B-6):
   wird mit 400 abgelehnt. Ohne konfigurierten Chat (reiner Selbstbetrieb)
   muss der Body eine gültige, numerische ``chat_id`` enthalten — niemals
   beliebige JSON-Werte. Damit ist der Endpunkt **kein offener Relay** mehr.
-* **Optionales API-Token:** ist ``TELEGRAM_FORMATTER_API_TOKEN`` gesetzt,
+* **Fail-Closed im Selbstbetrieb (R-1):** Läuft ``/api/send`` *ohne*
+  ``TELEGRAM_CHAT_ID``, ist der Zugangsschutz Pflicht — fehlt auch
+  ``TELEGRAM_FORMATTER_API_TOKEN``, antwortet der Endpunkt mit 503 statt
+  anonym beliebige Chats zu beliefern.
+* **Optionaler API-Token:** ist ``TELEGRAM_FORMATTER_API_TOKEN`` gesetzt,
   verlangen alle POST-Endpunkte einen passenden ``X-Auth-Token``-Header
   (zeitkonstanter Vergleich).
 * **Größen- & Mengengrenzen:** Request-Body hart auf ``MAX_BODY_BYTES``
@@ -127,8 +131,19 @@ CONVERTS_PER_MINUTE = int(os.environ.get("TELEGRAM_FORMATTER_CONVERTS_PER_MINUTE
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = (os.environ.get("TELEGRAM_CHAT_ID", "") or "").strip()
 #: Optionaler Zugangsschutz für den gehosteten Betrieb (POSTs brauchen den
-#: Header ``X-Auth-Token``). Für rein lokalen Gebrauch kann er leer bleiben.
+#: Header ``X-Auth-Token``). Für rein lokalen Gebrauch kann er leer bleiben —
+#: AUSSER im Selbstbetrieb (BOT_TOKEN ohne CHAT_ID): dort ist er Pflicht,
+#: sonst wäre ``/api/send`` ein offener Relay (R-1, Fail-Closed).
 API_TOKEN = os.environ.get("TELEGRAM_FORMATTER_API_TOKEN", "")
+
+# Fail-Closed-Hinweis beim Start: BOT_TOKEN ohne CHAT_ID und ohne API_TOKEN
+# würde den Versand anonymisieren — genau das verbietet R-1.
+if BOT_TOKEN and not CHAT_ID and not API_TOKEN:
+    LOGGER.warning(
+        "app.selfhost_unprotected: TELEGRAM_BOT_TOKEN ist gesetzt, aber weder "
+        "TELEGRAM_CHAT_ID noch TELEGRAM_FORMATTER_API_TOKEN — /api/send ist "
+        "deaktiviert (503, Fail-Closed)."
+    )
 
 
 # --- BYOB: Eigene Bots in ephemeren Web-Sessions (botkit, Modus B) ---------- #
@@ -551,6 +566,19 @@ def send():
     """
     if not BOT_TOKEN:
         return jsonify({"error": "TELEGRAM_BOT_TOKEN nicht konfiguriert."}), 400
+    if not CHAT_ID and not API_TOKEN:
+        # R-1 (Fail-Closed): Ohne gepinnten Zielchat UND ohne Zugangsschutz
+        # wäre /api/send ein offener Relay — jede:r könnte über den Bot des
+        # Betreibers beliebige Chats anschreiben. Der Selbstbetrieb (chat_id
+        # im Body) ist deshalb nur mit TELEGRAM_FORMATTER_API_TOKEN erlaubt.
+        return jsonify(
+            {
+                "error": (
+                    "Selbstbetrieb ohne Zielchat erfordert den Zugangsschutz: "
+                    "TELEGRAM_FORMATTER_API_TOKEN setzen (oder TELEGRAM_CHAT_ID pinnen)."
+                )
+            }
+        ), 503
     if _rate_limited("send", SENDS_PER_MINUTE):
         return jsonify({"error": "Zu viele Sendeversuche — bitte kurz warten."}), 429
 
@@ -682,8 +710,10 @@ def byob_discover_chats():
     Der Aufruf ist ein reiner *Blick* in die Update-Warteschlange: kein
     ``offset`` ⇒ nichts wird bestätigt oder verbraucht. Zurück kommen
     ausschließlich Chat-Metadaten (ID, Typ, Name) — **niemals**
-    Nachrichteninhalte. Zweck: die numerische Chat-ID für den Session-Start
-    ohne Handarbeit herauszufinden.
+    Nachrichteninhalte in der *Antwort*. Die Update-Inhalte werden dabei
+    transient gelesen und sofort verworfen (nicht gespeichert, nicht
+    geloggt). Zweck: die numerische Chat-ID für den Session-Start ohne
+    Handarbeit herauszufinden.
     """
     disabled = _byob_disabled()
     if disabled is not None:

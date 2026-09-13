@@ -11,10 +11,16 @@ Beispiele::
     # Aus STDIN lesen
     echo "**fett** und $x^2$" | python -m telegram_formatter.cli
 
-    # Wirklich senden
-    python -m telegram_formatter.cli beispiel_input.txt --chat-id -100123456789 --send --token 123:ABC
+    # Wirklich senden (Token ausschließlich über die Umgebungsvariable)
+    TELEGRAM_BOT_TOKEN=... python -m telegram_formatter.cli beispiel_input.txt \\
+        --chat-id -100123456789 --send
 
 Umgebungsvariablen: ``TELEGRAM_BOT_TOKEN``, ``TELEGRAM_CHAT_ID``.
+
+Sicherheit: Der frühere ``--token``-Parameter ist entfernt (Audit M-2 /
+R-3) — ein Token als CLI-Argument liegt im Klartext in der Prozessliste
+(``ps``) und in der Shell-Historie. Token ausschließlich über
+``TELEGRAM_BOT_TOKEN`` oder interaktiv (``botctl``/``BotToken.from_getpass``).
 """
 
 from __future__ import annotations
@@ -43,12 +49,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Ziel-Chat/-Kanal (z. B. -100123456789). Standard: TELEGRAM_CHAT_ID.",
     )
     parser.add_argument(
-        "--token",
-        default=None,
-        help="[veraltet — sichtbar in ps & Shell-Historie] Telegram-Bot-Token. "
-             "Besser: Umgebungsvariable TELEGRAM_BOT_TOKEN setzen.",
-    )
-    parser.add_argument(
         "--send",
         action="store_true",
         help="Wirklich an Telegram senden (sonst nur Dry-Run der Payloads).",
@@ -60,14 +60,11 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     chat_id = args.chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
 
-    # Audit M-2: Tokens als CLI-Argument stehen in der Prozessliste (ps)
-    # und in der Shell-Historie. Der Botkit-Weg (BotToken.from_getpass /
-    # Environment + scrub) ist der empfohlene Ersatz.
-    token = args.token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    if args.token:
-        print("WARNUNG: --token ist veraltet (ps/Historie-Leak). Nutze die "
-              "Umgebungsvariable TELEGRAM_BOT_TOKEN oder 'botctl' mit "
-              "BotToken.from_getpass().", file=sys.stderr)
+    # Audit M-2 / R-3: Der frühere --token-Parameter ist entfernt — Tokens
+    # als CLI-Argument stehen in der Prozessliste (ps) und in der
+    # Shell-Historie. Ersatz: Umgebungsvariable TELEGRAM_BOT_TOKEN oder
+    # botctl mit BotToken.from_getpass().
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
     # Eingabe lesen (Datei oder STDIN), immer explizit UTF-8.
     if args.input:
@@ -87,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(msg.payload, ensure_ascii=False, indent=2))
         if args.send:
             if not token:
-                print("FEHLER: --token bzw. TELEGRAM_BOT_TOKEN fehlt.")
+                print("FEHLER: TELEGRAM_BOT_TOKEN fehlt (Umgebungsvariable).")
                 return 1
             if not chat_id:
                 print("FEHLER: --chat-id bzw. TELEGRAM_CHAT_ID fehlt.")

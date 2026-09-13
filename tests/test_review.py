@@ -79,11 +79,14 @@ def test_telegram_api_calls_are_allowed():
     assert report.ok is True
 
 
-def test_dynamic_urls_are_warned_not_blocked():
+def test_dynamic_urls_are_blocked():
+    """R-2: BK010 ist seit v2.4.0 ein Blocker — eine nicht prüfbare Ziel-URL
+    darf nicht mehr als bloße Warnung durchgewunken werden."""
     source = "import requests\nrequests.post(url)\n"
     report = analyze_code(source, filename="dyn.py")
-    assert report.ok is True
+    assert report.ok is False
     assert {f.rule_id for f in report.findings} == {"BK010"}
+    assert {f.rule_id for f in report.blocking} == {"BK010"}
 
 
 def test_suppression_comment_works_and_is_visible():
@@ -342,6 +345,37 @@ class TestAuditBypassRegressions:
         import pytest as _pt
         with _pt.raises(ReviewGateError):
             gate.verify(42, CLEAN_BOT, check_registry=False)
+
+    def test_os_open_write_descriptor_persistence_blocked(self):
+        """R-2: Persistenz über Deskriptoren (os.open + os.write) statt Dateinamen."""
+        rep = analyze_code(
+            "import os\n"
+            "fd = os.open('/tmp/x', os.O_WRONLY | os.O_CREAT)\n"
+            "os.write(fd, b'x')\n"
+        )
+        assert "BK002" in {f.rule_id for f in rep.findings}
+
+    def test_getattr_dispatch_blocked(self):
+        """R-2: indirekter Dispatch über getattr(obj, \"name\")(…)."""
+        rep = analyze_code('import os\ngetattr(os, "system")("id")\n')
+        assert "BK007" in {f.rule_id for f in rep.findings}
+        rep = analyze_code('getattr(__builtins__, "eval")("1+1")\n')
+        assert "BK003" in {f.rule_id for f in rep.findings}
+
+    def test_readonly_os_open_is_allowed(self):
+        """Gegentest: os.open ohne Schreib-Flags ist keine Persistenz."""
+        rep = analyze_code('import os\nfd = os.open("/tmp/x", os.O_RDONLY)\n')
+        assert "BK002" not in {f.rule_id for f in rep.findings}
+
+    def test_legit_api_base_fstring_has_no_findings(self):
+        """Gegentest: f-string mit bekannter API-Basis-Konstante bleibt sauber."""
+        rep = analyze_code(
+            "import requests\n"
+            'API_BASE = "https://api.telegram.org"\n'
+            'requests.post(f"{API_BASE}/bot{token}/sendMessage", json=d)\n'
+        )
+        assert "BK004" not in {f.rule_id for f in rep.findings}
+        assert "BK010" not in {f.rule_id for f in rep.findings}
 
     def test_resubmission_after_reject_opens_new_ticket(self):
         """Aufhebungspfad: gleiches Ticket bleibt abgelehnt, Re-Submit erzeugt ein neues."""

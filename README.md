@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.2.0-blue)
+![Version](https://img.shields.io/badge/version-2.4.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -84,7 +84,7 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 | Variable | Wirkung |
 |---|---|
 | `TELEGRAM_CHAT_ID` | **pinnt** den Zielchat von `/api/send`; ohne sie verlangt die API eine numerische `chat_id` im Request |
-| `TELEGRAM_FORMATTER_API_TOKEN` | gesetzt ⇒ alle POST-Endpunkte brauchen den Header `X-Auth-Token` |
+| `TELEGRAM_FORMATTER_API_TOKEN` | gesetzt ⇒ alle POST-Endpunkte brauchen den Header `X-Auth-Token`. **Im Selbstbetrieb** (Bot-Token ohne `TELEGRAM_CHAT_ID`) **Pflicht** — sonst ist `/api/send` deaktiviert (Fail-Closed, 503) |
 | `TELEGRAM_FORMATTER_MAX_INPUT_CHARS` | Eingabelimit (Standard 100000) |
 | `TELEGRAM_FORMATTER_SENDS_PER_MINUTE` | Rate-Limit pro IP für `/api/send` (Standard 6) |
 | `TELEGRAM_FORMATTER_BYOB_ENABLED` | BYOB-Websessions aktiv (Standard `1`; `0` blendet UI + API aus) |
@@ -108,8 +108,8 @@ python -m telegram_formatter.cli beispiel_input.txt
 # Aus STDIN lesen
 echo "**fett** und $x^2$" | python -m telegram_formatter.cli
 
-# Wirklich senden (Token aus der Umgebungsvariable — nicht als Argument;
-# --token ist veraltet und liegt sonst in ps & Shell-Historie)
+# Wirklich senden (Token ausschließlich aus der Umgebungsvariable —
+# der frühere --token-Parameter ist entfernt, er lag in ps & Shell-Historie)
 TELEGRAM_BOT_TOKEN=... python -m telegram_formatter.cli beispiel_input.txt --send --chat-id -100123456789
 ```
 
@@ -362,6 +362,6 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.2.0** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.4.0** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).

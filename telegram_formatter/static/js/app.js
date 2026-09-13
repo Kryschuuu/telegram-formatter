@@ -79,6 +79,10 @@
        \`code\` und kein $x_1$. */
     function renderPreview() {
         var raw = input.value || "";
+        // NUL-Zeichen entfernen (Parität zu utils.normalize_text, Audit N-1/R-4):
+        // die Vorschau nutzt \u0000 als Platzhalter-Marker — Nutzer-NULs würden
+        // den Restore-Mechanismus kollidieren lassen.
+        raw = raw.replace(/\u0000/g, "");
         if (!raw.trim()) {
             preview.innerHTML = PLACEHOLDER;
             return;
