@@ -313,6 +313,15 @@ Zusätzlich seit v2.3.0 (Sende-Bestätigung, Top-Warnung, Privatsphäre):
 | `.tf-top-warning` | rotes Vollbreite-Band unter dem Header für die öffentliche-Bot-Warnung (nur bei konfiguriertem geteilten Bot im Template) |
 | `.tf-modal`, `.tf-modal__backdrop/__panel/__title/__lead/__preview/__length` | Sende-Bestätigungsdialog: Fixed-Overlay, neutraler Backdrop `rgba(127,127,127,α)` (dokumentierte Ausnahme), Panel mit `margin: auto` (zentriert UND bei Überhöhe scrollbar) |
 | `.tf-facts`, `.tf-facts__row` | dt/dd-Faktenliste im Dialog (Bot, Ziel, Nachricht); ab `40rem` zweispaltig Label/Wert |
+
+Zusätzlich seit v2.6.0 (Versandweg-Auswahl im Dialog):
+
+| Klasse | Zweck |
+|---|---|
+| `.tf-send-paths`, `.tf-send-paths__legend` | Fieldset „Versandweg“ im Bestätigungsdialog (unsichtbarer Rahmen, Legende in Kapitälchen) |
+| `.tf-send-path-option` | eine Radio-Zeile; `.is-selected` (nur JS) markiert den gewählten Weg mit Akzentrahmen |
+| `.tf-send-path-option__input/__body/__title/__meta` | Radio + zweizeilige Beschriftung (Bot-Handle + Einordnung „privat“/„öffentlich“) |
+| `.tf-send-path-option--public` | statischer Modifikator der geteilten Zeile: Meta-Text in `--danger-text`, damit „öffentlich“ nicht wie eine neutrale Option wirkt |
 | `.tf-note--ok` | grüne Gegenbox zu `.tf-note--danger` (Titel `--ok`, Fließtext normal) |
 | `.tf-privacy__grid/__item/__lead/__note` | Privatsphäre-Sektion: 2×2 Erklär-Karten (BotFather, Bots, geteilter Bot, BYOB) mit `--danger`/`--ok` Akzentkante |
 
@@ -323,11 +332,17 @@ JS-Vertrag zwischen `app.js` und `byob.js` (bewusst minimal, kein Framework):
   `{ok, status, data}`), sonst gilt der klassische `/api/send`-Weg.
   `describeTarget()` liefert Bot-Handle + Chat-ID der aktiven Session für
   die Senden-Bestätigung (`null` ohne Session).
-* `window.tfSendLabel` — optionaler Button-Text („Über eigenen Bot senden“),
-  den `app.js#setBusy` beim Zurücksetzen übernimmt.
-* `<body>`-Datatribute: `data-shared-bot` (Anzeige-Handle des geteilten
-  Bots) und `data-configured` (`"1"`/`"0"`) — daraus baut `app.js` den
-  Dialog-Zustand, wenn keine Session läuft.
+* Event `tf:botsessionchange` am `document` — `byob.js` dispatcht es bei
+  Session-Öffnung und -Ende. `app.js` ist der **einzige** Autor von
+  Button-Beschriftung (`#sendBtnLabel`), Versandweg-Hinweis (`#sendPathNote`)
+  und Dialog-Inhalt; `window.tfSendLabel` (bis 2.5.0) ist entfernt, weil zwei
+  Autoren am selben Text Drift erzeugt haben.
+* `<body>`-Datatribute (Vertrag mit `app.py::index()`): `data-shared-bot`
+  (Anzeige-Handle), `data-shared-send` (`"1"` = geteilter Bot im Browser
+  nutzbar), `data-shared-configured` (`"1"` = geteilter Bot existiert, evtl.
+  nur per API) und `data-byob-enabled`. `app.js#availablePaths()`/
+  `activePath()` leiten daraus die wählbaren Wege ab — die UI entscheidet
+  nie selbst über Konfiguration, sie spiegelt nur diese Flags.
 * Statusanzeigen teilen sich `#sendStatus` (Editor) und `#byobError` (BYOB).
 
 ## 9. Umgebungs-/Deployment-Hinweise

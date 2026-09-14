@@ -7,6 +7,17 @@
 > [`security/README.md`](security/README.md#audit-findings-status-security_auditmd-v200).
 > Die beiden letzten Restbefunde (Relay im Selbstbetrieb, Rest-Umgehungen der
 > Review-Statik) sind mit **v2.4.0** geschlossen.
+>
+> **Nachtrag zu K-2 (v2.6.0):** Der Endpunkt `/api/send` ist seit 2.6.0 wieder
+> vom Browser erreichbar — aber ausschließlich als *Opt-in des Betreibers* und
+> ohne die Relay-Eigenschaft: `TELEGRAM_FORMATTER_SHARED_WEB_SEND=1` (Standard)
+> wirkt nur zusammen mit gepinntem `TELEGRAM_CHAT_ID`, ein `chat_id`-Override
+> wird weiterhin mit 400 abgewiesen, anonyme Aufrufe brauchen
+> `"confirm_public": true` und unterliegen eigenen Längen-/Frequenzgrenzen.
+> Das im Audit kritisierte Muster (anonym → beliebiger Zielchat) bleibt
+> geschlossen; das verbleibende Restrisiko „fremde Besucher schreiben in den
+> eigenen, öffentlichen Chat“ ist dokumentiert und abschaltbar
+> ([`security/README.md`](security/README.md#geteilter-bot-im-browser-seit-260)).
 
 | | |
 |---|---|

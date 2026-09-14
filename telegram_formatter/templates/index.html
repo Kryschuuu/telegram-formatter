@@ -24,7 +24,10 @@
 </head>
 <body data-convert-url="{{ url_for('convert') }}" data-send-url="{{ url_for('send') }}"
       data-byob-base="{{ url_for('byob_session_open').rsplit('/', 1)[0] }}"
-      data-shared-bot="{{ shared_bot_handle }}" data-configured="{{ '1' if shared_send_available else '0' }}">
+      data-shared-bot="{{ shared_bot_handle }}"
+      data-shared-send="{{ '1' if shared_send_available else '0' }}"
+      data-shared-configured="{{ '1' if configured else '0' }}"
+      data-byob-enabled="{{ '1' if byob_enabled else '0' }}">
 
 <a class="tf-skip-link" href="#editor">Direkt zum Editor springen</a>
 
@@ -42,11 +45,11 @@
         <span class="tf-header__spacer"></span>
 
         <span id="status" class="tf-status {{ 'tf-status--ok' if shared_send_available else 'tf-status--warn' }}"
-              title="{{ 'Zielchat konfiguriert — Versand bereit' if shared_send_available else 'Shared-Versand nur API-authentifiziert; BYOB für den Browser' }}">
+              title="{{ ('Geteilter Bot ' ~ shared_bot_handle ~ ' ist im Browser freigeschaltet — senden bereit') if shared_send_available else ('Geteilter Bot konfiguriert, aber nur API-authentifiziert — TELEGRAM_FORMATTER_SHARED_WEB_SEND=1 schaltet den Browser-Versand frei' if configured else 'Kein TELEGRAM_BOT_TOKEN gesetzt — Konvertierung und Vorschau laufen, Versand über BYOB') }}">
             {%- if shared_send_available -%}
                 Bot konfiguriert — senden bereit
             {%- elif configured -%}
-                Shared-Bot konfiguriert — Browser nutzt BYOB
+                Shared-Bot nur per API — Browser: BYOB
             {%- else -%}
                 Kein Bot-Token gesetzt — nur Vorschau
             {%- endif -%}
@@ -116,13 +119,24 @@
                 <span id="top-warning-title">Wichtig — der geteilte Bot ist öffentlich!</span>
             </p>
             <p>
-                Solange keine eigene Session läuft, sendet der Standard-Bot
-                <strong>{{ shared_bot_handle }}</strong> in <strong>einen gemeinsamen Chat</strong>:
-                Alles, was du darüber sendest, sehen <strong>alle Besucher dieser Seite</strong> —
-                und jeder, der den Bot auf Telegram hinzufügt, kann den bisherigen Verlauf lesen.
-                Nutze den geteilten Bot nur für öffentliche Tests, <strong>niemals für private
-                Inhalte</strong>. Für private Nachrichten gehört dein eigener Bot in eine
-                <a href="#byob">Session</a> (unten, ca. 3 Minuten Einrichtung).
+                {%- if shared_send_available %}
+                    Ohne eigene Session sendet der Standard-Bot
+                    <strong>{{ shared_bot_handle }}</strong> in <strong>einen gemeinsamen Chat</strong>:
+                    Alles, was du darüber sendest, sehen <strong>alle Besucher dieser Seite</strong> —
+                    und jeder, der den Bot auf Telegram hinzufügt, kann den bisherigen Verlauf lesen.
+                    Nutze den geteilten Bot nur für öffentliche Tests, <strong>niemals für private
+                    Inhalte</strong>. Für private Nachrichten gehört dein eigener Bot in eine
+                    <a href="#byob">Session</a> (unten, ca. 3 Minuten Einrichtung) — ist eine Session
+                    aktiv, steht sie im Sende-Dialog als Weg an erster Stelle.
+                {%- else %}
+                    Diese Instanz hat einen geteilten Bot (<strong>{{ shared_bot_handle }}</strong>),
+                    der Browser darf ihn aber nicht nutzen: Shared-Versand ist auf ihr nur
+                    <strong>API-authentifiziert</strong> möglich. Senden kannst du hier über eine
+                    <a href="#byob">eigene Bot-Session</a> (unten, ca. 3 Minuten Einrichtung).
+                    Betreiber können den Browser-Versand mit
+                    <code>TELEGRAM_FORMATTER_SHARED_WEB_SEND=1</code> freigeben — danach gilt der
+                    Hinweis von oben: alles landet in einem <strong>öffentlichen</strong> Chat.
+                {%- endif %}
             </p>
         </aside>
     </div>
@@ -167,12 +181,17 @@
             </div>
             <p class="tf-card__hint">Tipp: Strg/Cmd + Enter öffnet die Senden-Bestätigung direkt aus dem Editor.</p>
 
-            <!-- ===== Aktiver Versandweg (byob.js hält den Text aktuell) ===== -->
+            <!-- ===== Aktiver Versandweg (app.js hält den Text aktuell) =====
+                 Serverseitiger Zustand = Fallback ohne JavaScript; mit JS setzt
+                 app.js den Text aus dem tatsächlich gewählten Weg. -->
             <p id="sendPathNote" class="tf-send-path">
-                {%- if configured -%}
+                {%- if shared_send_available -%}
                     ⚠ Versand über den geteilten Bot {{ shared_bot_handle }} — <strong>öffentlich
                     sichtbar für alle!</strong> Für private Inhalte: eigene Bot-Session starten
                     (Abschnitt „Eigener Bot — BYOB“ unten).
+                {%- elif configured -%}
+                    Geteilter Bot {{ shared_bot_handle }} ist nur per API erreichbar — senden über
+                    eine eigene Bot-Session (BYOB, Abschnitt unten) oder <code>botctl</code>.
                 {%- else -%}
                     Kein geteilter Bot konfiguriert — unten eine eigene Bot-Session (BYOB)
                     starten, um zu senden.
@@ -239,6 +258,40 @@
                 Deine Nachricht geht über genau diesen Bot an genau dieses Ziel —
                 bitte prüfen, dann senden oder abbrechen:
             </p>
+
+            <!-- ===== Versandweg wählen (app.js baut die Verfügbarkeiten) =====
+                 Ohne eigene Bot-Session ist der geteilte Bot {{ shared_bot_handle }}
+                 wählbar, sobald der Betreiber den Browser-Versand freigeschaltet
+                 hat (TELEGRAM_FORMATTER_SHARED_WEB_SEND). Läuft eine eigene
+                 Session, steht sie an erster Stelle und ist vorausgewählt. -->
+            <fieldset id="sendConfirmPaths" class="tf-send-paths" hidden>
+                <legend class="tf-send-paths__legend">Versandweg</legend>
+                <label class="tf-send-path-option" id="sendConfirmPathOwnRow" hidden>
+                    <input class="tf-send-path-option__input" type="radio" name="sendPath"
+                           value="own" id="sendConfirmPathOwn">
+                    <span class="tf-send-path-option__body">
+                        <span class="tf-send-path-option__title" id="sendConfirmPathOwnTitle">
+                            Eigener Bot
+                        </span>
+                        <span class="tf-send-path-option__meta" id="sendConfirmPathOwnMeta">
+                            private Bot-Session
+                        </span>
+                    </span>
+                </label>
+                <label class="tf-send-path-option tf-send-path-option--public" id="sendConfirmPathSharedRow" hidden>
+                    <input class="tf-send-path-option__input" type="radio" name="sendPath"
+                           value="shared" id="sendConfirmPathShared">
+                    <span class="tf-send-path-option__body">
+                        <span class="tf-send-path-option__title" id="sendConfirmPathSharedTitle">
+                            Geteilter Bot
+                        </span>
+                        <span class="tf-send-path-option__meta" id="sendConfirmPathSharedMeta">
+                            öffentlicher Chat dieser Seite
+                        </span>
+                    </span>
+                </label>
+            </fieldset>
+
             <dl class="tf-facts">
                 <div class="tf-facts__row">
                     <dt>Bot (Absender)</dt>
@@ -288,9 +341,28 @@
                     Kein Versandweg aktiv
                 </p>
                 <p>
-                    Auf dieser Instanz ist kein geteilter Bot konfiguriert — der Versand
-                    wird fehlschlagen. Starte unten eine eigene Bot-Session (BYOB), um
-                    senden zu können.
+                    {%- if configured -%}
+                        Der geteilte Bot dieser Instanz ist nur <strong>API-authentifiziert</strong>
+                        erreichbar — der Browser erhält das Operator-Secret nicht.
+                        {%- if byob_enabled %}
+                        Sende deshalb über eine <strong>eigene Bot-Session</strong> (BYOB), oder
+                        lass den Browser-Versand vom Betreiber über
+                        <code>TELEGRAM_FORMATTER_SHARED_WEB_SEND=1</code> freigeben.
+                        {%- else %}
+                        BYOB ist auf dieser Instanz deaktiviert — versenden kann hier nur,
+                        wer den Dienst selbst betreibt (<code>botctl</code> bzw. der
+                        <code>X-Auth-Token</code>-Aufruf von <code>/api/send</code>).
+                        {%- endif %}
+                    {%- elif byob_enabled -%}
+                        Auf dieser Instanz ist kein geteilter Bot konfiguriert — der Versand
+                        wird fehlschlagen. Starte unten eine eigene Bot-Session (BYOB), um
+                        senden zu können.
+                    {%- else -%}
+                        Kein Versandweg verfügbar: es ist kein geteilter Bot konfiguriert
+                        und BYOB ist auf dieser Instanz deaktiviert. Versenden kann nur,
+                        wer den Dienst selbst mit <code>TELEGRAM_BOT_TOKEN</code> betreibt
+                        oder <code>botctl</code> nutzt.
+                    {%- endif -%}
                 </p>
             </div>
 
@@ -594,8 +666,10 @@
                         Läuft eine eigene Bot-Session (Abschnitt BYOB), sendet der Button automatisch
                         über <strong>deinen</strong> Bot — privat. Ohne Session geht es über den
                         geteilten Bot in den <strong>öffentlichen</strong> Chat (Warnhinweis beachten!).
-                        Vor dem Absenden erscheint eine <strong>Bestätigung</strong>, die den konkreten
-                        Bot und das Ziel anzeigt — dort kannst du den Versand jederzeit noch abbrechen.
+                        Vor dem Absenden erscheint eine <strong>Bestätigung</strong>: Sie zeigt den
+                        konkreten Bot, das Ziel und — falls beides verfügbar — einen
+                        <strong>Versandweg</strong> zum Umschalten (eigener Bot = privat,
+                        geteilter Bot = öffentlich). Dort kannst du den Versand jederzeit abbrechen.
                         Der Status unter dem Button zeigt Erfolg oder Fehler, mit „Zurücksetzen“
                         lässt sich alles leeren.
                     </p>
@@ -732,6 +806,34 @@
                         sehen alles, was damit gesendet wurde — auch nachträglich, wenn sie
                         den Bot auf Telegram hinzufügen. Deshalb die Warnung im Abschnitt
                         „Versandweg“.
+                    </p>
+                </div>
+            </details>
+            <details class="tf-faq__item faq-item">
+                <summary>
+                    Warum zeigt der Sende-Dialog einen „Versandweg“ an — und was passiert beim Umschalten?
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </summary>
+                <div class="tf-faq__answer">
+                    <p>
+                        Es gibt zwei Wege, und sie unterscheiden sich in einem entscheidenden Punkt:
+                        <strong>wer mitliest</strong>. Der <strong>eigene Bot</strong> (BYOB-Session)
+                        sendet direkt in <strong>deinen</strong> Ziel-Chat — privat; ist eine Session
+                        aktiv, steht dieser Weg deshalb vorausgewählt oben. Der
+                        <strong>geteilte Bot</strong> <code>@mdtotxt_bot</code> sendet in den
+                        <strong>gemeinsamen Chat</strong> der Instanz — für alle Besucher sichtbar und
+                        nachträglich lesbar, auch von jedem, der den Bot zu Telegram hinzufügt.
+                        Ohne eigene Session ist er der angebotene Weg (gut für öffentliche Tests,
+                        nie für private Inhalte); beide Wege lassen sich im Dialog umschalten,
+                        Bot, Ziel und Warnhinweis werden dabei neu angezeigt.
+                    </p>
+                    <p>
+                        Zeigt der Dialog stattdessen „<em>Kein Versandweg aktiv</em>“, hat der
+                        Betreiber den Browser-Zugang zum geteilten Bot mit
+                        <code>TELEGRAM_FORMATTER_SHARED_WEB_SEND=0</code> geschlossen („nur per
+                        API“ in der Statuszeile oben). Dann bleibt im Browser nur BYOB —
+                        der geteilte Versandonderweg funktioniert weiterhin serverseitig über
+                        <code>X-Auth-Token</code> bzw. lokal über <code>botctl</code>.
                     </p>
                 </div>
             </details>

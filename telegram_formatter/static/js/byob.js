@@ -20,6 +20,12 @@
        app.js delegiert den Senden-Button daran (Fallback: geteilter Bot) und
        fragt describeTarget() für die Senden-Bestätigung ab (konkreter Bot +
        konkreter Ziel-Chat im Dialog).
+     * Der **Versandweg** (eigener Bot vs. geteilter Bot) gehört allein app.js:
+       Beschriftung (#sendBtnLabel), Hinweis (#sendPathNote) und die Weg-Auswahl
+       im Bestätigungsdialog leiten sich dort aus `tfByob.isActive()` ab. Dieses
+       Modul *meldet* Änderungen nur über das Event `tf:botsessionchange` am
+       `document` — zwei Autoren am selben Text waren die Quelle von Anzeige-
+       Drift; das frühere `window.tfSendLabel` ist deshalb entfernt (2.6.0).
      * DOM-Verträge (IDs) sind durch tests/test_frontend.py abgsichert;
        Funktionsabläufe tests/frontend/jsdom_spec.cjs.
    ===================================================================== */
@@ -45,7 +51,6 @@
     var closeBtn = document.getElementById("byobCloseBtn");
     var discoverBtn = document.getElementById("byobDiscoverBtn");
     var discoverResult = document.getElementById("byobDiscoverResult");
-    var sendPathNote = document.getElementById("sendPathNote");
 
     var base = (document.body.dataset.byobBase || "/api/byob").replace(/\/$/, "");
     var TOKEN_RE = /^\d{5,16}:[A-Za-z0-9_-]{35}$/;
@@ -94,33 +99,19 @@
         return m + ":" + (s < 10 ? "0" : "") + s + " Min.";
     }
 
-    function updateSendPath() {
-        if (!sendPathNote) {
-            return;
-        }
-        if (sessionId) {
-            sendPathNote.innerHTML = "";
-            sendPathNote.textContent =
-                "✓ Versand über deine eigene Bot-Session — privat (geteilter Bot wird nicht genutzt).";
-            sendPathNote.classList.add("is-private");
+    /**
+     * Gibt den Versandweg an app.js zurück (siehe Kopf): app.js baut daraus
+     * Button-Label, Hinweistext und — falls offen — den Dialog neu.
+     */
+    function notifySendPath() {
+        var event;
+        if (typeof window.CustomEvent === "function") {
+            event = new window.CustomEvent("tf:botsessionchange");
         } else {
-            sendPathNote.classList.remove("is-private");
-            // Ursprungstext (Warnung/Platzhalter) wiederherstellen: das
-            // Template liefert ihn serverseitig; ein Neuladen wäre übertrieben.
-            sendPathNote.hidden = false;
-            if (!sendPathNote.dataset.defaultHtml) {
-                sendPathNote.dataset.defaultHtml = sendPathNote.innerHTML;
-            } else {
-                sendPathNote.innerHTML = sendPathNote.dataset.defaultHtml;
-            }
+            event = document.createEvent("Event");
+            event.initEvent("tf:botsessionchange", false, false);
         }
-        window.tfSendLabel = sessionId ? "Über eigenen Bot senden" : undefined;
-        var label = document.getElementById("sendBtnLabel");
-        if (label && !document.getElementById("sendBtn").disabled) {
-            label.textContent = sessionId
-                ? "Über eigenen Bot senden"
-                : "An Telegram senden";
-        }
+        document.dispatchEvent(event);
     }
 
     function renderSessionStatus() {
@@ -174,7 +165,7 @@
         showActive(true);
         renderSessionStatus();
         startTimers();
-        updateSendPath();
+        notifySendPath();
         // Sicherheit: Token-Feld leeren — es wird nicht mehr gebraucht.
         tokenInput.value = "";
     }
@@ -188,7 +179,7 @@
         sessionChat = null;
         stopTimers();
         showActive(false);
-        updateSendPath();
+        notifySendPath();
         if (had) {
             setError(message || "Session beendet — Token wurde verworfen.", kind || "ok");
         }
@@ -364,5 +355,5 @@
     form.addEventListener("submit", openSession);
     closeBtn.addEventListener("click", closeSession);
     discoverBtn.addEventListener("click", discoverChats);
-    updateSendPath();
+    notifySendPath();
 })();

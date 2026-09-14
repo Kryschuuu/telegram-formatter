@@ -306,7 +306,7 @@ def test_faq_and_hooks_present(page: str):
         'id="sendConfirm"', 'id="sendConfirmOk"', 'id="sendConfirmCancel"',
         'id="privacy"',
         "data-convert-url", "data-send-url", "data-byob-base",
-        "data-shared-bot", "data-configured",
+        "data-shared-bot", "data-shared-send", "data-shared-configured", "data-byob-enabled",
     ):
         assert token in page, f"Funktions-Hook fehlt: {token}"
     assert page.count("<details") >= 11
@@ -315,12 +315,25 @@ def test_faq_and_hooks_present(page: str):
 
 
 def test_send_confirm_dialog_contract(page: str):
-    """Der Sende-Bestätigungsdialog zeigt Bot + Ziel + Vorschau und hat einen
-    echten Abbrechen-Weg (v2.3.0). Er ist im Markup versteckt (JS öffnet ihn)."""
+    """Der Sende-Bestätigungsdialog zeigt Weg + Bot + Ziel + Vorschau und hat
+    einen echten Abbrechen-Weg (v2.3.0, Weg-Auswahl seit v2.6.0). Er ist im
+    Markup versteckt (JS öffnet ihn)."""
     assert 'id="sendConfirm" class="tf-modal" hidden role="dialog" aria-modal="true"' in page
     for fact in ("sendConfirmBot", "sendConfirmTarget", "sendConfirmPreview",
                  "sendConfirmLength"):
         assert f'id="{fact}"' in page, f"Dialog-Fakt fehlt: {fact}"
+    # Versandweg-Auswahl: zwei Radios, beide im Markup versteckt — app.js
+    # schaltet sie je nach Verfügbarkeit (Session aktiv / Browser-Versand an).
+    assert 'id="sendConfirmPaths"' in page and "<fieldset" in page
+    for row in ("sendConfirmPathOwnRow", "sendConfirmPathSharedRow"):
+        assert f'id="{row}" hidden' in page, f"Weg-Zeile fehlt/steht nicht versteckt: {row}"
+    for radio in ("sendConfirmPathOwn", "sendConfirmPathShared"):
+        assert f'id="{radio}"' in page, f"Weg-Radio fehlt: {radio}"
+    for label in ("sendConfirmPathOwnTitle", "sendConfirmPathOwnMeta",
+                  "sendConfirmPathSharedTitle", "sendConfirmPathSharedMeta"):
+        assert f'id="{label}"' in page, f"Weg-Beschriftung fehlt: {label}"
+    assert 'name="sendPath"' in page
+    assert 'type="radio"' in page
     # Abbrechen als eigener Button …
     assert 'id="sendConfirmCancel"' in page and "Abbrechen" in page
     # … und alle drei Hinweis-Varianten, per Markup versteckt (JS schaltet).
@@ -494,3 +507,74 @@ def test_rendered_page_is_well_formed(page: str):
     checker.close()
     assert not checker.stack, f"NICHT geschlossene Tags: {checker.stack}"
     assert not checker.problems, "; ".join(checker.problems)
+
+
+# --------------------------------------------------------------------------- #
+# Versandweg-Matrix: welcher Bot darf im Browser gewählt werden? (v2.6.0)
+#
+# Die UI entscheidet ausschließlich über diese drei Attribute — sie sind damit
+# der Vertrag zwischen app.py und app.js. Fällt eine Variante weg, zeigt die
+# Oberfläche einen falschen Zustand (der ursprüngliche Bug: „Browser nutzt
+# BYOB“, obwohl @mdtotxt_bot konfiguriert war).
+# --------------------------------------------------------------------------- #
+def _render(monkeypatch, **flags) -> str:
+    """Seite mit konfigurierter Instanz rendern (Env-Flags per Argument)."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", flags.get("bot_token", "123456789:" + "A" * 35))
+    monkeypatch.setattr(app_module, "CHAT_ID", flags.get("chat_id", "-1001234567890"))
+    monkeypatch.setattr(app_module, "API_TOKEN", flags.get("api_token", ""))
+    monkeypatch.setattr(app_module, "SHARED_WEB_SEND", flags.get("shared_web_send", True))
+    monkeypatch.setattr(app_module, "BYOB_ENABLED", flags.get("byob_enabled", True))
+    app_module.app.config["TESTING"] = True
+    with app_module.app.test_client() as client:
+        return client.get("/").data.decode("utf-8")
+
+
+def test_body_flags_expose_all_three_send_path_states(page, monkeypatch):
+    """Freigeschaltet / nur API / kein geteilter Bot — je ein Attribut-Paar."""
+    enabled = _render(monkeypatch)
+    assert 'data-shared-send="1"' in enabled
+    assert 'data-shared-configured="1"' in enabled
+
+    api_only = _render(monkeypatch, shared_web_send=False, api_token="s3cret")
+    assert 'data-shared-send="0"' in api_only
+    assert 'data-shared-configured="1"' in api_only
+
+    bare = _render(monkeypatch, bot_token="", chat_id="")
+    assert 'data-shared-send="0"' in bare
+    assert 'data-shared-configured="0"' in bare
+    # Das alte, mehrdeutige data-configured ist weg (MIGRATION.md, 2.6.0).
+    for variant in (enabled, api_only, bare):
+        assert "data-configured=" not in variant
+
+
+def test_byob_flag_reaches_the_frontend(page, monkeypatch):
+    """BYOB aus ⇒ UI bietet keinen BYOB-Weg an und warnt nicht leer."""
+    off = _render(monkeypatch, byob_enabled=False)
+    assert 'data-byob-enabled="0"' in off
+    assert 'id="byobForm"' not in off
+    assert 'id="byobForm"' in _render(monkeypatch, byob_enabled=True)
+    # Kein Weg offen (kein geteilter Bot + BYOB aus) ⇒ der Hinweis nennt den
+    # echten Grund, statt zu einem Formular zu führen, das es nicht mehr gibt.
+    both_off = _render(monkeypatch, byob_enabled=False, bot_token="", chat_id="")
+    assert "Kein Versandweg verfügbar" in both_off
+    assert "BYOB ist auf dieser Instanz deaktiviert" in both_off
+    assert "botctl" in both_off  # Ausweg ist der lokale Weg, nicht das BYOB-Formular
+    # … und mit geteilter Bot-Konfiguration bleibt der API-only-Grund vorn.
+    api_only_no_byob = _render(monkeypatch, byob_enabled=False, shared_web_send=False)
+    assert "API-authentifiziert" in api_only_no_byob
+
+
+def test_api_only_state_explains_the_operator_switch(page, monkeypatch):
+    """Der Zustand, der den Bug ausgelöst hat, erklärt jetzt sich selbst."""
+    api_only = _render(monkeypatch, shared_web_send=False)
+    assert "TELEGRAM_FORMATTER_SHARED_WEB_SEND=1" in api_only
+    assert "nur per API" in api_only or "nur API-authentifiziert" in api_only
+    assert "Shared-Bot nur per API — Browser: BYOB" in api_only
+
+
+def test_shared_path_warning_names_the_shared_bot(page, monkeypatch):
+    """Ist der Browser-Versand offen, warnt die Seite konkret vor dem Chat."""
+    enabled = _render(monkeypatch)
+    assert "Wichtig — der geteilte Bot ist öffentlich!" in enabled
+    assert "@mdtotxt_bot" in enabled
+    assert "Kein Versandweg aktiv" in enabled  # Dialog-Notiz bleibt als Fallback da

@@ -18,7 +18,7 @@ Projekt **strukturell** durchsetzt (nicht nur dokumentarisch).
 | S6 | Vier-Augen-Prinzip | `ReviewTicket.is_approved`: ≥2 unabhängige Handles, ≥1 Maintainer; `CODEOWNERS` + Branch-Protection im Git-Flow | `tests/test_review.py`, GitHub-Settings |
 | S7 | Session-Ende hinterlässt keinen Zustand | `BotSession.close()` verwirft Token-Referenz; `deleteWebhook(drop_pending_updates=True)` als Pflicht im Referenz-Bot | `tests/test_session.py` |
 | S8 | Dependency-Register sauber | pip-audit (Laufzeit + Dev) pro PR **und** wöchentlich via cron; CI-Actions und Security-Tools sind commit-/versionsgepinnt | CI-Job `code-quality` |
-| S9 | Web-Versand autorisiert | `/api/send` ist ohne `TELEGRAM_FORMATTER_API_TOKEN` deaktiviert; BYOB verlangt Handle plus `session_secret` | `tests/test_app.py`, `tests/test_byob_web.py` |
+| S9 | Web-Versand nur über einen expliziten Zugang | `/api/send` braucht entweder den Operator-Token (`X-Auth-Token`) **oder** den freigeschalteten Browser-Versand (`TELEGRAM_FORMATTER_SHARED_WEB_SEND=1` + gepinnter Zielchat + `confirm_public`); ohne beides 503. BYOB verlangt Handle plus `session_secret` | `tests/test_app.py` (Zugangs-Matrix), `tests/test_byob_web.py` |
 
 ## Token-Bedarfsminimierung
 
@@ -41,6 +41,23 @@ Projekt **strukturell** durchsetzt (nicht nur dokumentarisch).
 - Web-Endpunkte nehmen nur `text`/`chat_id` entgegen; kein Pfad, keine
   URL, kein Template aus Nutkereingabe.
 
+## Geteilter Bot im Browser (seit 2.6.0)
+
+Der Browser-Versand ist ein **bewusster Opt-in des Betreibers**
+(`TELEGRAM_FORMATTER_SHARED_WEB_SEND`, Standard `1`) und kein Relais:
+
+* Zielchat ist immer der gepinnte `TELEGRAM_CHAT_ID`; ein `chat_id`-Override
+  im Request wird mit 400 abgewiesen (K-2 bleibt damit geschlossen).
+* Anonyme Aufrufe brauchen `"confirm_public": true` (öffentliche Sichtbarkeit
+  bestätigt), dürfen höchstens `SHARED_WEB_MAX_INPUT_CHARS` Zeichen senden und
+  werden pro IP (Standard 4/min) **und** instanzweit (Standard 30/min)
+  gedeckelt — der Bot soll nicht gegen die Telegram-Limits gelaufen werden.
+* Kein Pfad ohne Origin-Bindung: fremde `Origin`-Header bleiben 403; der
+  Operator-Token befreit `/api/send` aus der Pflicht, alle übrigen POSTs
+  bleiben pflichtig.
+* Restrisiko (vom Betreiber getragen): fremde Besucher schreiben in den
+  eigenen, öffentlichen Chat. Wer das nicht will, setzt den Schalter auf `0`.
+
 ## Bekannte Grenzen (bewusst hingenommen)
 
 - Python-Strings sind unveränderlich — „Secure Wipe“ von Token-Resten aus dem
@@ -62,7 +79,7 @@ Versionen, in denen sie behoben wurden. Befund-IDs wie im Bericht
 | Befund | Status | Behoben in | Anmerkung |
 |---|---|---|---|
 | K-1 · Token-Leak im Fehlerpfad | ✅ behoben | 2.1.0 | Fehlermeldungen ohne URL/Token |
-| K-2 · Open Relay (`/api/send`) | ✅ behoben | 2.1.0 + 2.4.0 + 2.5.0 | Chat-Pinning (2.1.0); Selbstbetrieb Fail-Closed (2.4.0); Shared-Versand ohne API-Token deaktiviert (2.5.0) |
+| K-2 · Open Relay (`/api/send`) | ✅ behoben | 2.1.0 + 2.4.0 + 2.5.0 | Chat-Pinning (2.1.0); Selbstbetrieb Fail-Closed (2.4.0); Shared-Versand ohne API-Token deaktiviert (2.5.0); seit 2.6.0 optionaler Browser-Versand — **nur** bei gepinntem Chat, mit Consent, Längen- und Frequenzgrenzen; `0` schaltet wieder komplett ab |
 | H-1 · Review-Gate-Umgehungen | ✅ behoben | 2.1.0 + 2.4.0 | Alias/Konstanten-Faltung (2.1.0); BK010=Blocker, `os.open`/`os.write`, `getattr` (2.4.0, R-2) |
 | H-2 · DoS ohne Limits | ✅ behoben | 2.1.0 | Body-/Input-/Rate-Limits |
 | H-3 · `response.text`-Leak | ✅ behoben | 2.1.0 | gekürzte Description |

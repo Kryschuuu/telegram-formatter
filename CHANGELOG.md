@@ -4,6 +4,120 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.6.0] - 2026-09-13
+
+**Der geteilte Bot `@mdtotxt_bot` ist im Browser wählbar — Versandweg-Auswahl
+statt BYOB-Zwang.** Vorher galt: „Shared-Bot konfiguriert — Browser nutzt
+BYOB“. Der Bestätigungsdialog nannte dann *keinen* Bot, und „An Telegram
+senden“ lief in eine Sackgasse, weil `POST /api/send` ausschließlich
+API-authentifiziert war (Härtung aus 2.5.0). Jetzt wählt der Dialog den Weg —
+eigener Bot (privat) oder geteilter Bot (öffentlich) — und die Seite erklärt
+den Ausnahmefall, statt ihn zu verschweigen.
+
+### Hinzugefügt
+
+- **Versandweg-Auswahl im Sende-Dialog** (`#sendConfirmPaths`, `static/js/app.js`):
+  Radiozeilen „@mein_bot — dein eigener Bot (privat)“ und „@mdtotxt_bot —
+  geteilter Bot dieser Seite (öffentlich)“. Verfügbare Wege = aktive
+  BYOB-Session + freigeschalteter Browser-Versand. Voreinstellung ist immer
+  der private Weg; die Wahl wird im offenen Dialog umgeschaltet und zieht
+  Button-Beschriftung, Fakten (Bot/Ziel), Vorschau und Hinweis unter dem
+  Button nach. Kein Weg verfügbar ⇒ „Senden“ ist deaktiviert und der Hinweis
+  erklärt warum.
+- **Browser-Versand für den geteilten Bot** (`TELEGRAM_FORMATTER_SHARED_WEB_SEND`,
+  Standard `1`): `POST /api/send` nimmt anonyme Aufrufe an, aber nur, wenn ein
+  Bot-Token **und** ein gepinnter `TELEGRAM_CHAT_ID` gesetzt sind
+  (`_shared_web_send_available()`). `0` stellt den API-only-Zustand von 2.5.0
+  wieder her.
+- **Missbrauchsgrenzen nur für anonyme Sendungen** (authentizierte
+  API-Aufrufe behalten `MAX_INPUT_CHARS`/`SENDS_PER_MINUTE`):
+  `TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE` (Standard 4 pro IP),
+  `TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE_TOTAL` (Standard 30
+  instanzweit, Bucket zählt über alle Adressen),
+  `TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS` (Standard 8000).
+- **`confirm_public` als Body-Feld:** anonyme Shared-Sendungen müssen die
+  öffentliche Sichtbarkeit bestätigen (`"confirm_public": true`), sonst 400.
+  Die Website füllt das Feld aus dem Bestätigungsdialog — die Zustimmung ist
+  damit an eine sichtbare Warnung gekoppelt und passiert nicht stillschweigend.
+- **Antwortfeld `via`** (`{bot, chat_id, public}`) auf `/api/send`: die UI
+  zeigt nach dem Versand, *worum* gesendet wurde („✅ 2 Nachricht(en) über
+  @mdtotxt_bot gesendet.“).
+- **Neue Status-Datatribute** am `<body>`: `data-shared-send` (vom Browser
+  nutzbar), `data-shared-configured` (geteilter Bot vorhanden),
+  `data-byob-enabled`. Sie sind der Vertrag zwischen `app.py` und `app.js`.
+- Tests: 13 neue Backend-Fälle in `tests/test_app.py` (Zugangs-Matrix,
+  Consent, Pinning, Längen-/Frequenzgrenzen, Guard-Ausnahme), 4 neue
+  Template-Verträge in `tests/test_frontend.py`, zwei neue jsdom-Fälle
+  (Weg-Wechsel bei aktiver Session; Zustand „nur per API“ als
+  Bug-Regressionstest).
+
+### Geändert
+
+- **Kopfzeilen-Status:** „Shared-Bot konfiguriert — Browser nutzt BYOB“ heißt
+  jetzt „Shared-Bot nur per API — Browser: BYOB“ und erscheint nur noch, wenn
+  der Browser-Versand tatsächlich abgeschaltet ist. Bei freigeschaltetem
+  Versand steht wie früher „Bot konfiguriert — senden bereit“.
+- **Top-Warnung und Versandweg-Hinweis** (`#sendPathNote`) unterscheiden
+  jetzt drei Zustände: geteilter Bot nutzbar (öffentliche Warnung), geteilter
+  Bot nur per API (inkl. Hinweis auf `TELEGRAM_FORMATTER_SHARED_WEB_SEND=1`),
+  kein geteilter Bot.
+- **Guard-Ausnahme:** ist `TELEGRAM_FORMATTER_API_TOKEN` gesetzt *und* der
+  Browser-Versand freigeschaltet, bleibt `POST /api/send` ohne `X-Auth-Token`
+  erreichbar (`_operator_token_required()`). Ohne diese Ausnahme wäre die
+  Kombination widersprüchlich — der Browser darf das Operator-Secret nie
+  erhalten. Alle anderen POST-Endpunkte (auch `/api/byob/*`) verlangen den
+  Header weiterhin.
+- **Schichtenclean-up im Frontend:** `app.js` ist alleiniger Autor von
+  Button-Label (`#sendBtnLabel`) und Versandweg-Hinweis; `byob.js` meldiert
+  Session-Wechsel nur noch über das Event `tf:botsessionchange`. Das
+  Zwischen-Duo `window.tfSendLabel` + `data-configured` ist entfernt.
+- Validierungs-Helfer in `app.py` entflochten: `_extract_request()` →
+  `_valid_text()` (mit Längenparameter), `_resolve_target_chat()` und
+  `_public_consent()`. `_rate_limited()` kann jetzt instanzweite Bucket
+  (`per_ip=False`).
+- **Deployment-Blueprint** (`render.yaml`): `TELEGRAM_FORMATTER_SHARED_WEB_SEND`
+  ist dokumentiert und auf `1` gesetzt.
+
+### Behoben
+
+- **Sackgasse „kein Versandweg“:** ohne eigene Bot-Session war der geteilte
+  Bot im Browser nicht erreichbar, obwohl die Seite einen konfiguriert hatte —
+  das Senden endete mit „Kein authentifizierter Versandweg aktiv“. Jetzt ist
+  `@mdtotxt_bot` wählbar und der Versand läuft über `/api/send`.
+- **Veraltete Dialog-Beschriftung:** der Blocker-Hinweis sprach von „kein
+  geteilter Bot konfiguriert“, obwohl einer vorhanden, aber API-only war. Die
+  Meldung nennt jetzt korrekt Konfiguration und Abschalt-Grund.
+- `test_app.py`: der Fail-Closed-Test für den Shared-Versand setzt
+  `SHARED_WEB_SEND=False` explizit (er prüft weiterhin 503 — jetzt als
+  Opt-out-Fall).
+
+### Sicherheit
+
+- Der gepinnte Zielchat bleibt die harte Grenze (Audit **K-2**): auch der
+  anonyme Browser-Weg kann `chat_id` nicht überschreiben (400) und
+  `/api/send` wird ohne Pinning nicht geöffnet (503, **R-1** unverändert).
+- `security/README.md`: Schutzziel **S9** neu gefasst („Shared-Versand nur
+  über einen der zwei expliziten Zugänge“) inkl. Test-Referenzen;
+  `SECURITY_AUDIT.md`-Befund K-2 um die Opt-in-Bedingung ergänzt.
+
+### Dokumentiert
+
+- `README.md` (neuer Abschnitt „Zwei Versandwege“, Konfigurationstabelle,
+  `curl`-Beispiele für beide Zugangsarten), `docs/DEPLOYMENT.md`
+  (Env-Tabelle + Betreiber-Entscheidung, Schritt 6), `docs/ARCHITECTURE.md`
+  (Routen + Client-Routing), `docs/DESIGN.md` (§8: neue CSS-Klassen,
+  Event-Vertrag, `data-*`-Matrix), `security/README.md` (Schutzziel S9, neuer
+  Abschnitt „Geteilter Bot im Browser (seit 2.6.0)“, K-2-Statuszeile),
+  `SECURITY_AUDIT.md` (Nachtrag zu K-2), `MIGRATION.md` §9 (Alt→Neu-Tabelle +
+  Umstellungs-Checkliste), Review-Bericht
+  [`peer-review/2026-09_SHARED-WEB-SEND.md`](peer-review/2026-09_SHARED-WEB-SEND.md).
+- Versionsnummer auf `2.6.0` (`telegram_formatter.__version__`, README-Badge).
+
+### Tests & Qualität
+
+- `pytest -q` → **325 passed** (306 vorher), `ruff check`, `bandit` (voll) und
+  `pip-audit` ohne Befund; jsdom-Suite inklusive zweier neuer Funktionsszenen.
+
 ## [2.5.0] - 2026-09-13
 
 **Security-Härtung für Web-Versand, BYOB-Session-Zugriff, Limits und CI.**
