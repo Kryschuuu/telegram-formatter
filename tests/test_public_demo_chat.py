@@ -55,13 +55,13 @@ def public_demo_client(monkeypatch):
 
 
 def test_index_warning_reflects_public_chat(public_demo_client):
-    """Die Top-Warnung ist für einen öffentlichen Chat wörtlich korrekt."""
+    """Die Top-Warnung ist für einen öffentlichen Kanal wörtlich korrekt."""
     page = public_demo_client.get("/").data.decode("utf-8")
     # Die Top-Warnung wird nur bei konfiguriertem Bot gerendert.
     assert 'class="tf-top-warning"' in page
-    # Öffentlicher Charakter des Zielchats ...
-    assert "öffentlichen" in page
-    assert "gemeinsamen Chat" in page
+    # Öffentlicher Charakter des Zielchats — seit v2.9.0 mit konkretem Namen.
+    assert "öffentlichen Telegram-Kanal" in page
+    assert "t.me/mdtotxt_bot_web" in page
     # ... und die korrekte Sichtbarkeitsaussage: jeder, der die Gruppe/Kanal
     # öffnet, liest den *gesamten* Verlauf (auch nachträglich).
     assert "Gruppe oder den Kanal" in page
@@ -71,14 +71,15 @@ def test_index_warning_reflects_public_chat(public_demo_client):
 
 
 def test_index_warning_absent_when_unconfigured(client):
-    """Ohne konfigurierten Bot gibt es keinen öffentlichen Chat und keine Top-Warnung."""
+    """Ohne konfigurierten Bot gibt es keinen öffentlichen Kanal und keine Top-Warnung."""
     page = client.get("/").data.decode("utf-8")
     assert 'class="tf-top-warning"' not in page
+    assert 'id="sharedChannel"' not in page
     assert "gesamten Verlauf" not in page
 
 
 def test_send_confirmation_warning_names_public_channel(client, monkeypatch):
-    """Auch der Sende-Bestätigungsdialog nennt den öffentlichen Chat korrekt."""
+    """Auch der Sende-Bestätigungsdialog nennt den öffentlichen Kanal korrekt."""
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:secretsecretsecretsecretsecretsec")
     monkeypatch.setattr(app_module, "CHAT_ID", "-100999")
     monkeypatch.setattr(app_module, "API_TOKEN", "")
@@ -86,7 +87,7 @@ def test_send_confirmation_warning_names_public_channel(client, monkeypatch):
     monkeypatch.setattr(app_module, "SHARED_BOT_HANDLE", "@mdtotxt_bot")
     app_module._RATE_HITS.clear()
     page = client.get("/").data.decode("utf-8")
-    assert "öffentlichen, gemeinsamen Chat" in page
+    assert "öffentlichen Telegram-Kanal" in page
     assert "Gruppe oder den Kanal" in page
 
 
@@ -110,5 +111,5 @@ def test_render_yaml_documents_public_supergroup_setup():
     assert "Supergroup" in text
 
 
-def test_version_bumped_to_2_8_0():
-    assert __version__ == "2.8.0"
+def test_version_bumped_to_2_9_0():
+    assert __version__ == "2.9.0"

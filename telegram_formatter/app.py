@@ -18,6 +18,20 @@ Zwei Versand-Wege (seit v2.2.0):
   jeder Besucher sieht alle bisher gesendeten Nachrichten und jeder, der die
   Gruppe/den Kanal öffnet, kann den gesamten Verlauf lesen. Die Oberfläche
   warnt entsprechend; für private Inhalte ist BYOB der empfohlene Weg.
+
+  **Offenlegung des Ziel-Kanals (seit v2.9.0):** Eine Warnung ohne Namen ist
+  keine Aufklärung. Deshalb benennt die Seite den konkreten Kanal — per
+  ``TELEGRAM_FORMATTER_SHARED_CHAT_URL`` (Standard
+  ``https://t.me/mdtotxt_bot_web``) — und die Aufbewahrungsdauer
+  (``TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS``, Standard ``30``; ``0`` =
+  keine Aussage). :func:`_shared_channel` baut daraus **ein** View-Model, das
+  die Oberfläche an allen Stellen (Top-Warnung, Kanal-Banner, Hinweis unter
+  dem Senden-Button, Bestätigungsdialog, Privatsphäre-Sektion, FAQ, Footer)
+  und die API im ``via``-Feld von ``/api/send`` verwendet. Betreiber müssen
+  sicherstellen, dass beide Werte zum tatsächlich gepinnten Chat passen — der
+  Code kann diese fremde Konfiguration nicht überprüfen und warnt nur, wenn
+  ein Kanal-Link ohne gepinnten ``TELEGRAM_CHAT_ID`` gesetzt ist.
+
   Zwei Zugangsarten (seit 2.6.0):
 
   - **Browser-Versand** (``TELEGRAM_FORMATTER_SHARED_WEB_SEND``, Standard
@@ -98,6 +112,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -106,6 +121,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from flask import Flask, jsonify, render_template, request
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from telegram_formatter import __version__
@@ -127,6 +143,50 @@ from telegram_formatter.sender import SendError, send_message
 from telegram_formatter.utils import build_messages
 
 app = Flask(__name__)
+LOGGER = logging.getLogger("telegram_formatter.app")
+
+
+# --------------------------------------------------------------------------- #
+# Umgebungsvariablen lesen — die *einzige* Stelle, die ENV-Werte parst.
+#
+# Ein Tippfehler im Dashboard (``6/min`` statt ``6``, ``-1`` statt ``1``) darf
+# den Dienst weder mit einem nackten ``ValueError``-Traceback starten lassen
+# noch stillschweigend ein Schutzlimit abschalten. Beide Helfer loggen deshalb
+# den Fallback und arbeiten mit dem dokumentierten Standardwert weiter.
+# --------------------------------------------------------------------------- #
+def _env_flag(name: str, default: bool = True) -> bool:
+    """Liest ein Boolean-Flag aus der Umgebung (``1/true/yes/on`` ⇒ wahr)."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:
+    """
+    Liest eine ganze Zahl aus der Umgebung — mit Grenzen und lautem Fallback.
+
+    * unparsbar (leer, Text, Komma) ⇒ ``default`` + Warnung,
+    * außerhalb ``[minimum, maximum]`` ⇒ ``default`` + Warnung.
+
+    ``0`` ist dabei ein *gültiger* Wert mit eigener Bedeutung (Limit aus bzw.
+    „keine Aussage“), solange ``minimum=0`` gilt — ein negativer Wert wäre
+    dagegen ein Tippfehler, der ein Limit unbemerkt deaktivieren würde.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        LOGGER.warning("app.env_invalid name=%s default=%s", name, default)
+        return default
+    if value < minimum or (maximum is not None and value > maximum):
+        LOGGER.warning("app.env_out_of_range name=%s default=%s", name, default)
+        return default
+    return value
+
+
 # Plattform-Proxys (Render & Co.) liefern die Client-IP im ``X-Forwarded-For``-
 # Header; ohne ProxyFix wäre ``request.remote_addr`` für ALLE Besucher die
 # Proxy-Adresse und die IP-Rate-Limits (convert/send/BYOB) fielen auf einen
@@ -136,12 +196,11 @@ app = Flask(__name__)
 # Forward-Header kann sie aufblähen, aber keine Sicherheitsgrenze überwinden.
 # Direct deployments must not trust a client-controlled forwarding header.
 # Proxy deployments set the exact trusted hop count explicitly.
-TRUSTED_PROXY_HOPS = int(os.environ.get("TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS", "0"))
+TRUSTED_PROXY_HOPS = _env_int("TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS", 0, minimum=0, maximum=16)
 if TRUSTED_PROXY_HOPS > 0:
     app.wsgi_app = ProxyFix(  # type: ignore[method-assign]
         app.wsgi_app, x_for=TRUSTED_PROXY_HOPS, x_proto=TRUSTED_PROXY_HOPS
     )
-LOGGER = logging.getLogger("telegram_formatter.app")
 
 # --- harte Grenzen ----------------------------------------------------------
 #: Maximale Request-Körpergröße in Bytes (413 darüber). Kein Flask-Default!
@@ -150,11 +209,11 @@ MAX_BODY_BYTES = 512 * 1024
 #: dieses Limit liest Flask unbegrenzt in den RAM).
 app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
 #: Maximale Textlänge je Konvertierung/Versand (bewusst wie SessionConfig).
-MAX_INPUT_CHARS = int(os.environ.get("TELEGRAM_FORMATTER_MAX_INPUT_CHARS", "100000"))
+MAX_INPUT_CHARS = _env_int("TELEGRAM_FORMATTER_MAX_INPUT_CHARS", 100_000, minimum=1)
 #: Sendungen pro Minute und IP (Telegram-Limits + DoS-Schutz für die Instanz).
-SENDS_PER_MINUTE = int(os.environ.get("TELEGRAM_FORMATTER_SENDS_PER_MINUTE", "6"))
+SENDS_PER_MINUTE = _env_int("TELEGRAM_FORMATTER_SENDS_PER_MINUTE", 6)
 #: Konvertierungen pro Minute und IP (Live-Preview mit Debounce braucht Luft).
-CONVERTS_PER_MINUTE = int(os.environ.get("TELEGRAM_FORMATTER_CONVERTS_PER_MINUTE", "60"))
+CONVERTS_PER_MINUTE = _env_int("TELEGRAM_FORMATTER_CONVERTS_PER_MINUTE", 60)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = (os.environ.get("TELEGRAM_CHAT_ID", "") or "").strip()
@@ -163,14 +222,6 @@ CHAT_ID = (os.environ.get("TELEGRAM_CHAT_ID", "") or "").strip()
 #: AUSSER im Selbstbetrieb (BOT_TOKEN ohne CHAT_ID): dort ist er Pflicht,
 #: sonst wäre ``/api/send`` ein offener Relay (R-1, Fail-Closed).
 API_TOKEN = os.environ.get("TELEGRAM_FORMATTER_API_TOKEN", "")
-
-
-def _env_flag(name: str, default: bool = True) -> bool:
-    """Liest ein Boolean-Flag aus der Umgebung (``1/true/yes/on`` ⇒ wahr)."""
-    raw = os.environ.get(name)
-    if raw is None or not raw.strip():
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 # --- Shared-Versand im Browser (seit 2.6.0 explizit konfigurierbar) ---------- #
@@ -183,21 +234,18 @@ SHARED_WEB_SEND = _env_flag("TELEGRAM_FORMATTER_SHARED_WEB_SEND", True)
 #: Anonyme Browser-Sendungen pro Minute und IP. Bewusst enger als
 #: ``SENDS_PER_MINUTE`` für authentifizierte API-Aufrufe: der geteilte Chat
 #: ist öffentlich, also ist Spam hier der Hauptfall, den es zu dämpfen gilt.
-SHARED_WEB_SENDS_PER_MINUTE = int(
-    os.environ.get("TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE", "4")
-)
+SHARED_WEB_SENDS_PER_MINUTE = _env_int("TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE", 4)
 #: Anonyme Browser-Sendungen pro Minute **instanzweit** (alle IPs zusammen).
 #: Bremst Flash-artige Last von vielen Adressen, bevor Telegram den geteilten
 #: Bot wegen Rate-Limits drosselt oder sperrt.
-SHARED_WEB_SENDS_PER_MINUTE_TOTAL = int(
-    os.environ.get("TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE_TOTAL", "30")
+SHARED_WEB_SENDS_PER_MINUTE_TOTAL = _env_int(
+    "TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE_TOTAL", 30
 )
 #: Längenkappe für anonyme Browser-Sendungen (authentizierte Aufrufe behalten
 #: ``MAX_INPUT_CHARS``). Ein geteilter Chat soll keine 100k-Zeichen-Wände
 #: bekommen — lange Texte gehören in den privaten BYOB-Weg.
-SHARED_WEB_MAX_INPUT_CHARS = int(
-    os.environ.get("TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS", "8000")
-)
+SHARED_WEB_MAX_INPUT_CHARS = _env_int("TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS", 8000,
+                                      minimum=1)
 #: Fehlerantwort, wenn kein Shared-Zugang offen ist (weder API noch Browser).
 SHARED_SEND_DISABLED = (
     "Shared-Versand deaktiviert: nötig ist entweder der Operator-Token "
@@ -223,6 +271,122 @@ def _shared_web_send_available() -> bool:
     return bool(SHARED_WEB_SEND and BOT_TOKEN and CHAT_ID)
 
 
+# --------------------------------------------------------------------------- #
+# Offenlegung des geteilten Ziel-Kanals (seit v2.9.0)
+#
+# Wer ohne eigenen Bot sendet, postet in den **einen** öffentlichen Kanal des
+# Betreibers. Diese Tatsache stand bisher nur als Warnung („ein öffentlicher,
+# gemeinsamer Chat“) auf der Seite — ohne Namen und ohne Link. Damit ist die
+# Aufklärung unvollständig: Besuchende können nicht prüfen, wo ihre Nachricht
+# tatsächlich landet. Deshalb wird der Kanal hier als Konfiguration geführt und
+# von der Oberfläche an mehreren Stellen benannt und verlinkt.
+#
+# Vertragsregel für Betreiber: ``SHARED_CHAT_URL`` muss zu ``TELEGRAM_CHAT_ID``
+# gehören (derselbe Chat!) und ``SHARED_RETENTION_DAYS`` muss der
+# Auto-Löschen-Einstellung dieses Kanals entsprechen. Beides sind
+# *Aussagen über fremde Konfiguration*, die der Code nicht nachprüfen kann —
+# ein falscher Wert wäre eine falsche Zusage an die Nutzenden. ``0`` Tage
+# bedeutet deshalb bewusst „keine Aussage“, nicht „sofort gelöscht“.
+# --------------------------------------------------------------------------- #
+#: Anzeige-Name des geteilten Bots (muss zu ``TELEGRAM_BOT_TOKEN`` passen).
+SHARED_BOT_HANDLE = (
+    os.environ.get("TELEGRAM_FORMATTER_SHARED_BOT_HANDLE", "@mdtotxt_bot")
+    or "@mdtotxt_bot"
+).strip()
+#: Standard-Kanal der öffentlichen Demo-Instanz.
+DEFAULT_SHARED_CHAT_URL = "https://t.me/mdtotxt_bot_web"
+#: Öffentlich erreichbare Hosts für Kanal-/Gruppen-Links.
+_TELEGRAM_LINK_HOSTS = frozenset({"t.me", "telegram.me", "telegram.dog"})
+#: ``@handle`` bzw. ``t.me/<handle>`` — Telegram-Benutzernamen sind auf
+#: 5–32 Zeichen aus ``[A-Za-z0-9_]`` beschränkt.
+_TELEGRAM_HANDLE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
+
+
+def normalize_public_chat_url(raw: str | None) -> str | None:
+    """
+    Bringt eine Kanal-Angabe auf die kanonische Form ``https://t.me/<handle>``.
+
+    Akzeptiert werden ``https://t.me/<handle>``, ``t.me/<handle>`` und das
+    nackte ``@<handle>``. Alles andere — fremde Domains, andere Schemata
+    (``javascript:``, ``data:``), private Einladelinks (``t.me/+…``) und
+    numerische Privat-Kanäle (``t.me/c/…``) — ergibt ``None``: Die UI zeigt
+    dann keinen Link, und ein Konfigurationswert kann niemals als Klickziel
+    auf eine fremde Seite missbraucht werden.
+    """
+    if not raw:
+        return None
+    candidate = raw.strip()
+    if not candidate:
+        return None
+    if candidate.startswith("@"):
+        handle = candidate[1:]
+        return f"https://t.me/{handle}" if _TELEGRAM_HANDLE_PATTERN.match(handle) else None
+    try:
+        parts = urlparse(candidate if "//" in candidate else f"https://{candidate}")
+    except ValueError:  # pragma: no cover - urlparse wirft praktisch nie
+        return None
+    if parts.scheme != "https" or (parts.hostname or "") not in _TELEGRAM_LINK_HOSTS:
+        return None
+    handle = (parts.path or "").strip("/")
+    # Genau ein Pfadsegment, kein Query/Fragment: kein Einladelink, kein
+    # Deep-Link auf eine einzelne Nachricht.
+    if "/" in handle or parts.query or parts.fragment:
+        return None
+    if not _TELEGRAM_HANDLE_PATTERN.match(handle):
+        return None
+    return f"https://t.me/{handle}"
+
+
+#: Öffentlicher Link zum Zielchat des geteilten Bots (``None`` ⇒ kein Link).
+SHARED_CHAT_URL = normalize_public_chat_url(
+    os.environ.get("TELEGRAM_FORMATTER_SHARED_CHAT_URL", DEFAULT_SHARED_CHAT_URL)
+)
+#: Nach so vielen Tagen löscht der Betreiber die Nachrichten im geteilten Kanal
+#: (Telegram: „Nachrichten automatisch löschen“). ``0`` ⇒ keine Aussage.
+SHARED_RETENTION_DAYS = _env_int("TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS", 30, minimum=0)
+
+
+def _retention_sentence(days: int) -> str | None:
+    """Menschenlesbarer Satz zur Aufbewahrungsdauer — oder ``None`` (keine Aussage)."""
+    if days <= 0:
+        return None
+    unit = "Tag" if days == 1 else "Tagen"
+    return f"Neue Nachrichten werden automatisch nach {days} {unit} gelöscht."
+
+
+def _shared_channel() -> dict:
+    """
+    View-Model des geteilten Ziel-Kanals — **eine** Quelle für UI und API.
+
+    Wird bei jedem Request neu gebaut (nicht beim Import), damit Tests und
+    Betreiber-Konfiguration dieselben Modul-Globals überschreiben können.
+    ``label`` ist die kurze Anzeigeform ohne Schema (``t.me/mdtotxt_bot_web``).
+
+    Ohne gepinnten ``TELEGRAM_CHAT_ID`` sendet diese Instanz gar nicht in den
+    konfigurierten Kanal — dann wird auch keiner behauptet (``url``/
+    ``retention_*`` sind ``None``). Eine Kanal-Angabe ohne Zielchat wäre eine
+    falsche Zusage an die Besuchenden.
+    """
+    url = SHARED_CHAT_URL if CHAT_ID else None
+    days = SHARED_RETENTION_DAYS if url else 0
+    return {
+        "bot": SHARED_BOT_HANDLE,
+        "url": url,
+        "label": url.removeprefix("https://") if url else SHARED_BOT_HANDLE.lstrip("@"),
+        "retention_days": days or None,
+        "retention_text": _retention_sentence(days),
+    }
+
+
+# Konsistenz-Check beim Start: Ein Kanal-Link ohne gepinnten Zielchat wäre eine
+# Aussage über einen Chat, in den diese Instanz gar nicht sendet.
+if SHARED_CHAT_URL and not CHAT_ID:
+    LOGGER.warning(
+        "app.shared_channel_unpinned: TELEGRAM_FORMATTER_SHARED_CHAT_URL ist "
+        "gesetzt, aber TELEGRAM_CHAT_ID fehlt — die Kanal-Angabe auf der Seite "
+        "beschreibt keinen tatsächlich genutzten Zielchat."
+    )
+
 # Fail-Closed-Hinweis beim Start: BOT_TOKEN ohne CHAT_ID und ohne API_TOKEN
 # würde den Versand anonymisieren — genau das verbietet R-1. Der
 # Browser-Versand greift hier nicht, er verlangt den gepinnten Zielchat.
@@ -239,26 +403,17 @@ if BOT_TOKEN and not CHAT_ID and not API_TOKEN:
 #: Tokens über ihre Instanz relayen wollen.)
 BYOB_ENABLED = _env_flag("TELEGRAM_FORMATTER_BYOB_ENABLED", True)
 #: Session-Öffnungen (getMe-Verifikation) pro Minute und IP.
-BYOB_SESSIONS_PER_MINUTE = int(
-    os.environ.get("TELEGRAM_FORMATTER_BYOB_SESSIONS_PER_MINUTE", "3")
-)
+BYOB_SESSIONS_PER_MINUTE = _env_int("TELEGRAM_FORMATTER_BYOB_SESSIONS_PER_MINUTE", 3)
 #: Chat-ID-Erkennungen (getUpdates) pro Minute und IP.
-BYOB_DISCOVER_PER_MINUTE = int(
-    os.environ.get("TELEGRAM_FORMATTER_BYOB_DISCOVER_PER_MINUTE", "3")
-)
+BYOB_DISCOVER_PER_MINUTE = _env_int("TELEGRAM_FORMATTER_BYOB_DISCOVER_PER_MINUTE", 3)
 #: Sendungen über BYOB-Sessions pro Minute und IP (zusätzlich zum
 #: Session-eigenen Limit von ``max_messages_per_minute``).
-BYOB_SENDS_PER_MINUTE = int(os.environ.get("TELEGRAM_FORMATTER_BYOB_SENDS_PER_MINUTE", "6"))
+BYOB_SENDS_PER_MINUTE = _env_int("TELEGRAM_FORMATTER_BYOB_SENDS_PER_MINUTE", 6)
 #: Harte Lebensdauer einer BYOB-Web-Session (Sekunden) — entspricht
 #: ``SessionConfig.ttl_seconds``; danach ist das Token verworfen.
-BYOB_TTL_SECONDS = float(os.environ.get("TELEGRAM_FORMATTER_BYOB_TTL_SECONDS", "1800"))
+BYOB_TTL_SECONDS = _env_int("TELEGRAM_FORMATTER_BYOB_TTL_SECONDS", 1800, minimum=60)
 #: Leerlauf-Timeout einer BYOB-Web-Session (Sekunden).
-BYOB_IDLE_SECONDS = float(os.environ.get("TELEGRAM_FORMATTER_BYOB_IDLE_SECONDS", "600"))
-#: Anzeige-Name des geteilten Bots für die Privatsphäre-Warnung im UI.
-SHARED_BOT_HANDLE = (
-    os.environ.get("TELEGRAM_FORMATTER_SHARED_BOT_HANDLE", "@mdtotxt_bot")
-    or "@mdtotxt_bot"
-).strip()
+BYOB_IDLE_SECONDS = _env_int("TELEGRAM_FORMATTER_BYOB_IDLE_SECONDS", 600, minimum=30)
 
 #: RAM-Schutz gegen Session-Flooding: Obergrenzen aktiver Sessions insgesamt
 #: bzw. pro Absender-IP. Bewusst Konstanten (kein ENV): sie schützen den
@@ -301,8 +456,28 @@ def _valid_chat_id(raw: object) -> str | None:
 # --------------------------------------------------------------------------- #
 # Frequenzbegrenzung pro IP (In-Process; Multi-Worker: grobe Näherung)
 # --------------------------------------------------------------------------- #
-_RATE_LOCK = threading.Lock()
+#: Re-entrant, damit :func:`_rate_limited` die Aufräumfunktion unter derselben
+#: Sperre nutzen kann (kein zweiter Lock-Erwerb, keine Race-Fenster).
+_RATE_LOCK = threading.RLock()
 _RATE_HITS: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+#: Ab dieser Zahl von Eimern räumt der nächste Zählvorgang auf. Die Eimer sind
+#: klein (eine ``deque`` pro IP und Endpunkt), der Schwellwert macht das
+#: Aufräumen amortisiert statt pro Request.
+_RATE_PRUNE_THRESHOLD = 4096
+
+
+def _prune_rate_buckets() -> int:
+    """Wirft leere Rate-Limit-Eimer raus; liefert die Zahl der entfernten Keys.
+
+    Ohne diesen Schritt bliebe für **jede** je gesehene Client-Adresse ein
+    Eintrag im Dict stehen, auch wenn seine ``deque`` längst leer ist — in
+    einem langlebigen Prozess wächst ``_RATE_HITS`` damit unbegrenzt.
+    """
+    with _RATE_LOCK:
+        stale = [key for key, hits in _RATE_HITS.items() if not hits]
+        for key in stale:
+            del _RATE_HITS[key]
+        return len(stale)
 
 
 def _rate_limited(
@@ -318,7 +493,8 @@ def _rate_limited(
     ``per_ip=True`` zählt pro Client-Adresse (der Normalfall). Mit
     ``per_ip=False`` zählt der Zähler **instanzweit** — das braucht der
     anonyme Browser-Versand, damit viele Adressen zusammen den geteilten Bot
-    nicht gegen die Telegram-Rate-Limits laufen lassen.
+    nicht gegen die Telegram-Rate-Limits laufen lassen. ``limit <= 0``
+    schaltet das Limit ab (Test-/Selbstbetrieb).
     """
     if limit <= 0:
         return False
@@ -326,6 +502,8 @@ def _rate_limited(
     key = (bucket, who)
     now = time.monotonic()
     with _RATE_LOCK:
+        if len(_RATE_HITS) > _RATE_PRUNE_THRESHOLD:
+            _prune_rate_buckets()
         hits = _RATE_HITS[key]
         while hits and hits[0] < now - window_seconds:
             hits.popleft()
@@ -602,6 +780,34 @@ def _too_large(_exc):
     return jsonify({"error": f"Anfrage zu groß (max. {MAX_BODY_BYTES // 1024} KiB)."}), 413
 
 
+#: Feste, HTML-freie Meldungen für HTTP-Status, die keine eigene Route haben.
+#: Werkzeug-Defaults sind HTML-Absätze — die gehören nicht in eine JSON-API.
+_HTTP_ERROR_TEXTS = {
+    400: "Ungültige Anfrage.",
+    408: "Zeitüberschreitung der Anfrage.",
+    414: "Anfrage-URI zu lang.",
+    429: "Zu viele Anfragen — bitte kurz warten.",
+    503: "Dienst vorübergehend nicht verfügbar.",
+}
+
+
+@app.errorhandler(HTTPException)
+def _http_error(exc: HTTPException):
+    """
+    HTTP-Fehler bleiben HTTP-Fehler: Statuscode + kurze JSON-Meldung.
+
+    Ohne diesen Handler fängt der allgemeine ``Exception``-Handler **jede**
+    ``HTTPException`` ohne eigenen Code-Handler ab (``abort(400)``, 408, 414,
+    503 …) und macht daraus eine 500 — ein falscher Status für Clients und
+    eine irreführende „interner Fehler"-Warnung im Log. Flask wählt den
+    spezifischsten Handler: 404/405/413 unten behalten ihre eigenen Texte.
+    """
+    code = exc.code or 500
+    if code >= 500:
+        LOGGER.warning("app.http_error status=%s error=%s", code, exc.__class__.__name__)
+    return jsonify({"error": _HTTP_ERROR_TEXTS.get(code, f"HTTP-Fehler {code}.")}), code
+
+
 @app.errorhandler(Exception)
 def _unhandled(exc):
     # Nur Klassenname ins Log-Event (Redaction aktiv); keine Details an Clients.
@@ -699,7 +905,10 @@ def index() -> str:
         configured=bool(BOT_TOKEN and CHAT_ID),
         shared_send_available=_shared_web_send_available(),
         byob_enabled=BYOB_ENABLED,
-        shared_bot_handle=SHARED_BOT_HANDLE,
+        # Ein View-Model für Bot-Name, Kanal-Link und Aufbewahrungsdauer — die
+        # Seite benennt den Ziel-Kanal damit an jeder Stelle gleich
+        # (:func:`_shared_channel`).
+        channel=_shared_channel(),
         version=__version__,
     )
 
@@ -810,12 +1019,22 @@ def send():
             return jsonify(payload), status
         results.append({"kind": m.kind, "status": "ok"})
 
+    channel = _shared_channel()
     return jsonify({
         "sent": len(results),
         "results": results,
-        # Reine Anzeigeinformation für die UI: worüber wurde gesendet?
-        # Enthält keine Secrets und keine Chat-Details außer dem Ziel.
-        "via": {"bot": SHARED_BOT_HANDLE, "chat_id": chat_id, "public": not authed},
+        # Reine Anzeigeinformation für die UI: worüber und wohin wurde
+        # gesendet? Enthält keine Secrets — der Kanal ist ohnehin öffentlich,
+        # und die Aufbewahrungsdauer gehört zur Offenlegung des geteilten Wegs.
+        # Dieselbe Quelle wie die Seite (:func:`_shared_channel`), damit API
+        # und UI nie unterschiedliche Ziele behaupten.
+        "via": {
+            "bot": channel["bot"],
+            "chat_id": chat_id,
+            "chat_url": channel["url"],
+            "retention_days": channel["retention_days"],
+            "public": not authed,
+        },
     })
 
 

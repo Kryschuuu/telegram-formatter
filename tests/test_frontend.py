@@ -307,6 +307,12 @@ def test_faq_and_hooks_present(page: str):
         'id="privacy"',
         "data-convert-url", "data-send-url", "data-byob-base",
         "data-shared-bot", "data-shared-send", "data-shared-configured", "data-byob-enabled",
+        # Kanal-Offenlegung (v2.9.0): app.js liest Ziel-Kanal und Löschsatz
+        # ausschließlich aus diesen Attributen — nie aus eigenen Konstanten.
+        # Diese Hooks sind unabhängig von der Bot-Konfiguration immer da.
+        "data-shared-chat-url", "data-shared-chat-label", "data-shared-retention-text",
+        'id="sendConfirmChannelRow"', 'id="sendConfirmChannelLink"',
+        'id="sendConfirmChannelNote"',
     ):
         assert token in page, f"Funktions-Hook fehlt: {token}"
     assert page.count("<details") >= 11
@@ -578,3 +584,17 @@ def test_shared_path_warning_names_the_shared_bot(page, monkeypatch):
     assert "Wichtig — der geteilte Bot ist öffentlich!" in enabled
     assert "@mdtotxt_bot" in enabled
     assert "Kein Versandweg aktiv" in enabled  # Dialog-Notiz bleibt als Fallback da
+
+
+def test_channel_banner_only_with_configured_shared_bot(page, monkeypatch):
+    """Das Kanal-Banner im Hero gehört zur Konfiguration, nicht zum Grundgerüst.
+
+    Ohne geteilten Bot sendet diese Instanz nirgendwohin — ein Kanal-Banner
+    wäre dann eine falsche Aussage (Details: tests/test_shared_channel.py).
+    """
+    enabled = _render(monkeypatch)
+    assert 'id="sharedChannel"' in enabled
+    assert 'class="tf-channel"' in enabled
+    # Direkt unter der Überschrift, vor dem Editor — nicht irgendwo unten.
+    assert enabled.index('id="sharedChannel"') < enabled.index('id="editor"')
+    assert 'id="sharedChannel"' not in _render(monkeypatch, bot_token="", chat_id="")

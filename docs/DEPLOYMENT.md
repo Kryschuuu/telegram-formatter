@@ -87,6 +87,8 @@ Unter **Environment → Environment Variables** diese Einträge hinzufügen:
 | `TELEGRAM_FORMATTER_BYOB_ENABLED` | (optional, seit v2.2.0) `0` ⇒ BYOB-Websessions & UI aus (Standard: an) |
 | `TELEGRAM_FORMATTER_BYOB_TTL_SECONDS` / `…_IDLE_SECONDS` | (optional) Lebensdauer/Leerlauf der Web-Sessions (Standard 1800/600) |
 | `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` | (optional) Anzeige-Name des geteilten Bots in der Privatsphäre-Warnung (Standard `@mdtotxt_bot`) |
+| `TELEGRAM_FORMATTER_SHARED_CHAT_URL` | (seit v2.9.0) Öffentlicher Link zum Zielchat, z. B. `https://t.me/mdtotxt_bot_web`. Die Seite nennt diesen Kanal an sieben Stellen (Top-Warnung, Kanal-Banner, Senden-Hinweis, Bestätigungsdialog, Privatsphäre, FAQ, Footer) und verlinkt ihn. Akzeptiert: `https://t.me/<handle>`, `t.me/<handle>`, `@<handle>` — alles andere wird verworfen (dann zeigt die UI keinen Link). **Muss** zu `TELEGRAM_CHAT_ID` gehören |
+| `TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS` | (seit v2.9.0) Tage, nach denen der Kanal Beiträge automatisch löscht (Standard `30` = ein Monat). **Muss** der Telegram-Einstellung „Nachrichten automatisch löschen" dieses Kanals entsprechen. `0` ⇒ die Seite macht keine Lösch-Aussage |
 | `PYTHON_VERSION` | (optional) z. B. `3.11` |
 
 > **Privacy-Hinweis:** Ist `TELEGRAM_BOT_TOKEN` **und** `TELEGRAM_CHAT_ID`
@@ -112,11 +114,23 @@ Postfach ruhig bleibt, richte den Demo-Zielchat als **öffentlichen** Chat ein:
 1. **Gruppe oder Kanal anlegen** und `@mdtotxt_bot` hinzufügen. Bei einem
    **Kanal** braucht der Bot das Recht *Nachrichten senden* (Admin-Recht
    *Post Messages*). Für die Demo empfiehlt sich eine **public Supergroup**
-   (nicht geheim) — dann ist der Verlauf auch für neue Leser einsehbar; bei
-   einem nicht-öffentlichen Chat sieht den Verlauf nur, wer Mitglied ist.
-2. **Eine Nachricht dort schreiben** und die Chat-ID ablesen (negativ, meist
+   oder ein **öffentlicher Kanal** (nicht geheim) — dann ist der Verlauf auch
+   für neue Leser einsehbar; bei einem nicht-öffentlichen Chat sieht den
+   Verlauf nur, wer Mitglied ist.
+2. **Öffentlichen Link festlegen** (Kanal/Gruppe → *Verwalten* → *Öffentlicher
+   Link*, z. B. `t.me/mdtotxt_bot_web`). Dieser Link wird als
+   `TELEGRAM_FORMATTER_SHARED_CHAT_URL` eingetragen — ohne ihn kann die Seite
+   den Ziel-Kanal nur anonym als „öffentlichen Chat" ankündigen.
+3. **Automatisches Löschen aktivieren** (Kanal/Gruppe → *Automatisch löschen*
+   → z. B. *1 Monat*) und denselben Wert als
+   `TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS` eintragen (`30`). Die Seite
+   verspricht Besuchenden genau diese Frist — stimmt der Wert nicht, ist die
+   Aussage falsch. Wer keine Löschung einrichtet, setzt `0`: Dann nennt die
+   Seite keine Frist und die FAQ sagt ausdrücklich, dass Beiträge dauerhaft
+   öffentlich bleiben.
+4. **Eine Nachricht dort schreiben** und die Chat-ID ablesen (negativ, meist
    `-100…`) — z. B. über die `/getUpdates`-Antwort oder `@userinfobot`.
-3. **`TELEGRAM_CHAT_ID` auf diese ID setzen** (siehe Variable oben) → der
+5. **`TELEGRAM_CHAT_ID` auf diese ID setzen** (siehe Variable oben) → der
    Dienst deployt neu und pinnt fortan diesen Chat.
 
 Der geteilte Bot `@mdtotxt_bot` (bzw. der in
@@ -124,6 +138,14 @@ Der geteilte Bot `@mdtotxt_bot` (bzw. der in
 Chat sein: sonst wäre die öffentliche Sichtbarkeit nur vorgetäuscht. Mit einer
 public Supergroup ist die Warnung wahr und dein Postfach (DM) bleibt für die
 Demo unberührt.
+
+> **Konsistenzpflicht (v2.9.0):** `TELEGRAM_CHAT_ID`,
+> `TELEGRAM_FORMATTER_SHARED_CHAT_URL` und
+> `TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS` beschreiben **denselben** Chat.
+> Der Code kann das nicht überprüfen (er kennt nur die numerische ID) und
+> loggt beim Start lediglich eine Warnung, wenn ein Kanal-Link ohne gepinnten
+> Zielchat gesetzt ist. Eine Kanal-Angabe, die nicht stimmt, ist schlimmer als
+> gar keine: Besuchende richten ihr Verhalten danach.
 
 Mit **Add Variable** speichern.
 
@@ -143,9 +165,12 @@ startet die App. Nach kurzer Zeit erscheint eine URL der Form
    angezeigt.
 3. Klicke **An Telegram senden** — der Bestätigungsdialog zeigt den
    Versandweg. Ohne eigene Bot-Session ist der geteilte Bot
-   (`@mdtotxt_bot`) ausgewählt: die Nachricht landet im **öffentlichen**
-   Chat (Warnhinweis beachten!). Mit eigener Session (BYOB) steht dein Bot
-   oben und sendet privat; beide Wege lassen sich im Dialog umschalten.
+   (`@mdtotxt_bot`) ausgewählt: die Nachricht landet im **öffentlichen Kanal**
+   (`TELEGRAM_FORMATTER_SHARED_CHAT_URL`, z. B. `t.me/mdtotxt_bot_web`) — der
+   Dialog nennt ihn als klickbaren Link samt Löschfrist. Prüfe nach dem
+   Senden, ob die Nachricht wirklich in diesem Kanal auftaucht. Mit eigener
+   Session (BYOB) steht dein Bot oben und sendet privat; beide Wege lassen
+   sich im Dialog umschalten.
 
 Alternativ per Kommandozeile (Dry-Run zeigt nur die Payloads):
 

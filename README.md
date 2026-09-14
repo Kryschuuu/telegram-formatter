@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.8.0-blue)
+![Version](https://img.shields.io/badge/version-2.9.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -37,10 +37,20 @@ Nachrichten.
   Messages), ohne Formatierungen oder Tabellen zu zerreißen.
 - **Zwei Versandwege, frei wählbar (seit v2.6.0)** — der Bestätigungsdialog
   stellt den Weg aus, der tatsächlich offen ist: **geteilter Bot**
-  `@mdtotxt_bot` in den öffentlichen Demo-Chat (ohne Einrichtung, nur für
-  öffentliche Inhalte) oder **eigener Bot** in den privaten Ziel-Chat. Ist
+  `@mdtotxt_bot` in den öffentlichen Demo-Kanal
+  [`t.me/mdtotxt_bot_web`](https://t.me/mdtotxt_bot_web) (ohne Einrichtung, nur
+  für öffentliche Inhalte) oder **eigener Bot** in den privaten Ziel-Chat. Ist
   eine eigene Session aktiv, steht sie vorausgewählt ganz oben; ohne Session
   ist `@mdtotxt_bot` wählbar.
+- **Ziel-Kanal wird offen benannt (seit v2.9.0)** — wer ohne eigenen Bot
+  sendet, postet in **einen** öffentlichen Kanal. Die Seite sagt an sieben
+  Stellen, welcher das ist (mit Link), und nennt die Löschfrist: Top-Warnung,
+  Kanal-Banner im Hero, Hinweis am Senden-Button, Bestätigungsdialog
+  (eigene Zeile „Kanal (öffentlich)" mit klickbarem Link), Privatsphäre-
+  Sektion, FAQ und Footer; die Erfolgsstatusmeldung nach dem Senden wiederholt
+  den Kanal. Konfiguration über `TELEGRAM_FORMATTER_SHARED_CHAT_URL` und
+  `TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS` — der Demo-Kanal löscht Beiträge
+  automatisch nach **30 Tagen** (ein Monat).
 - **Eigener Bot (dezentral, v1.3.0 / Web-Session seit v2.2.0)** — BYOB über
   `telegram_formatter/botkit` direkt **auf der Website** (Token + Chat-ID im
   Formular → ephemere RAM-Session) oder das `botctl`-CLI:
@@ -71,10 +81,10 @@ Pfad automatisch anhand des Inhalts:
 
 ## Zwei Versandwege — wer sendet, wer liest mit?
 
-| Weg | Endpoint | Ziel | Sichtbarkeit | Einrichtung |
-|---|---|---|---|---|
-| **Geteilter Bot** `@mdtotxt_bot` | `POST /api/send` | der auf `TELEGRAM_CHAT_ID` **gepinnte**, öffentliche Chat des Betreibers (public Supergroup/Channel) | öffentlich — alle Besucher der Instanz und jeder, der die Gruppe/den Kanal auf Telegram öffnet, lesen den **gesamten** Verlauf mit (auch nachträglich) | keine |
-| **Eigener Bot (BYOB)** | `POST /api/byob/send` | dein eigener Ziel-Chat | privat — nur Mitglieder deines Chats | Token + Chat-ID, Session max. 30 min |
+| Weg | Endpoint | Ziel | Sichtbarkeit | Aufbewahrung | Einrichtung |
+|---|---|---|---|---|---|
+| **Geteilter Bot** `@mdtotxt_bot` | `POST /api/send` | der auf `TELEGRAM_CHAT_ID` **gepinnte**, öffentliche Kanal [`t.me/mdtotxt_bot_web`](https://t.me/mdtotxt_bot_web) (public Supergroup/Channel) | öffentlich — alle Besucher der Instanz und jeder, der den Kanal auf Telegram öffnet, lesen den **gesamten** Verlauf mit (auch nachträglich) | automatische Löschung nach `TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS` (Demo: **30 Tage**) | keine |
+| **Eigener Bot (BYOB)** | `POST /api/byob/send` | dein eigener Ziel-Chat | privat — nur Mitglieder deines Chats | deine eigenen Kanal-/Chat-Einstellungen | Token + Chat-ID, Session max. 30 min |
 
 Der Sende-Knopf öffnet zuerst den Bestätigungsdialog: dort wird der Weg
 angezeigt (und bei aktivierter Session umgeschaltet), dann erst wird gesendet.
@@ -85,6 +95,20 @@ Der geteilte Weg ist an drei Bedingungen geknüpft — sonst bleibt er zu:
 2. `TELEGRAM_FORMATTER_SHARED_WEB_SEND` ist nicht auf `0` gestellt,
 3. der Request bestätigt die öffentliche Sichtbarkeit mit
    `"confirm_public": true` (im Browser holt der Dialog diese Bestätigung ein).
+
+### Offenlegung des Ziel-Kanals (v2.9.0)
+
+Eine Warnung ohne Namen ist keine Aufklärung: Besuchende müssen sehen können,
+**wo** ihre Nachricht landet. Deshalb führt die App den öffentlichen Kanal als
+eigene Konfiguration und nennt ihn an mehreren Stellen — siehe
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), Schritt 4b. `app.py::_shared_channel`
+baut daraus **ein** View-Model (Bot, Link, Kurzname, Löschsatz), das Template
+und `app.js` gleichermaßen verwenden; `POST /api/send` meldet dieselben Werte
+im `via`-Feld der Antwort. Kanal-Links werden strikt normalisiert
+(`normalize_public_chat_url`): akzeptiert sind ausschließlich
+`https://t.me/<handle>`, `t.me/<handle>` und `@<handle>` — fremde Domains,
+andere Schemata und private Einladelinks (`t.me/+…`, `t.me/c/…`) ergeben
+`None`, dann zeigt die UI keinen Link.
 
 ## Setup
 
@@ -126,6 +150,8 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 | `TELEGRAM_FORMATTER_BYOB_TTL_SECONDS` | Lebensdauer einer Web-Session (Standard 1800) |
 | `TELEGRAM_FORMATTER_BYOB_IDLE_SECONDS` | Leerlauf-Timeout einer Web-Session (Standard 600) |
 | `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` | Anzeige-Name des geteilten Bots in der Warnung (Standard `@mdtotxt_bot`) |
+| `TELEGRAM_FORMATTER_SHARED_CHAT_URL` | **(v2.9.0)** Öffentlicher Link zum Zielchat (Standard `https://t.me/mdtotxt_bot_web`). Wird auf der Seite an sieben Stellen genannt und verlinkt. Akzeptiert nur `https://t.me/<handle>`, `t.me/<handle>`, `@<handle>`; andere Werte werden verworfen (dann kein Link im UI). Muss zu `TELEGRAM_CHAT_ID` gehören |
+| `TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS` | **(v2.9.0)** Tage bis zur automatischen Löschung im Ziel-Kanal (Standard `30`; `0` = keine Aussage). Muss der Telegram-Einstellung „Nachrichten automatisch löschen" dieses Kanals entsprechen |
 | `TELEGRAM_FORMATTER_SHARED_WEB_SEND` | Geteilter Bot im Browser nutzbar (Standard `1`). Wirkt nur zusammen mit gepinntem `TELEGRAM_CHAT_ID`; `0` = API-only wie in 2.5.0, der Browser sendet dann ausschließlich über BYOB |
 | `TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE` | Anonyme Browser-Sendungen pro IP (Standard 4) |
 | `TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE_TOTAL` | Anonyme Browser-Sendungen pro Minute **instanzweit** (Standard 30) |
@@ -255,17 +281,25 @@ aktiven:
 |---|---|---|
 | Einrichtung | keine | @BotFather → Token + Chat-ID (ca. 3 Min.) |
 | Absender | `@mdtotxt_bot` (bzw. konfigurierter Bot) | dein eigener Bot |
-| Sichtbarkeit | ⚠ **gemeinsamer Chat — alle Besucher sehen alles**, auch nachträglich | nur dein Ziel-Chat |
+| Ziel | ⚠ öffentlicher Kanal [`t.me/mdtotxt_bot_web`](https://t.me/mdtotxt_bot_web) | dein eigener Ziel-Chat |
+| Sichtbarkeit | ⚠ **alle Besucher sehen alles**, auch nachträglich | nur Mitglieder deines Chats |
+| Aufbewahrung | automatische Löschung nach 30 Tagen (konfigurierbar) | deine eigenen Einstellungen |
 | Token-Lagerung | Server-Environment | **nur RAM der Session** (max. 30 Min., dann verworfen) |
 | Rate-Limits | geteilt mit allen | eigenes Session-Limit (20/Min.) + IP-Limits |
 | Chat-ID finden | entfällt | „Chat-ID erkennen“ (`getUpdates`-Blick, nur Metadaten) |
 
 **Wichtig (Privatsphäre):** Solange keine eigene Session läuft, sendet der
-Senden-Button über den geteilten Bot in den gemeinsamen Chat — die
-Oberfläche warnt mehrfach: als **Top-Warnung ganz oben auf der Seite**, am
+Senden-Button über den geteilten Bot in den öffentlichen Kanal
+[`t.me/mdtotxt_bot_web`](https://t.me/mdtotxt_bot_web) — die Oberfläche warnt
+mehrfach **und benennt den Kanal jedes Mal konkret**: als **Top-Warnung ganz
+oben auf der Seite**, als **Kanal-Banner direkt unter der Überschrift**, am
 Button selbst und **im Bestätigungsdialog vor jedem Versand** (der den
-konkreten Bot, das Ziel und eine Vorschau zeigt und abgebrochen werden
-kann). Ein eigener Aufklärungs-Abschnitt („Privatsphäre“) erklärt außerdem,
+konkreten Bot, den Kanal als klickbaren Link, die Löschfrist und eine Vorschau
+zeigt und abgebrochen werden kann). Zusätzlich nennen die
+Privatsphäre-Sektion, zwei FAQ-Einträge und der Footer denselben Kanal; die
+Erfolgsmeldung nach dem Senden wiederholt ihn. Beiträge im Demo-Kanal werden
+automatisch nach **30 Tagen** gelöscht (`TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS`).
+Ein eigener Aufklärungs-Abschnitt („Privatsphäre“) erklärt außerdem,
 was @BotFather und Bots in Bezug auf Sichtbarkeit bedeuten. Für private
 Inhalte: eigene Bot-Session starten. Der Ablauf:
 
@@ -330,7 +364,7 @@ Review-Checkliste: `python -m telegram_formatter.botctl checklist`
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                  # 360+ Tests
+pytest -q                                  # 420+ Tests
 ruff check .                               # Stil & offensichtliche Fehler
 bandit -c pyproject.toml -r telegram_formatter -ll   # Sicherheits-Scan
 ```
@@ -428,6 +462,6 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.8.0** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.9.0** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).

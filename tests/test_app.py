@@ -458,8 +458,16 @@ def test_shared_web_send_delivers_to_pinned_chat(shared_web_client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["sent"] == 1
-    assert data["via"] == {"bot": app_module.SHARED_BOT_HANDLE, "chat_id": PUBLIC_CHAT,
-                           "public": True}
+    assert data["via"] == {
+        "bot": app_module.SHARED_BOT_HANDLE,
+        "chat_id": PUBLIC_CHAT,
+        # Offenlegung des Ziel-Kanals (v2.9.0): Die Antwort sagt dem Client,
+        # *wo* die Nachricht liegt und wie lange — dieselben Werte, die auch
+        # die Seite zeigt (tests/test_shared_channel.py).
+        "chat_url": app_module.SHARED_CHAT_URL,
+        "retention_days": app_module.SHARED_RETENTION_DAYS,
+        "public": True,
+    }
 
 
 def test_shared_web_send_requires_public_confirmation(shared_web_client, monkeypatch):

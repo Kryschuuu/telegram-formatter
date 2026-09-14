@@ -19,6 +19,9 @@ Projekt **strukturell** durchsetzt (nicht nur dokumentarisch).
 | S7 | Session-Ende hinterlässt keinen Zustand | `BotSession.close()` verwirft Token-Referenz; `deleteWebhook(drop_pending_updates=True)` als Pflicht im Referenz-Bot | `tests/test_session.py` |
 | S8 | Dependency-Register sauber | pip-audit (Laufzeit + Dev) pro PR **und** wöchentlich via cron; CI-Actions und Security-Tools sind commit-/versionsgepinnt | CI-Job `code-quality` |
 | S9 | Web-Versand nur über einen expliziten Zugang | `/api/send` braucht entweder den Operator-Token (`X-Auth-Token`) **oder** den freigeschalteten Browser-Versand (`TELEGRAM_FORMATTER_SHARED_WEB_SEND=1` + gepinnter Zielchat + `confirm_public`); ohne beides 503. BYOB verlangt Handle plus `session_secret` | `tests/test_app.py` (Zugangs-Matrix), `tests/test_byob_web.py` |
+| S10 | Kein Klickziel aus Betreiber-Konfiguration | `normalize_public_chat_url` akzeptiert ausschließlich `https://t.me/<handle>`, `t.me/<handle>`, `@<handle>` (Handle 5–32 Zeichen, keine Ziffer am Anfang); fremde Domains, andere Schemata (`javascript:`, `data:`), private Einladelinks (`t.me/+…`, `t.me/c/…`), Deep-Links und Query/Fragment ergeben `None` ⇒ die UI rendert keinen Link. Jeder Kanal-Link trägt `rel="noopener noreferrer"` | `tests/test_shared_channel.py` |
+| S11 | Keine erfundene Zusage an Besuchende | Ohne gepinnten `TELEGRAM_CHAT_ID` wird kein Kanal behauptet (`_shared_channel` ⇒ `url=None`); `SHARED_RETENTION_DAYS=0` ⇒ keine Lösch-Aussage (FAQ sagt dann „dauerhaft öffentlich"); Kanal-Link ohne Pinning wird beim Start geloggt (`app.shared_channel_unpinned`) | `tests/test_shared_channel.py` |
+| S12 | Eine Wahrheit für UI und API | Template-Makros, `<body>`-Attribute und das `via`-Feld von `/api/send` lesen alle `_shared_channel()` — `app.js` erfindet weder Kanalnamen noch Fristen | `tests/test_shared_channel.py`, `tests/frontend/jsdom_spec.cjs` |
 
 ## Token-Bedarfsminimierung
 
@@ -61,7 +64,24 @@ Der Browser-Versand ist ein **bewusster Opt-in des Betreibers**
   Operator-Token befreit `/api/send` aus der Pflicht, alle übrigen POSTs
   bleiben pflichtig.
 * Restrisiko (vom Betreiber getragen): fremde Besucher schreiben in den
-  eigenen, öffentlichen Chat. Wer das nicht will, setzt den Schalter auf `0`.
+  eigenen, öffentlichen Kanal. Wer das nicht will, setzt den Schalter auf `0`.
+
+## Offenlegung des Ziel-Kanals (seit 2.9.0)
+
+Die Einwilligung in den öffentlichen Versand (`confirm_public`) ist nur dann
+informiert, wenn Besuchende das Ziel kennen. Deshalb benennt die UI den
+konkreten Kanal (`TELEGRAM_FORMATTER_SHARED_CHAT_URL`, Demo:
+`https://t.me/mdtotxt_bot_web`) samt Aufbewahrungsdauer
+(`TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS`, Demo: 30 Tage) an sieben Stellen
+und im `via`-Feld von `POST /api/send`. Die strukturellen Regeln dafür sind
+die Schutzziele **S10–S12** in der Tabelle oben; die Stellen im Einzelnen:
+Top-Warnung, Kanal-Banner im Hero, Hinweis am Senden-Button,
+Bestätigungsdialog (Faktenzeile „Kanal (öffentlich)" mit Link + Löschfrist),
+Privatsphäre-Sektion, FAQ (zwei Einträge) und Footer/Howto.
+
+Betreiberpflicht (nicht maschinell prüfbar): `TELEGRAM_CHAT_ID`,
+`…_SHARED_CHAT_URL` und `…_SHARED_RETENTION_DAYS` müssen denselben Chat
+beschreiben — siehe `docs/DEPLOYMENT.md`, Schritt 4b.
 
 ## Bekannte Grenzen (bewusst hingenommen)
 

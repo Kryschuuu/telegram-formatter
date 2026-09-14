@@ -639,6 +639,11 @@
     color: var(--footer-muted);
 }
 
+/* Kanal-Angabe im Footer: Abstand zum Versions-Text, sonst wie __small. */
+.tf-footer__channel {
+    margin-top: .45rem;
+}
+
 /* --- Noscript-Hinweis (JS-freier Betrieb) ------------------------------------------ */
 .tf-noscript {
     margin: 1rem auto 0;
@@ -868,6 +873,70 @@
     border-color: var(--danger-border);
 }
 
+/* --- Kanal-Offenlegung (v2.9.0): wohin der geteilte Bot sendet --------------
+   Eigenständiger Baustein statt einer weiteren .tf-note-Variante: Die Box
+   nennt Kanal-Link, Bot und Aufbewahrungsdauer als *Fakten*, nicht als
+   Warnung im Fließtext. .tf-channel-link wird zusätzlich in Top-Warnung,
+   Sende-Dialog, FAQ und Footer benutzt — eine Klasse, eine Aussage. */
+.tf-channel {
+    display: grid;
+    gap: .35rem;
+    margin-top: 1.1rem;
+    padding: .9rem 1.1rem;
+    border: 1px solid var(--danger-border);
+    border-left-width: .28rem;
+    border-radius: var(--radius);
+    background: var(--danger-bg);
+    color: var(--danger-text);
+    font-size: .86rem;
+    line-height: 1.6;
+}
+
+.tf-channel__title {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin: 0;
+    font-size: .92rem;
+    font-weight: 800;
+}
+
+.tf-channel__target {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 800;
+}
+
+.tf-channel__bot {
+    margin-left: .5rem;
+    font-size: .78rem;
+    font-weight: 600;
+    color: var(--danger-text);
+    opacity: .8;
+}
+
+.tf-channel__meta {
+    margin: 0;
+    font-size: .82rem;
+}
+
+.tf-channel__meta a {
+    color: inherit;
+    font-weight: 700;
+}
+
+.tf-channel-link {
+    color: inherit;
+    font-weight: 800;
+    text-decoration: underline;
+    text-underline-offset: .18em;
+    overflow-wrap: anywhere;
+}
+
+.tf-channel-link:hover {
+    text-decoration-thickness: .14rem;
+}
+
 /* --- Sende-Bestätigung: Modal (welcher Bot? wohin? abbrechen?) ---------------- */
 .tf-modal {
     position: fixed;
@@ -980,6 +1049,14 @@
     line-height: 1.55;
     color: var(--text);
     overflow-wrap: anywhere;
+}
+
+/* Zusatzzeile unter einem Faktenwert (Kanal: Aufbewahrungsdauer). */
+.tf-facts__note {
+    display: block;
+    margin-top: .15rem;
+    font-size: .76rem;
+    color: var(--text-muted);
 }
 
 /* --- Versandweg-Auswahl im Sende-Dialog (v2.6.0) ---------------------------

@@ -59,6 +59,22 @@ services:
       # @mdtotxt_bot). Muss zum Bot passen, der hinter TELEGRAM_BOT_TOKEN steht.
       - key: TELEGRAM_FORMATTER_SHARED_BOT_HANDLE
         value: "@mdtotxt_bot"
+      # Öffentlicher Link zum Zielchat von TELEGRAM_CHAT_ID (v2.9.0). Die Seite
+      # nennt diesen Kanal an mehreren Stellen (Top-Warnung, Kanal-Banner,
+      # Senden-Hinweis, Bestätigungsdialog, Privatsphäre, FAQ, Footer).
+      # Akzeptiert werden nur https://t.me/<handle>, t.me/<handle> und
+      # @<handle> — alles andere wird verworfen (kein Link im UI). Der Wert
+      # MUSS zu TELEGRAM_CHAT_ID gehören, sonst verspricht die Seite einen
+      # Kanal, in den sie gar nicht sendet.
+      - key: TELEGRAM_FORMATTER_SHARED_CHAT_URL
+        value: "https://t.me/mdtotxt_bot_web"
+      # Aufbewahrungsdauer in Tagen, die der Kanal oben als Löschfrist angibt.
+      # MUSS der Telegram-Einstellung „Nachrichten automatisch löschen" dieses
+      # Kanals entsprechen (1 Monat = 30). "0" = keine Aussage: Dann nennt die
+      # Seite keine Frist und die FAQ sagt, dass die Beiträge dauerhaft
+      # öffentlich bleiben.
+      - key: TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS
+        value: "30"
       # Render provides exactly one trusted proxy hop. The application
       # defaults to zero for safe direct/self-hosted deployments.
       - key: TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS

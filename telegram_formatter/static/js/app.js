@@ -34,6 +34,17 @@
    * einmal im Request (`confirm_public: true`) — der Server verlangt das Feld
    * (siehe `telegram_formatter/app.py::_public_consent`), die Bestätigung
    * passiert also nachweisbar im Dialog und nicht stillschweigend.
+   *
+   * Kanal-Offenlegung (seit v2.9.0): Der geteilte Weg sendet in genau einen
+   * öffentlichen Kanal. Dieses Skript nennt ihn deshalb überall dort, wo es
+   * den Versandweg beschreibt — Hinweis unter dem Button, Radio-Zeile und
+   * „Ziel" im Dialog, eigene Kanal-Zeile mit klickbarem Link plus Löschfrist
+   * (#sendConfirmChannelRow) und Erfolgsstatus nach dem Senden. Die Werte
+   * kommen ausschließlich aus den <body>-Attributen `data-shared-chat-url`,
+   * `data-shared-chat-label` und `data-shared-retention-text`, die der Server
+   * aus EINER Quelle baut (`app.py::_shared_channel`) — hier wird kein Kanal-
+   * name und keine Frist erfunden. Ist kein Link konfiguriert, bleibt die
+   * Kanal-Zeile ausgeblendet (kein toter Link), der Text nennt dann den Bot.
    ===================================================================== */
 (function () {
     "use strict";
@@ -72,12 +83,24 @@
     var sendConfirmPathOwnMeta = document.getElementById("sendConfirmPathOwnMeta");
     var sendConfirmPathSharedTitle = document.getElementById("sendConfirmPathSharedTitle");
     var sendConfirmPathSharedMeta = document.getElementById("sendConfirmPathSharedMeta");
+    // Kanal-Zeile im Dialog: Link + Aufbewahrungsdauer des geteilten Ziels.
+    var sendConfirmChannelRow = document.getElementById("sendConfirmChannelRow");
+    var sendConfirmChannelLink = document.getElementById("sendConfirmChannelLink");
+    var sendConfirmChannelNote = document.getElementById("sendConfirmChannelNote");
 
     // Zustand der Instanz — kommt serverseitig in <body data-…> an:
-    //   data-shared-send      geteilter Bot darf vom Browser genutzt werden
-    //   data-shared-configured es existiert überhaupt ein geteilter Bot
-    //   data-shared-bot       Anzeige-Handle dieses Bots
+    //   data-shared-send           geteilter Bot darf vom Browser genutzt werden
+    //   data-shared-configured     es existiert überhaupt ein geteilter Bot
+    //   data-shared-bot            Anzeige-Handle dieses Bots
+    //   data-shared-chat-url       öffentlicher Link zum Ziel-Kanal (leer = keiner)
+    //   data-shared-chat-label     Kurzform des Kanals (t.me/<handle>)
+    //   data-shared-retention-text fertiger Satz zur automatischen Löschung
+    // Die Werte stammen aus EINER Quelle (app.py::_shared_channel) — dieses
+    // Skript erfindet weder Kanalnamen noch Aufbewahrungsdauern.
     var sharedBotHandle = document.body.dataset.sharedBot || "geteilter Bot";
+    var sharedChatUrl = document.body.dataset.sharedChatUrl || "";
+    var sharedChatLabel = document.body.dataset.sharedChatLabel || "";
+    var sharedRetentionText = document.body.dataset.sharedRetentionText || "";
     var sharedSendAvailable = document.body.dataset.sharedSend === "1";
     var sharedBotConfigured = document.body.dataset.sharedConfigured === "1";
     var byobEnabled = document.body.dataset.byobEnabled !== "0";
@@ -286,12 +309,38 @@
             return {
                 key: PATH_SHARED,
                 bot: sharedBotHandle,
-                chat: null,
+                chat: sharedChatLabel || null,
+                chatUrl: sharedChatUrl,
+                retention: sharedRetentionText,
                 isOwn: false,
-                summary: "gemeinsamer Chat dieser Seite (öffentlich)",
+                summary: sharedChatLabel
+                    ? "öffentlicher Kanal " + sharedChatLabel
+                    : "öffentlicher, gemeinsamer Chat dieser Seite",
             };
         }
-        return { key: null, bot: "", chat: null, isOwn: false, summary: "" };
+        return { key: null, bot: "", chat: null, chatUrl: "", retention: "", isOwn: false, summary: "" };
+    }
+
+    /* -----------------------------------------------------------------
+       Ziel-Benennung des geteilten Wegs.
+       Einzige Quelle ist `data-shared-chat-label` (app.py::_shared_channel);
+       dieses Skript erfindet keinen Kanalnamen. Ist keiner konfiguriert,
+       wechseln beide Fassungen auf die allgemeine Formulierung — die Sätze
+       bleiben damit in beiden Fällen grammatikalisch ganz (dieselbe Regel wie
+       das Template-Makro `channel_noun()`).
+       ----------------------------------------------------------------- */
+    /** Satzbaustein im Akkusativ: „… sendet in <Phrase>." */
+    function sharedTargetNoun() {
+        return sharedChatLabel
+            ? "den öffentlichen Kanal " + sharedChatLabel
+            : "einen öffentlichen, gemeinsamen Chat";
+    }
+
+    /** Überschriftenform für Faktenzeilen: „Öffentlicher Kanal t.me/…". */
+    function sharedTargetHeading() {
+        return sharedChatLabel
+            ? "Öffentlicher Kanal " + sharedChatLabel
+            : "Öffentlicher, gemeinsamer Chat dieser Seite";
     }
 
     /** Hinweis, wenn kein Weg offen ist — abhängig davon, ob BYOB bereitsteht. */
@@ -337,13 +386,17 @@
         } else if (path === PATH_SHARED) {
             sendPathNote.classList.remove("is-private");
             sendPathNote.textContent =
-                "⚠ Versand über den geteilten Bot " + sharedBotHandle + " — öffentlich " +
-                "sichtbar für alle! Für private Inhalte: eigene Bot-Session starten " +
+                "⚠ Versand über den geteilten Bot " + sharedBotHandle + " in " +
+                sharedTargetNoun() + " — öffentlich sichtbar für alle!" +
+                (sharedRetentionText ? " " + sharedRetentionText : "") +
+                " Für private Inhalte: eigene Bot-Session starten " +
                 "(Abschnitt „Eigener Bot — BYOB“ unten).";
         } else {
             sendPathNote.classList.remove("is-private");
             sendPathNote.textContent = sharedBotConfigured
-                ? "Geteilter Bot " + sharedBotHandle + " ist nur per API erreichbar — " +
+                ? "Geteilter Bot " + sharedBotHandle +
+                  (sharedChatLabel ? " (Kanal " + sharedChatLabel + ")" : "") +
+                  " ist nur per API erreichbar — " +
                   (byobEnabled
                       ? "senden über eine eigene Bot-Session (BYOB, Abschnitt unten)."
                       : "BYOB ist auf dieser Instanz deaktiviert.")
@@ -381,10 +434,27 @@
             }
             setSendStatus("Fehler: " + data.error + extra, "error");
         } else {
-            var via = data.via && data.via.public ? " über " + (data.via.bot || sharedBotHandle) : "";
-            setSendStatus("✅ " + (data.sent || 0) + " Nachricht(en)" + via + " gesendet.", "ok");
+            setSendStatus("✅ " + (data.sent || 0) + " Nachricht(en)" +
+                sentViaText(data.via) + " gesendet.", "ok");
         }
         setBusy(false);
+    }
+
+    /**
+     * Erfolgsmeldung nach dem Versand: Beim geteilten Weg nennt sie Bot **und**
+     * Kanal, damit auch nach dem Klicken sichtbar bleibt, wo die Nachricht
+     * liegt (der Dialog ist da schon zu). Die Kanal-Angabe kommt aus dem
+     * `via`-Feld der API und fällt auf die Werte aus dem <body> zurück.
+     */
+    function sentViaText(via) {
+        if (!via || !via.public) {
+            return "";
+        }
+        var bot = via.bot || sharedBotHandle;
+        var label = via.chat_url
+            ? String(via.chat_url).replace(/^https?:\/\//, "")
+            : sharedChatLabel;
+        return " über " + bot + (label ? " in den öffentlichen Kanal " + label : "");
     }
 
     function send() {
@@ -432,8 +502,36 @@
         if (sharedAvailable) {
             sendConfirmPathSharedTitle.textContent = sharedBotHandle + " — geteilter Bot dieser Seite";
             sendConfirmPathSharedMeta.textContent =
-                "öffentlich · gemeinsamer Chat · alle Besucher sehen die Nachricht";
+                "öffentlich · " + (sharedChatLabel ? "Kanal " + sharedChatLabel : "gemeinsamer Chat") +
+                " · alle Besucher sehen die Nachricht";
             sendConfirmPathShared.checked = selected === PATH_SHARED;
+        }
+    }
+
+    /**
+     * Kanal-Zeile im Dialog: beim geteilten Weg der klickbare Link zum
+     * öffentlichen Kanal plus Aufbewahrungsdauer, sonst ausgeblendet.
+     *
+     * `href` wird nur gesetzt, wenn der Server einen geprüften Link geliefert
+     * hat (app.py::normalize_public_chat_url akzeptiert ausschließlich
+     * https://t.me/<handle>) — ohne Wert bleibt die Zeile unsichtbar, statt
+     * einen toten „#“-Link anzubieten.
+     */
+    function renderChannelFact(info) {
+        if (!sendConfirmChannelRow) {
+            return;
+        }
+        var show = Boolean(info && info.chatUrl);
+        sendConfirmChannelRow.hidden = !show;
+        if (!show) {
+            return;
+        }
+        if (sendConfirmChannelLink) {
+            sendConfirmChannelLink.href = info.chatUrl;
+            sendConfirmChannelLink.textContent = info.chat;
+        }
+        if (sendConfirmChannelNote) {
+            sendConfirmChannelNote.textContent = info.retention || "";
         }
     }
 
@@ -450,14 +548,17 @@
             sendConfirmOkLabel.textContent = "Über " + info.bot + " senden";
         } else if (path === PATH_SHARED) {
             sendConfirmBot.textContent = info.bot + " (geteilter Bot dieser Seite)";
-            sendConfirmTarget.textContent = "Gemeinsamer Chat dieser Seite — " +
-                "öffentlich sichtbar für alle Besucher";
-            sendConfirmOkLabel.textContent = "Über " + info.bot + " senden";
+            sendConfirmTarget.textContent = sharedTargetHeading() +
+                " — sichtbar für alle Besucher";
+            sendConfirmOkLabel.textContent = sharedChatLabel
+                ? "In den Kanal " + sharedChatLabel + " senden"
+                : "Öffentlich senden";
         } else {
             sendConfirmBot.textContent = "— (kein Versandweg verfügbar)";
             sendConfirmTarget.textContent = noPathHint();
             sendConfirmOkLabel.textContent = "Senden nicht möglich";
         }
+        renderChannelFact(path === PATH_SHARED ? info : null);
 
         var raw = input.value || "";
         sendConfirmPreview.textContent = raw.length > CONFIRM_PREVIEW_CHARS
