@@ -6,26 +6,34 @@
    UI-Regeln seit dem Redesign (siehe docs/DESIGN.md):
      * Keine Farbwerte hier — Theme-Färbung ist allein Sache der CSS-Tokens.
      * Keine class-Namen erfinden: gesetzt werden nur die Zustandsklassen
-       is-ok / is-error / is-over (in components.css definiert).
-     * DOM-Verträge (IDs) sind durch tests/test_frontend.py abgsichert.
+       is-ok / is-error / is-over / is-private (in components.css definiert).
+     * DOM-Verträge (IDs) sind durch tests/test_frontend.py abgesichert.
    *
-   * Versand-Routing (seit v2.2.0): Ist eine BYOB-Session aktiv, stellt
-   * static/js/byob.js das Objekt `window.tfByob` bereit — send() delegiert
-   * dann an `tfByob.sendText()` (eigener Bot, privat). Ohne Session gilt
-   * der klassische Weg über /api/send (geteilter Bot). Das Label des
-   * Senden-Buttons liest setBusy() aus `window.tfSendLabel` (falls byob.js
-   * es gesetzt hat), der Status-Text läuft wie immer über #sendStatus.
+   * Versand-Routing — **ein** Zustand, zwei Wege (seit v2.6.0):
+   * `activePath()` liefert den wirksamen Weg ("own" | "shared" | null).
+   *     own     — aktive BYOB-Session aus static/js/byob.js (window.tfByob)
+   *     shared  — geteilter Bot der Instanz über /api/send, freigeschaltet
+   *               durch TELEGRAM_FORMATTER_SHARED_WEB_SEND bei gepinntem
+   *               Zielchat (data-shared-send="1" am <body>)
+   * null bedeutet: kein Weg verfügbar → Senden wird abgewiesen, die UI ver-
+   * weist auf BYOB bzw. den Operator-Token.
+   * app.js ist der *einzige* Besitzer von Versandweg-Anzeige (#sendPathNote),
+   * Button-Beschriftung (#sendBtnLabel) und Bestätigungsdialog; byob.js mel-
+   * det Session-Wechsel über das Event `tf:botsessionchange` am document.
    *
-   * Sende-Bestätigung (seit v2.3.0): Ein Klick auf „An Telegram senden“
-   * (oder Strg/Cmd+Enter) öffnet ZUERST den Bestätigungs-Dialog
-   * #sendConfirm. Er zeigt den konkreten Absender-Bot, das konkrete Ziel
-   * und eine Nachrichtenvorschau — befüllt aus `window.tfByob
-   * .describeTarget()` bzw. den <body>-Datatributen data-shared-bot und
-   * data-configured. Erst „Jetzt senden“ (#sendConfirmOk) ruft send()
-   * auf; „Abbrechen“ (#sendConfirmCancel), Escape und ein Klick auf den
-   * Backdrop schließen den Dialog, ohne etwas zu versenden. Der Fokus
-   * bleibt dabei im Dialog (Tab-Falle) und kehrt danach zum Auslöser
-   * zurück.
+   * Sende-Bestätigung (seit v2.3.0, Versandweg-Wahl seit v2.6.0): Ein Klick
+   * auf „An Telegram senden“ (oder Strg/Cmd+Enter) öffnet ZUERST den Bestäti-
+   * gungs-Dialog #sendConfirm. Er zeigt den gewählten Versandweg als Radio-
+   * felder (eigener Bot = privat, geteilter Bot @mdtotxt_bot = öffentlich),
+   * den konkreten Absender-Bot, das konkrete Ziel und eine Nachrichten-
+   * vorschau. Erst „Jetzt senden“ (#sendConfirmOk) ruft send() auf; „Ab-
+   * brechen“ (#sendConfirmCancel), Escape und ein Klick auf den Backdrop
+   * schließen den Dialog, ohne etwas zu versenden. Der Fokus bleibt dabei
+   * im Dialog (Tab-Falle) und kehrt danach zum Auslöser zurück.
+   * Anonyme Shared-Sendungen bestätigen die öffentliche Sichtbarkeit noch
+   * einmal im Request (`confirm_public: true`) — der Server verlangt das Feld
+   * (siehe `telegram_formatter/app.py::_public_consent`), die Bestätigung
+   * passiert also nachweisbar im Dialog und nicht stillschweigend.
    ===================================================================== */
 (function () {
     "use strict";
@@ -38,10 +46,11 @@
     var resetBtn = document.getElementById("resetBtn");
     var sendStatus = document.getElementById("sendStatus");
     var charCount = document.getElementById("charCount");
+    var sendPathNote = document.getElementById("sendPathNote");
     var convertUrl = document.body.dataset.convertUrl || "api/convert";
     var sendUrl = document.body.dataset.sendUrl || "api/send";
 
-    // Sende-Bestätigung (Modal): welcher Bot, welches Ziel — abbrechen möglich.
+    // Sende-Bestätigung (Modal): welcher Weg, welcher Bot, welches Ziel.
     var sendConfirm = document.getElementById("sendConfirm");
     var sendConfirmBackdrop = document.getElementById("sendConfirmBackdrop");
     var sendConfirmBot = document.getElementById("sendConfirmBot");
@@ -54,15 +63,37 @@
     var sendConfirmOk = document.getElementById("sendConfirmOk");
     var sendConfirmOkLabel = document.getElementById("sendConfirmOkLabel");
     var sendConfirmCancel = document.getElementById("sendConfirmCancel");
+    var sendConfirmPaths = document.getElementById("sendConfirmPaths");
+    var sendConfirmPathOwnRow = document.getElementById("sendConfirmPathOwnRow");
+    var sendConfirmPathSharedRow = document.getElementById("sendConfirmPathSharedRow");
+    var sendConfirmPathOwn = document.getElementById("sendConfirmPathOwn");
+    var sendConfirmPathShared = document.getElementById("sendConfirmPathShared");
+    var sendConfirmPathOwnTitle = document.getElementById("sendConfirmPathOwnTitle");
+    var sendConfirmPathOwnMeta = document.getElementById("sendConfirmPathOwnMeta");
+    var sendConfirmPathSharedTitle = document.getElementById("sendConfirmPathSharedTitle");
+    var sendConfirmPathSharedMeta = document.getElementById("sendConfirmPathSharedMeta");
+
+    // Zustand der Instanz — kommt serverseitig in <body data-…> an:
+    //   data-shared-send      geteilter Bot darf vom Browser genutzt werden
+    //   data-shared-configured es existiert überhaupt ein geteilter Bot
+    //   data-shared-bot       Anzeige-Handle dieses Bots
     var sharedBotHandle = document.body.dataset.sharedBot || "geteilter Bot";
-    var sharedConfigured = document.body.dataset.configured === "1";
-    var lastFocused = null;
+    var sharedSendAvailable = document.body.dataset.sharedSend === "1";
+    var sharedBotConfigured = document.body.dataset.sharedConfigured === "1";
+    var byobEnabled = document.body.dataset.byobEnabled !== "0";
+
+    var PATH_OWN = "own";
+    var PATH_SHARED = "shared";
 
     var CONVERT_DEBOUNCE_MS = 300;
     var CONFIRM_PREVIEW_CHARS = 280;
     var convertTimer = null;
     var PLACEHOLDER = "Vorschau erscheint hier…";
     var REGULAR_LIMIT = 4096;
+    var lastFocused = null;
+    // Zuletzt im Dialog gewählter Weg. Bewusst nur RAM (kein localStorage):
+    // die Wahl ist eine Sitzungs-Präferenz, kein Persistenzversprechen.
+    var chosenPath = null;
 
     function escapeHtml(t) {
         return t
@@ -95,7 +126,7 @@
 
         var t = escapeHtml(raw);
 
-        /* 1) fenced code blocks ```lang\n...\n``` */
+        /* 1) fenced code blocks ```lang\n...\\n``` */
         t = t.replace(/```[^\n]*\n([\s\S]*?)```/g, function (_m, code) {
             return protect("<pre class=\"tf-preview-code\"><code>" + code + "</code></pre>");
         });
@@ -207,12 +238,134 @@
         input.focus();
     }
 
+    /* ---------------------------------------------------------------
+       Versandweg: ein Zustand, drei mögliche Ausgänge
+       --------------------------------------------------------------- */
+    function byobActive() {
+        return !!(window.tfByob && window.tfByob.isActive());
+    }
+
+    function availablePaths() {
+        var paths = [];
+        if (byobActive()) {
+            paths.push(PATH_OWN);
+        }
+        if (sharedSendAvailable) {
+            paths.push(PATH_SHARED);
+        }
+        return paths;
+    }
+
+    /**
+     * Wirksamer Weg: die Nutzerwahl, solange sie noch verfügbar ist — sonst
+     * der erste verfügbare. Die Reihenfolge in `availablePaths()` ist die
+     * Privatsphäre-Reihenfolge: eigene Session vor geteiltem Bot.
+     */
+    function activePath() {
+        var paths = availablePaths();
+        if (chosenPath && paths.indexOf(chosenPath) !== -1) {
+            return chosenPath;
+        }
+        return paths.length ? paths[0] : null;
+    }
+
+    /** Bot + Ziel des Weges — für Button-Beschriftung, Hinweis und Dialog. */
+    function describePath(path) {
+        if (path === PATH_OWN) {
+            var own = (window.tfByob && window.tfByob.describeTarget
+                && window.tfByob.describeTarget()) || {};
+            return {
+                key: PATH_OWN,
+                bot: own.bot || "dein eigener Bot",
+                chat: String(own.chat || "?"),
+                isOwn: true,
+                summary: "nur dein Ziel-Chat (privat)",
+            };
+        }
+        if (path === PATH_SHARED) {
+            return {
+                key: PATH_SHARED,
+                bot: sharedBotHandle,
+                chat: null,
+                isOwn: false,
+                summary: "gemeinsamer Chat dieser Seite (öffentlich)",
+            };
+        }
+        return { key: null, bot: "", chat: null, isOwn: false, summary: "" };
+    }
+
+    /** Hinweis, wenn kein Weg offen ist — abhängig davon, ob BYOB bereitsteht. */
+    function noPathHint() {
+        if (!byobEnabled) {
+            return "Kein Versandweg verfügbar: eigener Bot ist auf dieser Instanz " +
+                "deaktiviert, der geteilte Bot nur per API erreichbar.";
+        }
+        return sharedBotConfigured
+            ? "Geteilter Versand ist hier API-only — starte eine BYOB-Session " +
+              "(oder Betreiber: TELEGRAM_FORMATTER_SHARED_WEB_SEND=1)."
+            : "Kein authentifizierter Versandweg aktiv — starte eine BYOB-Session.";
+    }
+
+    function sendButtonLabel() {
+        var path = activePath();
+        if (path === PATH_OWN) {
+            return "Über eigenen Bot senden";
+        }
+        if (path === PATH_SHARED) {
+            return "An Telegram senden (" + sharedBotHandle + ")";
+        }
+        return "An Telegram senden";
+    }
+
+    function updateSendButtonLabel() {
+        if (sendBtnLabel && !sendBtn.disabled) {
+            sendBtnLabel.textContent = sendButtonLabel();
+        }
+    }
+
+    // Hinweistext unter dem Button — immer konsistent zum wirksamen Weg.
+    function updateSendPathNote() {
+        if (!sendPathNote) {
+            return;
+        }
+        var path = activePath();
+        if (path === PATH_OWN) {
+            sendPathNote.classList.add("is-private");
+            sendPathNote.textContent =
+                "✓ Versand über deine eigene Bot-Session " + describePath(PATH_OWN).bot +
+                " — privat (geteilter Bot wird nicht genutzt).";
+        } else if (path === PATH_SHARED) {
+            sendPathNote.classList.remove("is-private");
+            sendPathNote.textContent =
+                "⚠ Versand über den geteilten Bot " + sharedBotHandle + " — öffentlich " +
+                "sichtbar für alle! Für private Inhalte: eigene Bot-Session starten " +
+                "(Abschnitt „Eigener Bot — BYOB“ unten).";
+        } else {
+            sendPathNote.classList.remove("is-private");
+            sendPathNote.textContent = sharedBotConfigured
+                ? "Geteilter Bot " + sharedBotHandle + " ist nur per API erreichbar — " +
+                  (byobEnabled
+                      ? "senden über eine eigene Bot-Session (BYOB, Abschnitt unten)."
+                      : "BYOB ist auf dieser Instanz deaktiviert.")
+                : "Kein geteilter Bot konfiguriert — " + (byobEnabled
+                      ? "unten eine eigene Bot-Session (BYOB) starten, um zu senden."
+                      : "BYOB ist auf dieser Instanz deaktiviert.");
+        }
+    }
+
+    /** Alles, was vom wirksamen Weg abhängt (Label, Hinweis, Dialog-Inhalt). */
+    function refreshSendPath() {
+        updateSendButtonLabel();
+        updateSendPathNote();
+        if (sendConfirm && !sendConfirm.hidden) {
+            renderSendConfirm();
+        }
+    }
+
     function setBusy(busy) {
         sendBtn.disabled = busy;
         if (sendBtnLabel) {
-            sendBtnLabel.textContent = busy
-                ? "Sende…"
-                : (window.tfSendLabel || "An Telegram senden");
+            sendBtnLabel.textContent = busy ? "Sende…" : sendButtonLabel();
         }
     }
 
@@ -228,27 +381,25 @@
             }
             setSendStatus("Fehler: " + data.error + extra, "error");
         } else {
-            setSendStatus("✅ " + (data.sent || 0) + " Nachricht(en) gesendet.", "ok");
+            var via = data.via && data.via.public ? " über " + (data.via.bot || sharedBotHandle) : "";
+            setSendStatus("✅ " + (data.sent || 0) + " Nachricht(en)" + via + " gesendet.", "ok");
         }
         setBusy(false);
     }
 
     function send() {
-        if (!(window.tfByob && window.tfByob.isActive()) && !sharedConfigured) {
-            setSendStatus(
-                "Kein authentifizierter Versandweg aktiv — starte eine BYOB-Session.",
-                "error"
-            );
+        var path = activePath();
+        if (!path) {
+            setSendStatus(noPathHint(), "error");
             return;
         }
         setBusy(true);
-        // BYOB aktiv? Dann versendet byob.js über die eigene Session —
-        // Antwortform ist identisch (ok/status/data), die Auswertung bleibt
-        // hier zentral. Der Shared-Versand ist absichtlich API-only und wird
-        // im Browser nicht mit einem Operator-Secret ausgestattet.
-        var request = (window.tfByob && window.tfByob.isActive())
+        // Der Dialog liegt hinter diesem Aufruf: „öffentlich senden“ wurde dort
+        // bestätigt, deshalb darf confirm_public mit (der Server verlangt das
+        // Feld für anonyme Shared-Sendungen — siehe app.py::_public_consent).
+        var request = path === PATH_OWN
             ? window.tfByob.sendText(input.value)
-            : postJson(sendUrl, { text: input.value });
+            : postJson(sendUrl, { text: input.value, confirm_public: true });
         request.then(handleSendResponse).catch(function () {
             setSendStatus("Netzwerkfehler.", "error");
             setBusy(false);
@@ -256,21 +407,70 @@
     }
 
     /* ---------------------------------------------------------------
-       Sende-Bestätigung: Vor jedem Versand wird der konkrete Weg
-       angezeigt (geteilter Bot = öffentlich vs. eigene Session =
-       privat). Erst „Jetzt senden“ versendet — Abbrechen, Escape und
-       Klick auf den Backdrop senden nichts.
+       Sende-Bestätigung: Weg wählen, Fakten prüfen, abbrechen können.
        --------------------------------------------------------------- */
-    function sendTargetInfo() {
-        if (window.tfByob && window.tfByob.isActive()) {
-            var own = (window.tfByob.describeTarget && window.tfByob.describeTarget()) || {};
-            return {
-                own: true,
-                bot: own.bot || "dein eigener Bot",
-                chat: String(own.chat || "?")
-            };
+    function renderPathChoices(paths, selected) {
+        if (!sendConfirmPaths || !sendConfirmPathOwnRow || !sendConfirmPathSharedRow) {
+            return;  // Dialog-Markup fehlt zur Hälfte: Fakten bauen wir trotzdem.
         }
-        return { own: false, bot: sharedBotHandle, chat: null };
+        var ownAvailable = paths.indexOf(PATH_OWN) !== -1;
+        var sharedAvailable = paths.indexOf(PATH_SHARED) !== -1;
+
+        sendConfirmPaths.hidden = !ownAvailable && !sharedAvailable;
+        sendConfirmPathOwnRow.hidden = !ownAvailable;
+        sendConfirmPathSharedRow.hidden = !sharedAvailable;
+        // Zustandsklasse für die CSS-Markierung (is-selected in components.css).
+        sendConfirmPathOwnRow.classList.toggle("is-selected", selected === PATH_OWN);
+        sendConfirmPathSharedRow.classList.toggle("is-selected", selected === PATH_SHARED);
+
+        if (ownAvailable) {
+            var own = describePath(PATH_OWN);
+            sendConfirmPathOwnTitle.textContent = own.bot + " — dein eigener Bot";
+            sendConfirmPathOwnMeta.textContent = "privat · Chat " + own.chat;
+            sendConfirmPathOwn.checked = selected === PATH_OWN;
+        }
+        if (sharedAvailable) {
+            sendConfirmPathSharedTitle.textContent = sharedBotHandle + " — geteilter Bot dieser Seite";
+            sendConfirmPathSharedMeta.textContent =
+                "öffentlich · gemeinsamer Chat · alle Besucher sehen die Nachricht";
+            sendConfirmPathShared.checked = selected === PATH_SHARED;
+        }
+    }
+
+    /** Füllt den Dialog (Wege + Fakten + Hinweise) aus dem gewählten Weg. */
+    function renderSendConfirm() {
+        var paths = availablePaths();
+        var path = activePath();
+        var info = describePath(path);
+        renderPathChoices(paths, path);
+
+        if (path === PATH_OWN) {
+            sendConfirmBot.textContent = info.bot + " (dein eigener Bot)";
+            sendConfirmTarget.textContent = "Chat " + info.chat + " — " + info.summary;
+            sendConfirmOkLabel.textContent = "Über " + info.bot + " senden";
+        } else if (path === PATH_SHARED) {
+            sendConfirmBot.textContent = info.bot + " (geteilter Bot dieser Seite)";
+            sendConfirmTarget.textContent = "Gemeinsamer Chat dieser Seite — " +
+                "öffentlich sichtbar für alle Besucher";
+            sendConfirmOkLabel.textContent = "Über " + info.bot + " senden";
+        } else {
+            sendConfirmBot.textContent = "— (kein Versandweg verfügbar)";
+            sendConfirmTarget.textContent = noPathHint();
+            sendConfirmOkLabel.textContent = "Senden nicht möglich";
+        }
+
+        var raw = input.value || "";
+        sendConfirmPreview.textContent = raw.length > CONFIRM_PREVIEW_CHARS
+            ? raw.slice(0, CONFIRM_PREVIEW_CHARS) + " …"
+            : raw;
+        sendConfirmLength.textContent =
+            raw.length.toLocaleString("de-DE") + " Zeichen";
+
+        // Genau einer der drei Hinweise passt zum gewählten Weg.
+        sendConfirmWarning.hidden = path !== PATH_SHARED;
+        sendConfirmPrivate.hidden = path !== PATH_OWN;
+        sendConfirmUnavailable.hidden = path !== null;
+        sendConfirmOk.disabled = path === null;
     }
 
     function openSendConfirm() {
@@ -285,38 +485,11 @@
             return;
         }
 
-        var target = sendTargetInfo();
         lastFocused = document.activeElement;
-
-        if (target.own) {
-            sendConfirmBot.textContent = target.bot + " (dein eigener Bot)";
-            sendConfirmTarget.textContent =
-                "Chat " + target.chat + " — nur dein Ziel-Chat (privat)";
-            sendConfirmOkLabel.textContent = "Über " + target.bot + " senden";
-        } else if (sharedConfigured) {
-            sendConfirmBot.textContent = target.bot + " (geteilter Bot dieser Seite)";
-            sendConfirmTarget.textContent =
-                "Gemeinsamer Chat dieser Seite — öffentlich sichtbar für alle Besucher";
-            sendConfirmOkLabel.textContent = "Über " + target.bot + " senden";
-        } else {
-            sendConfirmBot.textContent = "— (kein geteilter Bot konfiguriert)";
-            sendConfirmTarget.textContent =
-                "Kein Versandweg aktiv — eigene Bot-Session (BYOB) starten";
-            sendConfirmOkLabel.textContent = "Senden versuchen";
-        }
-
-        var raw = input.value || "";
-        sendConfirmPreview.textContent = raw.length > CONFIRM_PREVIEW_CHARS
-            ? raw.slice(0, CONFIRM_PREVIEW_CHARS) + " …"
-            : raw;
-        sendConfirmLength.textContent =
-            raw.length.toLocaleString("de-DE") + " Zeichen";
-
-        sendConfirmWarning.hidden = !(!target.own && sharedConfigured);
-        sendConfirmPrivate.hidden = !target.own;
-        sendConfirmUnavailable.hidden = !(!target.own && !sharedConfigured);
-
+        renderSendConfirm();
         sendConfirm.hidden = false;
+        // Fokus auf Abbrechen: die Voreinstellung „eigener Bot“ soll nicht
+        // durch einen versehentlichen Enter-Druck bestätigt werden.
         sendConfirmCancel.focus();
     }
 
@@ -341,8 +514,11 @@
 
     /* Tab-Falle: Fokus bleibt im offenen Dialog (nicht dahinter). */
     function trapFocus(event) {
+        // Deaktivierte Schaltflächen überspringen (Tab springt darüber) — sonst
+        // hängt die Falle am ausgegrauten „Senden nicht möglich“-Knopf.
         var focusables = sendConfirm.querySelectorAll(
-            "button, [href], input, textarea, select, [tabindex]:not([tabindex=\"-1\"])"
+            "button:not([disabled]), [href], input:not([disabled]), textarea, select, " +
+            "[tabindex]:not([tabindex=\"-1\"])"
         );
         if (!focusables.length) {
             return;
@@ -361,6 +537,9 @@
 
     if (sendConfirm) {
         sendConfirmOk.addEventListener("click", function () {
+            if (sendConfirmOk.disabled) {
+                return;
+            }
             closeSendConfirm(false);
             send();
         });
@@ -372,6 +551,20 @@
                 closeSendConfirm(true);
             });
         }
+        // Versandweg umschalten — Fakten, Hinweise und Beschriftung ziehen mit.
+        [sendConfirmPathOwn, sendConfirmPathShared].forEach(function (radio) {
+            if (!radio) {
+                return;
+            }
+            radio.addEventListener("change", function () {
+                // refreshSendPath() baut Label, Hinweis und (weil offen) auch den
+                // Dialog neu — eine Funktion, ein Zustand, keine Doppelautoren.
+                if (radio.checked) {
+                    chosenPath = radio.value;
+                    refreshSendPath();
+                }
+            });
+        });
         document.addEventListener("keydown", function (event) {
             if (sendConfirm.hidden) {
                 return;
@@ -384,6 +577,10 @@
             }
         });
     }
+
+    // byob.js meldet Session-Öffnung/-Ende: Label, Hinweis und ein offener
+    // Dialog müssen den neuen Versandweg spiegeln.
+    document.addEventListener("tf:botsessionchange", refreshSendPath);
 
     input.addEventListener("input", function () {
         renderPreview();
@@ -405,4 +602,5 @@
 
     renderPreview();
     updateCharCount();
+    refreshSendPath();
 })();

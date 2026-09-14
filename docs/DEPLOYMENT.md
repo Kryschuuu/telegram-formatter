@@ -81,7 +81,8 @@ Unter **Environment → Environment Variables** diese Einträge hinzufügen:
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Dein Token von BotFather, z. B. `123456:ABC-...` |
 | `TELEGRAM_CHAT_ID` | **sicherheitsrelevant:** pinnt den Zielchat von `/api/send`; abweichende Request-Werte werden abgewiesen |
-| `TELEGRAM_FORMATTER_API_TOKEN` | **Pflicht für `/api/send`**: passender `X-Auth-Token`-Header erforderlich. Ohne Token bleibt der Shared-Versand deaktiviert (503). Der Browser erhält diesen Operator-Token nicht; authentifizierter Shared-Versand ist API-only |
+| `TELEGRAM_FORMATTER_API_TOKEN` | Operator-Secret für den **authentifizierten** Shared-Versand (`X-Auth-Token`). Nicht gesetzt ⇒ `/api/send` antwortet 503, außer der Browser-Versand ist freigeschaltet (siehe nächste Zeile). Achtung: der Wert pflichtet alle POST-Endpunkte — auf Instanzen, deren Browser-Oberfläche BYOB und Live-Vorschau nutzen soll, bleibt er leer |
+| `TELEGRAM_FORMATTER_SHARED_WEB_SEND` | `1` (Standard) ⇒ Besucher können den geteilten Bot im Browser benutzen (`@mdtotxt_bot` im Versandweg-Dialog), `0` ⇒ Shared-Versand nur API-authentifiziert. Wirkt ausschließlich zusammen mit gepinntem `TELEGRAM_CHAT_ID`; Grenzen: `…_SENDS_PER_MINUTE` (4/IP), `…_SENDS_PER_MINUTE_TOTAL` (30/Instanz), `…_MAX_INPUT_CHARS` (8000) |
 | `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` | Vertrauenswürdige Proxy-Hops für Client-IP-Rate-Limits. Standard `0`; im Render-Blueprint `1`. Nur setzen, wenn der Proxy Client-Header überschreibt |
 | `TELEGRAM_FORMATTER_BYOB_ENABLED` | (optional, seit v2.2.0) `0` ⇒ BYOB-Websessions & UI aus (Standard: an) |
 | `TELEGRAM_FORMATTER_BYOB_TTL_SECONDS` / `…_IDLE_SECONDS` | (optional) Lebensdauer/Leerlauf der Web-Sessions (Standard 1800/600) |
@@ -93,6 +94,14 @@ Unter **Environment → Environment Variables** diese Einträge hinzufügen:
 > öffentlichen Instanz ein **gemeinsamer, für alle sichtbarer Chat**. Die
 > Oberfläche warnt entsprechend; private Inhalte gehören in eine BYOB-Session
 > (Abschnitt „Versandweg“ auf der Seite).
+>
+> **Entscheidung für Betreiber:** `TELEGRAM_FORMATTER_SHARED_WEB_SEND=1`
+> (Standard) macht den geteilten Bot im Browser benutzbar — bequem für eine
+> öffentliche Demo-Instanz, aber jeder Besucher kann in deinen gepinnten Chat
+> schreiben (durch die Rate-Limits begrenzt). Wer das nicht will: auf `0`
+> setzen. Dann bleibt der Endpunkt API-only (Zustand bis v2.5.0) und die
+> Website führt Browser-Nutzer konsequent zu BYOB — der Versandweg-Dialog sagt
+> das auch so.
 
 Mit **Add Variable** speichern.
 
@@ -110,9 +119,11 @@ startet die App. Nach kurzer Zeit erscheint eine URL der Form
 1. Öffne die bereitgestellte URL im Browser — die Editor-Seite erscheint.
 2. Gib z. B. ein: `**fett** und $x^2$` — die gebauten Payloads werden
    angezeigt.
-3. Klicke **An Telegram senden**, um die Nachricht tatsächlich zu versenden —
-   ohne eigene Bot-Session über den geteilten Bot (öffentlich! Warnhinweis
-   auf der Seite beachten), mit eigener Session (BYOB) privat über deinen Bot.
+3. Klicke **An Telegram senden** — der Bestätigungsdialog zeigt den
+   Versandweg. Ohne eigene Bot-Session ist der geteilte Bot
+   (`@mdtotxt_bot`) ausgewählt: die Nachricht landet im **öffentlichen**
+   Chat (Warnhinweis beachten!). Mit eigener Session (BYOB) steht dein Bot
+   oben und sendet privat; beide Wege lassen sich im Dialog umschalten.
 
 Alternativ per Kommandozeile (Dry-Run zeigt nur die Payloads):
 

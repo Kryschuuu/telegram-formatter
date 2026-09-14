@@ -4,9 +4,10 @@
    Ausgeführt von tests/test_jsdom_smoke.py (pytest skippt sauber, wenn
    Node/jsdom fehlen). Aufruf:  node jsdom_spec.cjs <gerendertes-index.html>
 
-   Diese Spec prüft das Zusammenspiel von theme.js und app.js im echten DOM:
-   Theme-Boot aus localStorage, Klicks auf den Switcher, Live-Vorschau,
-   Debounce+Fetch gegen /api/convert, Senden, Zurücksetzen, Fehlerpfad.
+   Diese Spec prüft das Zusammenspiel von theme.js, app.js und byob.js im
+   echten DOM: Theme-Boot aus localStorage, Klicks auf den Switcher,
+   Live-Vorschau, Debounce+Fetch gegen /api/convert, Versandweg-Wahl
+   (geteilter Bot vs. eigene Session), Senden, Zurücksetzen, Fehlerpfad.
    jsdom emuliert Layout nicht (kein Computed-Styling), dafür aber DOM-APIs,
    Events, Timers und localStorage — genau die Schicht, die unsere Logik nutzt.
    ===================================================================== */
@@ -32,8 +33,17 @@ if (!htmlPath || !fs.existsSync(htmlPath)) {
 const STATIC_DIR = path.resolve(__dirname, "../../telegram_formatter/static");
 const read = (p) => fs.readFileSync(p, "utf-8");
 
-function buildHarnessHtml() {
+/**
+ * Harness aus dem gerenderten Template. `flags` überschreibt die <body>-Attribute,
+ * um Zustände zu prüfen, die der Server je nach Konfiguration rendert (die
+ * *Renderings* selbst testet tests/test_frontend.py — hier geht es um das
+ * Verhalten der Skripte bei gegebenem Markup).
+ */
+function buildHarnessHtml(flags = {}) {
     let html = read(htmlPath);
+    for (const [name, value] of Object.entries(flags)) {
+        html = html.replace(new RegExp(`data-${name}="[01]"`), `data-${name}="${value}"`);
+    }
     // CSS-Links sind für jsdom bedeutungslos, Skript-/Linktags stören beim
     // Nachladen (kein Server) -> entfernen und die echten Dateien inline
     // in den Harness einsetzen (Skriptreihenfolge wie im Template).
@@ -75,7 +85,16 @@ async function main() {
     const harness = buildHarnessHtml();
     const calls = [];
     let convertPayload = { count: 1, messages: [{ kind: "regular", payload: { chat_id: "1" } }] };
-    let sendResult = { ok: true, body: { sent: 2, results: [{ kind: "regular", status: "ok" }] } };
+    let sendResult = {
+        ok: true,
+        // Der Shared-Endpunkt meldet seit 2.6.0 `via` — die UI zeigt daraus
+        // an, *worum* gesendet wurde (Bot + Öffentlichkeit).
+        body: {
+            sent: 2,
+            results: [{ kind: "regular", status: "ok" }],
+            via: { bot: "@mdtotxt_bot", chat_id: "-100999", public: true },
+        },
+    };
 
     const scriptErrors = [];
 
@@ -190,25 +209,37 @@ async function main() {
         sendStatus.textContent.includes("3 Nachrichten (automatisch aufgeteilt)"),
         sendStatus.textContent);
 
-    /* Senden — seit v2.3.0 mit Bestätigungsdialog: Erst Bot/Ziel prüfen,
-       abbrechen können, dann bestätigen. */
+    /* Senden — seit v2.3.0 mit Bestätigungsdialog, seit v2.6.0 mit
+       Versandweg-Auswahl. Dieser Harness ist die gehostete Demo: geteilter Bot
+       konfiguriert + Browser-Versand freigeschaltet, keine BYOB-Session.
+       Erwartung: @mdtotxt_bot ist der angebotene (und vorausgewählte) Weg. */
     doc.getElementById("sendBtn").click();
     await sleep(20);
     check("Dialog: öffnet sich beim Klick auf Senden",
         doc.getElementById("sendConfirm").hidden === false);
-    check("Dialog: Shared-Versand wird als deaktiviert angezeigt",
-        doc.getElementById("sendConfirmBot").textContent.includes("kein geteilter Bot") &&
-        doc.getElementById("sendConfirmUnavailable").hidden === false,
-        doc.getElementById("sendConfirmBot").textContent);
-    check("Dialog: BYOB wird als Versandweg genannt",
-        doc.getElementById("sendConfirmTarget").textContent.includes("BYOB"),
+    check("Dialog: Versandweg-Auswahl ist sichtbar und bietet nur den geteilten Bot",
+        doc.getElementById("sendConfirmPaths").hidden === false &&
+        doc.getElementById("sendConfirmPathSharedRow").hidden === false &&
+        doc.getElementById("sendConfirmPathOwnRow").hidden === true,
+        doc.getElementById("sendConfirmPaths").outerHTML.slice(0, 80));
+    check("Dialog: geteilter Bot ist vorausgewählt",
+        doc.getElementById("sendConfirmPathShared").checked === true);
+    check("Dialog: nennt @mdtotxt_bot als Absender und den öffentlichen Chat als Ziel",
+        doc.getElementById("sendConfirmBot").textContent.includes("@mdtotxt_bot") &&
+        doc.getElementById("sendConfirmBot").textContent.includes("geteilter Bot") &&
+        doc.getElementById("sendConfirmTarget").textContent.includes("öffentlich"),
+        doc.getElementById("sendConfirmBot").textContent + " / " +
         doc.getElementById("sendConfirmTarget").textContent);
+    check("Dialog: öffentliche Warnung ist eingeblendet, Privat-/Blocker-Hinweis nicht",
+        doc.getElementById("sendConfirmWarning").hidden === false &&
+        doc.getElementById("sendConfirmPrivate").hidden === true &&
+        doc.getElementById("sendConfirmUnavailable").hidden === true);
     check("Dialog: Nachrichtenvorschau + Zeichenzahl",
         doc.getElementById("sendConfirmPreview").textContent.includes("**viel** text") &&
         doc.getElementById("sendConfirmLength").textContent.includes("Zeichen"));
-    check("Dialog: öffentliche Warnung bleibt ohne Shared-Auth verborgen",
-        doc.getElementById("sendConfirmWarning").hidden === true &&
-        doc.getElementById("sendConfirmPrivate").hidden === true);
+    check("Button: Beschriftung nennt den geteilten Bot",
+        doc.getElementById("sendBtnLabel").textContent.includes("@mdtotxt_bot"),
+        doc.getElementById("sendBtnLabel").textContent);
 
     /* Abbrechen: Dialog zu, kein POST, Fokus zurück */
     doc.getElementById("sendConfirmCancel").click();
@@ -217,18 +248,21 @@ async function main() {
         !calls.some((c) => c.url.includes("api/send")),
         JSON.stringify(calls));
 
-    /* Erneut öffnen und diesmal bestätigen */
+    /* Erneut öffnen und bestätigen — jetzt geht der Shared-POST wirklich raus. */
     doc.getElementById("sendBtn").click();
     await sleep(20);
     doc.getElementById("sendConfirmOk").click();
     await sleep(60);
-    check("Senden: Shared-POST wird ohne Operator-Secret nicht ausgelöst",
-        !calls.some((c) => c.url.includes("api/send")));
-    check("Senden: Hinweis fordert BYOB",
-        sendStatus.textContent.includes("BYOB"), sendStatus.textContent);
+    const sharedCall = calls.filter((c) => c.url.includes("api/send")).pop();
+    check("Senden: Shared-POST läuft über /api/send", Boolean(sharedCall));
+    check("Senden: öffentliche Sichtbarkeit wird bestätigt mitgeschickt (confirm_public)",
+        Boolean(sharedCall) && JSON.parse(sharedCall.body).confirm_public === true,
+        sharedCall && sharedCall.body);
+    check("Senden: Erfolgsstatus mit Bot-Angabe",
+        sendStatus.textContent.includes("2 Nachricht(en)") && sendStatus.textContent.includes("@mdtotxt_bot"),
+        sendStatus.textContent);
     check("Senden: Button bleibt bedienbar", doc.getElementById("sendBtn").disabled === false);
-    check("Senden: Statuszeile bekommt is-error ohne Shared-Auth",
-        sendStatus.classList.contains("is-error"));
+    check("Senden: Statuszeile bekommt is-ok", sendStatus.classList.contains("is-ok"));
 
     /* Fehlerpfad (mit Dialog) */
     sendResult = { ok: false, body: { error: "Zu viele Sendeversuche", retry_after: 7, sent_before_error: 1 } };
@@ -236,18 +270,21 @@ async function main() {
     await sleep(20);
     doc.getElementById("sendConfirmOk").click();
     await sleep(60);
-    check("Fehler: Shared-Versand bleibt ohne Secret deaktiviert",
-        sendStatus.textContent.includes("BYOB"), sendStatus.textContent);
+    check("Fehler: Retry-Hinweis und Teilfortschritt landen in der Statuszeile",
+        sendStatus.textContent.includes("Warte 7 s") &&
+        sendStatus.textContent.includes("Bereits gesendet: 1"),
+        sendStatus.textContent);
     check("Fehler: Statuszeile bekommt is-error", sendStatus.classList.contains("is-error"));
 
     /* Escape schließt den Dialog wie Abbrechen */
+    const sentBeforeEscape = calls.filter((c) => c.url.includes("api/send")).length;
     doc.getElementById("sendBtn").click();
     await sleep(20);
     check("Escape-Vorbereitung: Dialog offen", doc.getElementById("sendConfirm").hidden === false);
     doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     check("Escape: Dialog geschlossen ohne Senden",
         doc.getElementById("sendConfirm").hidden === true &&
-        calls.filter((c) => c.url.includes("api/send")).length === 0,
+        calls.filter((c) => c.url.includes("api/send")).length === sentBeforeEscape,
         `send-calls=${calls.filter((c) => c.url.includes("api/send")).length}`);
 
 
@@ -302,6 +339,7 @@ async function main() {
         limits: { ttl_seconds: 1800, idle_timeout_seconds: 600, max_messages_per_minute: 20, max_input_chars: 100000 },
     };
     const byobCalls = [];
+    const sharedWebCalls = []; // Body-Payloads der /api/send-Aufrufe in Fall 5
     dom = new JSDOM(buildHarnessHtml(), {
         runScripts: "dangerously",
         virtualConsole: trackedConsole(scriptErrors),
@@ -338,6 +376,9 @@ async function main() {
                         : { active: false };
                 } else if (u.includes("/api/byob/close")) {
                     sessionState = "gone"; payload = { closed: true };
+                } else if (u.includes("/api/send")) {
+                    sharedWebCalls.push(body);
+                    payload = { sent: 1, via: { bot: "@mdtotxt_bot", chat_id: "-100999", public: true } };
                 }
                 return Promise.resolve({ ok: status < 400, status, json: () => Promise.resolve(payload) });
             };
@@ -421,6 +462,44 @@ async function main() {
     await sleep(60);
     const sendCall = byobCalls.filter((u) => u.includes("/api/byob/send")).pop();
     check("BYOB: Senden geht an /api/byob/send", Boolean(sendCall));
+
+    /*both Wege verfügbar: umschalten im Dialog — der gewählte Weg entscheidet,
+       nicht „Session aktiv = Session zwingend“. */
+    doc.getElementById("sendBtn").click();
+    await sleep(20);
+    check("BYOB-Dialog: beide Wege zur Wahl (eigener Bot vorausgewählt)",
+        doc.getElementById("sendConfirmPathOwnRow").hidden === false &&
+        doc.getElementById("sendConfirmPathSharedRow").hidden === false &&
+        doc.getElementById("sendConfirmPathOwn").checked === true);
+    doc.getElementById("sendConfirmPathShared").click();
+    await sleep(20);
+    check("BYOB-Dialog: Wahl auf geteilten Bot umgestellt — Fakten ziehen mit",
+        doc.getElementById("sendConfirmPathShared").checked === true &&
+        doc.getElementById("sendConfirmBot").textContent.includes("@mdtotxt_bot") &&
+        doc.getElementById("sendConfirmWarning").hidden === false &&
+        doc.getElementById("sendConfirmPrivate").hidden === true,
+        doc.getElementById("sendConfirmBot").textContent);
+    doc.getElementById("sendConfirmOk").click();
+    await sleep(60);
+    check("BYOB-Dialog: bewusst gewählter geteilter Bot nutzt /api/send",
+        sharedWebCalls.length === 1 && JSON.parse(sharedWebCalls[0]).confirm_public === true,
+        JSON.stringify(sharedWebCalls));
+    check("BYOB-Dialog: Hinweis unter dem Button folgt der Wahl",
+        doc.getElementById("sendPathNote").textContent.includes("@mdtotxt_bot") &&
+        !doc.getElementById("sendPathNote").classList.contains("is-private"),
+        doc.getElementById("sendPathNote").textContent);
+    doc.getElementById("sendBtn").click();
+    await sleep(20);
+    check("BYOB-Dialog: die Wahl bleibt gemerkt und wird wieder angezeigt",
+        doc.getElementById("sendConfirmPathShared").checked === true);
+    doc.getElementById("sendConfirmPathOwn").click();
+    await sleep(20);
+    doc.getElementById("sendConfirmOk").click();
+    await sleep(60);
+    check("BYOB-Dialog: zurück auf den eigenen Bot — wieder /api/byob/send",
+        byobCalls.filter((u) => u.includes("/api/byob/send")).length >= 2 &&
+        sharedWebCalls.length === 1,
+        `byob-send=${byobCalls.filter((u) => u.includes("/api/byob/send")).length} shared=${sharedWebCalls.length}`);
     check("BYOB: Erfolgsstatus erscheint",
         doc.getElementById("sendStatus").textContent.includes("2 Nachricht(en) gesendet"),
         doc.getElementById("sendStatus").textContent);
@@ -434,9 +513,104 @@ async function main() {
     check("BYOB: 410 beim Senden beendet die Session clientseitig",
         window.tfByob.isActive() === false && doc.getElementById("byobForm").hidden === false);
     check("BYOB: Ablauf-Hinweis erscheint", doc.getElementById("byobError").classList.contains("is-error"));
-    check("BYOB: Senden-Button-Label zurück auf geteilten Bot",
-        doc.getElementById("sendBtnLabel").textContent === "An Telegram senden");
+    check("BYOB: Senden-Button-Label zurück auf den geteilten Bot",
+        doc.getElementById("sendBtnLabel").textContent === "An Telegram senden (@mdtotxt_bot)",
+        doc.getElementById("sendBtnLabel").textContent);
+    doc.getElementById("sendBtn").click();
+    await sleep(20);
+    check("BYOB: Session weg ⇒ Weg-Auswahl bietet nur noch den geteilten Bot",
+        doc.getElementById("sendConfirmPathOwnRow").hidden === true &&
+        doc.getElementById("sendConfirmPathSharedRow").hidden === false &&
+        doc.getElementById("sendConfirmPathShared").checked === true,
+        doc.getElementById("sendConfirmPaths").outerHTML.slice(0, 120));
+    doc.getElementById("sendConfirmCancel").click();
 
+    dom.window.close();
+
+    /* ------------------------------------------------------------------ */
+    /* Fall 6: Regression — „Shared-Bot konfiguriert, aber API-only“        */
+    /* ------------------------------------------------------------------ */
+    /* Genau dieser Zustand war der Bug: geteilter Bot vorhanden, Browser-
+       Versand aber deaktiviert (data-shared-send="0"). Die UI darf dann
+       weder so tun, als gäbe es einen Versandweg, noch schweigen: sie zeigt
+       den blockierten Weg samt dem Schalter, den der Betreiber setzen kann. */
+    const apiOnlyCalls = [];
+    dom = new JSDOM(buildHarnessHtml({ "shared-send": "0" }), {
+        runScripts: "dangerously",
+        virtualConsole: trackedConsole(scriptErrors),
+        url: "https://formatter.local/",
+        beforeParse(window) {
+            window.matchMedia = () => ({
+                matches: false, media: "", addEventListener() {}, removeEventListener() {},
+                addListener() {}, removeListener() {},
+            });
+            window.fetch = (url, opts) => {
+                const u = String(url);
+                apiOnlyCalls.push(u);
+                if (u.includes("/api/byob/session")) {
+                    return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve({
+                        session_id: "sid-api-only",
+                        session_secret: "secret-api-only",
+                        bot: { id: 7, username: "privacy_bot", display_name: "Privacy", handle: "@privacy_bot" },
+                        chat_id: "4711",
+                        limits: { ttl_seconds: 1800, idle_timeout_seconds: 600 },
+                    }) });
+                }
+                if (u.includes("/api/byob/send")) {
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({
+                        sent: 1, session: { ttl_remaining_seconds: 1700, idle_remaining_seconds: 500 },
+                    }) });
+                }
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ count: 1, messages: [] }) });
+            };
+        },
+    });
+    window = dom.window;
+    doc = window.document;
+    await new Promise((resolve) => window.addEventListener("load", resolve));
+    await sleep(60);
+
+    doc.getElementById("input").value = "Test ohne eigenen Bot";
+    doc.getElementById("sendBtn").click();
+    await sleep(20);
+    check("API-only: kein Versandweg ⇒ Auswahl bleibt ausgeblendet",
+        doc.getElementById("sendConfirmPaths").hidden === true);
+    check("API-only: Blocker-Hinweis erklärt den Zustand und den Schalter",
+        doc.getElementById("sendConfirmUnavailable").hidden === false &&
+        doc.getElementById("sendConfirmBot").textContent.includes("kein Versandweg"),
+        doc.getElementById("sendConfirmUnavailable").textContent);
+    check("API-only: Senden-Button ist im Dialog deaktiviert",
+        doc.getElementById("sendConfirmOk").disabled === true);
+    check("API-only: Hinweistext unter dem Button bleibt ehrlich",
+        doc.getElementById("sendPathNote").textContent.includes("nur per API"),
+        doc.getElementById("sendPathNote").textContent);
+    check("API-only: kein Versuch, /api/send zu treffen",
+        !apiOnlyCalls.some((u) => u.includes("/api/send")),
+        JSON.stringify(apiOnlyCalls));
+    doc.getElementById("sendConfirmCancel").click();
+
+    /* Mit eigener Session funktioniert der Versand auch in diesem Zustand. */
+    doc.getElementById("byobToken").value = "123456789:AAH1bcDefGhIjKlMnOpQrStUvWxYz012345";
+    doc.getElementById("byobChat").value = "4711";
+    doc.getElementById("byobConsent").checked = true;
+    doc.getElementById("byobForm").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await sleep(60);
+    doc.getElementById("sendBtn").click();
+    await sleep(20);
+    check("API-only + Session: eigener Bot ist der angebotene Weg",
+        doc.getElementById("sendConfirmPaths").hidden === false &&
+        doc.getElementById("sendConfirmPathOwnRow").hidden === false &&
+        doc.getElementById("sendConfirmPathSharedRow").hidden === true &&
+        doc.getElementById("sendConfirmBot").textContent.includes("@privacy_bot"),
+        doc.getElementById("sendConfirmBot").textContent);
+    check("API-only + Session: Senden ist wieder möglich",
+        doc.getElementById("sendConfirmOk").disabled === false);
+    doc.getElementById("sendConfirmOk").click();
+    await sleep(60);
+    check("API-only + Session: Versand läuft über die eigene Session",
+        apiOnlyCalls.some((u) => u.includes("/api/byob/send")) &&
+        !apiOnlyCalls.some((u) => u.includes("/api/send")),
+        JSON.stringify(apiOnlyCalls));
     dom.window.close();
 
     console.log(failures === 0 ? "\nJSDOM_SPEC_OK" : `\nJSDOM_SPEC_FAILED (${failures})`);

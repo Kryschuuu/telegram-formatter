@@ -56,7 +56,7 @@ darin ist ein eigenständiger Sub-Layer für das dezentrale BYOB-Modell.
 | `telegram_formatter/utils.py` | Reine, I/O-freie Konvertierungs- und Aufteilungslogik. Enthält `normalize_text`, `split_formulas`, `validate_latex_braces`, `parse_pipe_table`, `markdown_to_html`, `markdown_to_rich_markdown`, `build_messages`, `chunk_text`. |
 | `telegram_formatter/sender.py` | Versand einzelner `TelegramMessage`-Objekte via HTTP (`sendMessage`/`sendRichMessage`). Lazy-Import von `requests`. |
 | `telegram_formatter/cli.py` | Kommandozeilen-Einstieg (Datei/STDIN → Payloads anzeigen oder senden). |
-| `telegram_formatter/app.py` | Flask-Weboberfläche mit Editor, Live-Vorschau und den Routen `/api/convert`, `/api/send` (geteilter Bot, gepinnter Chat) sowie `/api/byob/*` (eigene Bot-Sessions: `session`, `discover`, `send`, `status`, `close` — botkit-Betriebsmodus B, seit v2.2.0). Templates liegen in `telegram_formatter/templates/`. |
+| `telegram_formatter/app.py` | Flask-Weboberfläche mit Editor, Live-Vorschau und den Routen `/api/convert`, `/api/send` (geteilter Bot, gepinnter Chat; aus dem Browser nur mit `TELEGRAM_FORMATTER_SHARED_WEB_SEND` + `confirm_public`) sowie `/api/byob/*` (eigene Bot-Sessions: `session`, `discover`, `send`, `status`, `close` — botkit-Betriebsmodus B, seit v2.2.0). Templates liegen in `telegram_formatter/templates/`. |
 | `telegram_formatter/static/` + `templates/` | Selbst-gehostetes UI („Design-System tf", seit Redesign 2026-09): vier CSS-Schichten (tokens → base → layout → components), `js/theme.js` (Theme-Switcher) + `js/app.js` (Editor) + `js/byob.js` (BYOB-Session-UI, seit v2.2.0), Inline-SVG-Icons — **keine CDNs**, CSP strikt `'self'`. Architektur & Theme-Anleitung: [DESIGN.md](DESIGN.md). |
 | `telegram_formatter/botctl.py` | CLI für eigene Bots: `register` · `review` · `approve` · `verify` · `send` · `checklist`; pflegt den Audit-Trail `audit/reviews.json`. |
 | `telegram_formatter/botkit/` | BYOB-Baukasten (Tokens/Vaults, Privacy/Redaction, Registry, Review-Statik BK001–BK012, ephemere Sessions, Telegram-Aufrufe). Details: [DECENTRAL_BOT_ARCHITECTURE.md](DECENTRAL_BOT_ARCHITECTURE.md). |
@@ -124,6 +124,13 @@ Entwicklung: `pytest` (siehe `requirements-dev.txt`).
   (geteilter Bot, gepinnter Chat), `POST /api/byob/session|discover|send|`
   `status|close` (ephemere eigene Bot-Sessions; Details:
   [DECENTRAL_BOT_ARCHITECTURE.md §1.5.1](DECENTRAL_BOT_ARCHITECTURE.md)).
+- **Versandweg-Auswahl im Client** — `static/js/app.js` hält den wirksamen Weg
+  (`own` = aktive BYOB-Session, `shared` = geteilter Bot) und routet daran:
+  `own` → `tfByob.sendText()` → `/api/byob/send`, `shared` → `/api/send` mit
+  `confirm_public: true`. Die Verfügbarkeit kommt aus den `<body>`-Attributen
+  `data-shared-send` / `data-shared-configured` / `data-byob-enabled`
+  (serverseitig in `app.py::index()` gesetzt); `static/js/byob.js` meldiert
+  Session-Wechsel über das Event `tf:botsessionchange`.
 - **Umgebungsvariablen:** `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `PORT`
   sowie die `TELEGRAM_FORMATTER_*`-Flags (Limits, Auth-Token, BYOB — Tabelle
   in der [README.md](../README.md#konfiguration)).

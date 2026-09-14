@@ -163,3 +163,35 @@ Ausgeführt am 2026-09-11 unter `python -m venv` (Python 3.11.2):
       `git mv .botkit/reviews.json audit/reviews.json` (bzw. Datei verschieben)
 - [ ] README/Abschnitt „Struktur“ lesen — neue Ordner `docs/`, `peer-review/`,
       `audit/`, `security/`, `bots/`
+
+---
+
+## 9. Nachzug: v2.6.0 — Versandweg-Verträge (Browser ↔ API)
+
+Der geteilte Bot ist im Browser wählbar. Für Nutzer von `app.py` (als own
+Blueprint) und für Skripte, die gegen eine Instanz laufen, ändern sich drei
+Verträge — alle abwärtskompatibel für den **authentifizierten** API-Weg:
+
+| Alt (≤ 2.5.0) | Neu (≥ 2.6.0) | Auswirkung |
+|---|---|---|
+| `<body data-configured="1\|0">` (= „Shared-Versand aus dem Browser möglich“) | `<body data-shared-send>` + `<body data-shared-configured>` (+ `data-byob-enabled`) | Getrennte Aussagen: „Bot existiert“ vs. „Bot ist im Browser nutzbar“. Eigenes Template-Overlay muss die Attribute umbenennen |
+| `POST /api/send` ohne `X-Auth-Token` ⇒ immer 503 | offen, wenn `TELEGRAM_FORMATTER_SHARED_WEB_SEND=1` (Standard) **und** `TELEGRAM_CHAT_ID` gepinnt | Anonyme Aufrufe brauchen `"confirm_public": true` und unterliegen `…_MAX_INPUT_CHARS` (8000) statt 100 000 |
+| `window.tfSendLabel` (von `byob.js` gesetzt, von `app.js` gelesen) | entfällt — `app.js` leitet die Beschriftung aus `tfByob.isActive()` ab; `byob.js` dispatcht `tf:botsessionchange` am `document` | Eigene Skripte, die das Label überschrieben haben, stattdessen `window.tfByob.describeTarget()` benutzen |
+| `telegram_formatter.app._extract_request()` | `_valid_text(data, max_chars=None)`, `_resolve_target_chat(data, require_chat=…)`, `_public_consent(data)` | Nur internal (Unterstrich-Präfix), aber Referenzen in Forks bitte anpassen |
+
+**Keine Änderung** an: `TELEGRAM_FORMATTER_API_TOKEN` + `X-Auth-Token`
+(authentifizierte Aufrufe senden weiterhin ohne `confirm_public` mit voller
+Längengrenze), an der Payload-Form von `/api/convert` und an allen
+BYOB-Endpunkten (`/api/byob/*` verlangen weiterhin Session-Handle +
+`session_secret`, und bei gesetztem Operator-Token den Header).
+
+**Umstellungs-Checkliste**
+
+- [ ] Eigenes Template / eigener Client: `data-configured` → `data-shared-send`
+      (+ `data-shared-configured`) ersetzen
+- [ ] Skripte, die anonym `POST /api/send` nutzen: `"confirm_public": true`
+      ergänzen (sonst 400)
+- [ ] Betreiber ohne öffentlichen Demo-Chat: `TELEGRAM_FORMATTER_SHARED_WEB_SEND=0`
+      setzen (verhält sich dann wieder wie 2.5.0)
+- [ ] Bestehende Render-Dienste: neue Variable einmalig im Dashboard pflegen
+      (Blueprint-Wirksamkeit siehe Abschnitt 3, „Deployment-Fallback“)

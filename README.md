@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.5.0-blue)
+![Version](https://img.shields.io/badge/version-2.6.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -27,6 +27,12 @@ Nachrichten.
 - **Automatisches Splitting** — Nachrichten werden an Absatz-, Zeilen- und
   Wortgrenzen aufgeteilt (4096 Zeichen für klassische, 32768 für Rich
   Messages), ohne Formatierungen oder Tabellen zu zerreißen.
+- **Zwei Versandwege, frei wählbar (seit v2.6.0)** — der Bestätigungsdialog
+  stellt den Weg aus, der tatsächlich offen ist: **geteilter Bot**
+  `@mdtotxt_bot` in den öffentlichen Demo-Chat (ohne Einrichtung, nur für
+  öffentliche Inhalte) oder **eigener Bot** in den privaten Ziel-Chat. Ist
+  eine eigene Session aktiv, steht sie vorausgewählt ganz oben; ohne Session
+  ist `@mdtotxt_bot` wählbar.
 - **Eigener Bot (dezentral, v1.3.0 / Web-Session seit v2.2.0)** — BYOB über
   `telegram_formatter/botkit` direkt **auf der Website** (Token + Chat-ID im
   Formular → ephemere RAM-Session) oder das `botctl`-CLI:
@@ -54,6 +60,23 @@ Pfad automatisch anhand des Inhalts:
 |---|---|---|
 | Reiner Formatierungstext | Regular | `sendMessage` + `parse_mode="HTML"` |
 | Enthält LaTeX oder Tabelle | Rich | `sendRichMessage` + Feld `markdown` |
+
+## Zwei Versandwege — wer sendet, wer liest mit?
+
+| Weg | Endpoint | Ziel | Sichtbarkeit | Einrichtung |
+|---|---|---|---|---|
+| **Geteilter Bot** `@mdtotxt_bot` | `POST /api/send` | der auf `TELEGRAM_CHAT_ID` **gepinnte** Chat des Betreibers | öffentlich — alle Besucher der Instanz (und wer den Bot zu Telegram hinzufügt) lesen mit | keine |
+| **Eigener Bot (BYOB)** | `POST /api/byob/send` | dein eigener Ziel-Chat | privat — nur Mitglieder deines Chats | Token + Chat-ID, Session max. 30 min |
+
+Der Sende-Knopf öffnet zuerst den Bestätigungsdialog: dort wird der Weg
+angezeigt (und bei aktivierter Session umgeschaltet), dann erst wird gesendet.
+Der geteilte Weg ist an drei Bedingungen geknüpft — sonst bleibt er zu:
+
+1. `TELEGRAM_BOT_TOKEN` **und** `TELEGRAM_CHAT_ID` sind gesetzt (der Zielchat
+   ist gepinnt, `chat_id`-Overrides aus dem Request werden abgewiesen),
+2. `TELEGRAM_FORMATTER_SHARED_WEB_SEND` ist nicht auf `0` gestellt,
+3. der Request bestätigt die öffentliche Sichtbarkeit mit
+   `"confirm_public": true` (im Browser holt der Dialog diese Bestätigung ein).
 
 ## Setup
 
@@ -84,7 +107,7 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 | Variable | Wirkung |
 |---|---|
 | `TELEGRAM_CHAT_ID` | **pinnt** den Zielchat von `/api/send`; ein abweichender Request-Wert wird abgewiesen |
-| `TELEGRAM_FORMATTER_API_TOKEN` | **Pflicht für `/api/send`**. Alle POST-Endpunkte verlangen bei gesetztem Wert den Header `X-Auth-Token`; ohne diesen Token bleibt der Shared-Versand deaktiviert (503). Der Browser erhält den Token nie — authentifizierter Shared-Versand ist API-only |
+| `TELEGRAM_FORMATTER_API_TOKEN` | Operator-Secret für den **authentifizierten** Shared-Versand. Bei gesetztem Wert verlangen alle POST-Endpunkte den Header `X-Auth-Token` — nur `POST /api/send` bleibt offen, wenn zusätzlich `TELEGRAM_FORMATTER_SHARED_WEB_SEND=1` gilt (sonst wäre der Browser-Weg widersprüchlich: er darf das Secret nie erhalten). Ohne dieses Secret ist `/api/send` deaktiviert (503) |
 | `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` | Anzahl vertrauenswürdiger Proxy-Hops für Client-IP-Erkennung; Standard `0` (sicherer Direktbetrieb), Render-Blueprint setzt `1` |
 | `TELEGRAM_FORMATTER_MAX_INPUT_CHARS` | Eingabelimit (Standard 100000) |
 | `TELEGRAM_FORMATTER_SENDS_PER_MINUTE` | Rate-Limit pro IP für `/api/send` (Standard 6) |
@@ -95,13 +118,28 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 | `TELEGRAM_FORMATTER_BYOB_TTL_SECONDS` | Lebensdauer einer Web-Session (Standard 1800) |
 | `TELEGRAM_FORMATTER_BYOB_IDLE_SECONDS` | Leerlauf-Timeout einer Web-Session (Standard 600) |
 | `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` | Anzeige-Name des geteilten Bots in der Warnung (Standard `@mdtotxt_bot`) |
+| `TELEGRAM_FORMATTER_SHARED_WEB_SEND` | Geteilter Bot im Browser nutzbar (Standard `1`). Wirkt nur zusammen mit gepinntem `TELEGRAM_CHAT_ID`; `0` = API-only wie in 2.5.0, der Browser sendet dann ausschließlich über BYOB |
+| `TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE` | Anonyme Browser-Sendungen pro IP (Standard 4) |
+| `TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE_TOTAL` | Anonyme Browser-Sendungen pro Minute **instanzweit** (Standard 30) |
+| `TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS` | Längenkappe für anonyme Browser-Sendungen (Standard 8000; authentifizierte Aufrufe nutzen `TELEGRAM_FORMATTER_MAX_INPUT_CHARS`) |
 
 Hintergrund der Härtungen: [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
 
-Der Shared-Versand ist absichtlich nicht browseröffentlich. Für einen
-serverseitigen, authentifizierten Aufruf muss der Betreiber `TELEGRAM_CHAT_ID`
-und `TELEGRAM_FORMATTER_API_TOKEN` setzen und den Token ausschließlich über
-`X-Auth-Token` übermitteln:
+**Shared-Versand aus dem Browser** (Standardfall der gehosteten Instanz):
+`POST /api/send` nimmt den Text anonym an und legt ihn in den gepinnten Chat —
+öffentliche Sichtbarkeit mit `confirm_public` bestätigt, kürzere Längenkappe
+und engere Frequenzlimits als der API-Weg:
+
+```bash
+curl -X POST https://example.invalid/api/send \
+  -H 'Content-Type: application/json' \
+  --data '{"text":"öffentliche Testnachricht","confirm_public":true}'
+```
+
+**Shared-Versand serverseitig** (z. B. aus Skripten oder wenn
+`TELEGRAM_FORMATTER_SHARED_WEB_SEND=0` gilt): `TELEGRAM_CHAT_ID` und
+`TELEGRAM_FORMATTER_API_TOKEN` setzen, Token ausschließlich über `X-Auth-Token`
+übermitteln — der Browser erhält dieses Secret nie:
 
 ```bash
 curl -X POST https://example.invalid/api/send \

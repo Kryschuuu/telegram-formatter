@@ -192,12 +192,23 @@ def test_send_requires_valid_chat_in_selfhosted_mode(client, monkeypatch):
     assert resp.status_code == 400  # numerisches Format erzwungen
 
 
-def test_shared_send_fails_closed_without_api_token(client, monkeypatch):
+def test_shared_send_fails_closed_when_browser_send_is_off(client, monkeypatch):
+    """Betreiber-Schalter aus ⇒ der Browser kommt an /api/send nicht mehr vorbei.
+
+    Das ist der gehärtete Zustand aus 2.5.0: ohne Operator-Token und ohne
+    freigeschalteten Browser-Versand ist der Endpunkt deaktiviert (503).
+    """
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:secretsecretsecretsecretsecretsec")
     monkeypatch.setattr(app_module, "CHAT_ID", "-100999")
-    resp = client.post("/api/send", json={"text": "hallo"})
+    monkeypatch.setattr(app_module, "API_TOKEN", "")
+    monkeypatch.setattr(app_module, "SHARED_WEB_SEND", False)
+    resp = client.post("/api/send", json={"text": "hallo", "confirm_public": True})
     assert resp.status_code == 503
-    assert "deaktiviert" in resp.get_json()["error"]
+    data = resp.get_json()
+    assert "deaktiviert" in data["error"]
+    # Die Meldung nennt beide Wege, damit die Konfiguration auffindbar bleibt.
+    assert "TELEGRAM_FORMATTER_API_TOKEN" in data["error"]
+    assert "TELEGRAM_FORMATTER_SHARED_WEB_SEND" in data["error"]
 
 
 def test_selfhosted_send_fails_closed_without_api_token(client, monkeypatch):
@@ -412,3 +423,207 @@ def test_unknown_route_returns_json_error(client):
     resp = client.get("/api/nope")
     assert resp.status_code == 404
     assert "error" in resp.get_json()
+
+
+# --------------------------------------------------------------------------- #
+# Shared-Versand im Browser (v2.6.0): @mdtotxt_bot ist ohne eigenen Bot wählbar
+#
+# Die gehostete Demo-Instanz ist genau dieser Fall: geteilter Bot + gepinnter
+# Zielchat, **kein** Operator-Token im Browser. Erwartet wird: Senden klappt
+# anonym, aber nur in den gepinnten Chat, nur mit bestätigter öffentlicher
+# Sichtbarkeit und unter engeren Grenzen als der authentifizierte API-Weg.
+# --------------------------------------------------------------------------- #
+SHARED_TOKEN = "123456:secretsecretsecretsecretsecretsec"
+PUBLIC_CHAT = "-100999"
+
+
+@pytest.fixture()
+def shared_web_client(client, monkeypatch):
+    """Demo-Instanz: geteilter Bot mit gepinntem Chat, Browser-Versand an."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", SHARED_TOKEN)
+    monkeypatch.setattr(app_module, "CHAT_ID", PUBLIC_CHAT)
+    monkeypatch.setattr(app_module, "API_TOKEN", "")
+    monkeypatch.setattr(app_module, "SHARED_WEB_SEND", True)
+    monkeypatch.setattr(app_module, "SHARED_WEB_SENDS_PER_MINUTE", 0)
+    monkeypatch.setattr(app_module, "SHARED_WEB_SENDS_PER_MINUTE_TOTAL", 0)
+    monkeypatch.setattr(app_module, "SHARED_WEB_MAX_INPUT_CHARS", 8000)
+    monkeypatch.setattr(app_module, "send_message", lambda m, t, **kw: {"ok": True})
+    return client
+
+
+def test_shared_web_send_delivers_to_pinned_chat(shared_web_client):
+    resp = shared_web_client.post(
+        "/api/send", json={"text": "**hallo** Welt", "confirm_public": True}
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["sent"] == 1
+    assert data["via"] == {"bot": app_module.SHARED_BOT_HANDLE, "chat_id": PUBLIC_CHAT,
+                           "public": True}
+
+
+def test_shared_web_send_requires_public_confirmation(shared_web_client, monkeypatch):
+    """Ohne `confirm_public` bleibt der öffentliche Chat zu (400, nichts geht raus)."""
+    sent = []
+    monkeypatch.setattr(app_module, "send_message",
+                        lambda m, t, **kw: sent.append(m.payload["text"]) or {"ok": True})
+    resp = shared_web_client.post("/api/send", json={"text": "hi"})
+    assert resp.status_code == 400
+    assert "confirm_public" in resp.get_json()["error"]
+    assert sent == []
+    # … und mit Bestätigung schon.
+    assert shared_web_client.post(
+        "/api/send", json={"text": "hi", "confirm_public": True}
+    ).status_code == 200
+    assert sent == ["hi"]
+
+
+def test_shared_web_send_never_reaches_foreign_chat(shared_web_client, monkeypatch):
+    """K-2 bleibt geschlossen: auch der Browser-Weg kann den Zielchat nicht ersetzen."""
+    seen = []
+    monkeypatch.setattr(app_module, "send_message",
+                        lambda m, t, **kw: seen.append(m.payload["chat_id"]) or {"ok": True})
+    resp = shared_web_client.post(
+        "/api/send", json={"text": "hi", "chat_id": "42", "confirm_public": True}
+    )
+    assert resp.status_code == 400
+    assert seen == []
+    # Der identische Text ohne Fremd-Chat geht in den gepinnten Chat.
+    assert shared_web_client.post(
+        "/api/send", json={"text": "hi", "confirm_public": True}
+    ).status_code == 200
+    assert seen == [PUBLIC_CHAT]
+
+
+def test_shared_web_send_caps_anonymous_input_length(shared_web_client, monkeypatch):
+    """Lange Texte gehören in den privaten BYOB-Weg — anonym gilt die kurze Kappe."""
+    monkeypatch.setattr(app_module, "SHARED_WEB_MAX_INPUT_CHARS", 50)
+    sent = []
+    monkeypatch.setattr(app_module, "send_message",
+                        lambda m, t, **kw: sent.append(1) or {"ok": True})
+    resp = shared_web_client.post(
+        "/api/send", json={"text": "x" * 60, "confirm_public": True}
+    )
+    assert resp.status_code == 400
+    assert "max. 50 Zeichen" in resp.get_json()["error"]
+    assert sent == []
+
+
+def test_shared_web_send_rate_limits_per_ip(shared_web_client, monkeypatch):
+    monkeypatch.setattr(app_module, "SHARED_WEB_SENDS_PER_MINUTE", 2)
+    body = {"text": "hi", "confirm_public": True}
+    assert shared_web_client.post("/api/send", json=body).status_code == 200
+    assert shared_web_client.post("/api/send", json=body).status_code == 200
+    blocked = shared_web_client.post("/api/send", json=body)
+    assert blocked.status_code == 429
+    assert blocked.get_json()["retry_after"] == 60
+
+
+def test_shared_web_send_rate_limits_instance_wide(shared_web_client, monkeypatch):
+    """Der instanzweite Deckel zählt über alle Adressen — nicht pro IP."""
+    monkeypatch.setattr(app_module, "SHARED_WEB_SENDS_PER_MINUTE", 99)
+    monkeypatch.setattr(app_module, "SHARED_WEB_SENDS_PER_MINUTE_TOTAL", 3)
+    body = {"text": "hi", "confirm_public": True}
+    for _ in range(3):
+        assert shared_web_client.post("/api/send", json=body).status_code == 200
+    assert shared_web_client.post("/api/send", json=body).status_code == 429
+
+
+def test_shared_web_send_needs_pinned_chat(client, monkeypatch):
+    """Freischaltung allein genügt nicht: ohne gepinnten Chat bleibt es beim 503."""
+    monkeypatch.setattr(app_module, "BOT_TOKEN", SHARED_TOKEN)
+    monkeypatch.setattr(app_module, "CHAT_ID", "")
+    monkeypatch.setattr(app_module, "API_TOKEN", "")
+    monkeypatch.setattr(app_module, "SHARED_WEB_SEND", True)
+    resp = client.post("/api/send", json={"text": "hi", "chat_id": "77", "confirm_public": True})
+    assert resp.status_code == 503
+    assert "TELEGRAM_CHAT_ID" in resp.get_json()["error"]
+
+
+def test_shared_web_send_without_bot_token_stays_400(client, monkeypatch):
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "")
+    monkeypatch.setattr(app_module, "CHAT_ID", PUBLIC_CHAT)
+    monkeypatch.setattr(app_module, "SHARED_WEB_SEND", True)
+    resp = client.post("/api/send", json={"text": "hi", "confirm_public": True})
+    assert resp.status_code == 400
+    assert "TELEGRAM_BOT_TOKEN" in resp.get_json()["error"]
+
+
+def test_operator_token_path_keeps_full_input_limit(shared_web_client, monkeypatch):
+    """Authentifizierte API-Aufrufe bleiben unangetastet: volles Limit, kein Consent."""
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
+    monkeypatch.setattr(app_module, "SHARED_WEB_MAX_INPUT_CHARS", 10)
+    sent = []
+    monkeypatch.setattr(app_module, "send_message",
+                        lambda m, t, **kw: sent.append(len(m.payload["text"])) or {"ok": True})
+    resp = shared_web_client.post(
+        "/api/send",
+        json={"text": "y" * 500},
+        headers={"X-Auth-Token": "s3cret"},
+    )
+    assert resp.status_code == 200
+    assert sent and sent[0] > 10
+    assert resp.get_json()["via"]["public"] is False
+
+
+def test_operator_token_exempts_only_the_shared_send_path(shared_web_client, monkeypatch):
+    """Der Browser darf `send` ohne Secret erreichen — alle anderen POSTs nicht.
+
+    Ohne diese Ausnahme wäre die Kombination „Operator-Token gesetzt +
+    Browser-Versand frei“ widersprüchlich: das Secret dürfte dem Browser nie
+    ausgehändigt werden, `/api/send` wäre aber genau für ihn gedacht.
+    """
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
+    # /api/send: ohne Header durchgewinkt (Guard-Ausnahme), weil freigeschaltet.
+    assert shared_web_client.post(
+        "/api/send", json={"text": "hi", "confirm_public": True}
+    ).status_code == 200
+    # /api/convert: bleibt pflichtig — die Ausnahme gilt nur für diesen einen Endpunkt.
+    assert shared_web_client.post("/api/convert", json={"text": "hi"}).status_code == 401
+    assert shared_web_client.post(
+        "/api/convert", json={"text": "hi"}, headers={"X-Auth-Token": "s3cret"}
+    ).status_code == 200
+
+
+def test_shared_web_send_flag_off_blocks_anonymous_but_not_api(shared_web_client, monkeypatch):
+    monkeypatch.setattr(app_module, "SHARED_WEB_SEND", False)
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
+    assert shared_web_client.post(
+        "/api/send", json={"text": "hi", "confirm_public": True}
+    ).status_code == 401  # Guard: ohne Secret kein Durchkommen
+    assert shared_web_client.post(
+        "/api/send", json={"text": "hi"}, headers={"X-Auth-Token": "s3cret"}
+    ).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Template-Verträge des Versandwegs (welcher Bot ist im Browser wählbar?)
+# --------------------------------------------------------------------------- #
+def test_index_offers_shared_bot_when_web_send_enabled(shared_web_client):
+    page = shared_web_client.get("/").data.decode("utf-8")
+    assert 'data-shared-send="1"' in page
+    assert 'data-shared-configured="1"' in page
+    assert "@mdtotxt_bot" in page
+    # Statuszeile verspricht kein BYOB-Zwang mehr …
+    assert "Bot konfiguriert — senden bereit" in page
+    assert "Shared-Bot nur per API" not in page
+    # … und der Bestätigungsdialog bekommt die Weg-Auswahl.
+    assert 'id="sendConfirmPaths"' in page
+    assert 'id="sendConfirmPathShared"' in page
+    assert 'id="sendConfirmPathOwn"' in page
+
+
+def test_index_marks_shared_bot_as_api_only_when_disabled(shared_web_client, monkeypatch):
+    monkeypatch.setattr(app_module, "SHARED_WEB_SEND", False)
+    page = shared_web_client.get("/").data.decode("utf-8")
+    assert 'data-shared-send="0"' in page
+    assert 'data-shared-configured="1"' in page  # der Bot existiert ja
+    assert "Shared-Bot nur per API — Browser: BYOB" in page
+    assert "TELEGRAM_FORMATTER_SHARED_WEB_SEND=1" in page
+
+
+def test_index_without_shared_bot(client):
+    page = client.get("/").data.decode("utf-8")
+    assert 'data-shared-send="0"' in page
+    assert 'data-shared-configured="0"' in page
+    assert "Kein Bot-Token gesetzt — nur Vorschau" in page

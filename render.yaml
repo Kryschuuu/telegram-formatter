@@ -39,9 +39,16 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
-      # Required for the authenticated, API-only shared send endpoint.
+      # Operator secret for the *authenticated* shared-send path (X-Auth-Token).
+      # Leave unset on public demo instances: the browser never receives it.
       - key: TELEGRAM_FORMATTER_API_TOKEN
         sync: false
+      # Shared bot (@mdtotxt_bot) selectable in the browser's send dialog.
+      # Only effective together with a pinned TELEGRAM_CHAT_ID; "0" closes
+      # anonymous sending again (API-only, the 2.5.0 behaviour). Abuse limits:
+      # TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE[_TOTAL] / …_MAX_INPUT_CHARS.
+      - key: TELEGRAM_FORMATTER_SHARED_WEB_SEND
+        value: "1"
       # Render provides exactly one trusted proxy hop. The application
       # defaults to zero for safe direct/self-hosted deployments.
       - key: TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS

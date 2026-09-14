@@ -16,7 +16,18 @@ Zwei Versand-Wege (seit v2.2.0):
   Bot in den gepinnten ``TELEGRAM_CHAT_ID``. Auf einer öffentlichen Instanz
   ist das ein **gemeinsamer Chat** — jeder Besucher sieht alle bisher
   gesendeten Nachrichten. Die Oberfläche warnt entsprechend; für private
-  Inhalte ist BYOB der empfohlene Weg.
+  Inhalte ist BYOB der empfohlene Weg. Zwei Zugangsarten (seit 2.6.0):
+
+  - **Browser-Versand** (``TELEGRAM_FORMATTER_SHARED_WEB_SEND``, Standard
+    ``1``): nur wirksam, wenn *beide* Bedingungen gelten — Bot-Token gesetzt
+    **und** Zielchat gepinnt. Anonyme Aufrufe brauchen zusätzlich
+    ``"confirm_public": true`` im Body (die UI holt diese Bestätigung im
+    Sende-Dialog ein) und unterliegen engeren Grenzen
+    (``SHARED_WEB_SENDS_PER_MINUTE`` pro IP, …_TOTAL instanzweit,
+    ``SHARED_WEB_MAX_INPUT_CHARS``).
+  - **API-only** (Operator-Token via ``X-Auth-Token``): volle Textlänge,
+    ``SENDS_PER_MINUTE``. Mit ``…_SHARED_WEB_SEND=0`` ist der Endpunkt für den
+    Browser wieder komplett geschlossen (Zustand bis 2.5.0).
 * **Eigener Bot — BYOB** (``/api/byob/*``): Nutzende registrieren ihr eigenes
   Bot-Token, der Server öffnet darüber eine **ephemere Session** (Botkit,
   Betriebsmodus B aus ``docs/DECENTRAL_BOT_ARCHITECTURE.md``). Das Token
@@ -41,10 +52,13 @@ Härtungen (Security-Audit 2026-09, Befunde K-1/K-2/H-2/H-5/M-6/B-5/B-6):
   ``TELEGRAM_CHAT_ID``, ist der Zugangsschutz Pflicht — fehlt auch
   ``TELEGRAM_FORMATTER_API_TOKEN``, antwortet der Endpunkt mit 503 statt
   anonym beliebige Chats zu beliefern.
-* **Shared-Versand geschlossen:** ``/api/send`` ist ohne
-  ``TELEGRAM_FORMATTER_API_TOKEN`` immer deaktiviert (503). Mit Token ist der
-  Endpunkt nur über ``X-Auth-Token`` nutzbar; der Browser erhält dieses Secret
-  nicht. Der authentifizierte Shared-Versand ist damit API-only.
+* **Shared-Versand nur über zwei explizite Zugänge:** ``/api/send`` ist
+  deaktiviert (503), wenn weder der Operator-Token
+  (``TELEGRAM_FORMATTER_API_TOKEN`` + ``X-Auth-Token``) noch der
+  Browser-Versand (``TELEGRAM_FORMATTER_SHARED_WEB_SEND`` bei gepinntem
+  Zielchat) freigeschaltet ist. Der Browser erhält das Operator-Secret nie —
+  anonym ist ausschließlich die *gepinnte* Demo-Spur möglich, nie ein
+  Fremd-Chat.
 * **Optionaler API-Token für übrige POSTs:** ist
   ``TELEGRAM_FORMATTER_API_TOKEN`` gesetzt, verlangen alle POST-Endpunkte einen
   passenden ``X-Auth-Token``-Header (zeitkonstanter Vergleich).
@@ -148,8 +162,68 @@ CHAT_ID = (os.environ.get("TELEGRAM_CHAT_ID", "") or "").strip()
 #: sonst wäre ``/api/send`` ein offener Relay (R-1, Fail-Closed).
 API_TOKEN = os.environ.get("TELEGRAM_FORMATTER_API_TOKEN", "")
 
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    """Liest ein Boolean-Flag aus der Umgebung (``1/true/yes/on`` ⇒ wahr)."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# --- Shared-Versand im Browser (seit 2.6.0 explizit konfigurierbar) ---------- #
+#: Darf der **Browser** den geteilten Bot nutzen (``POST /api/send`` ohne
+#: Operator-Token)? Wirksam ist das Opt-in nur zusammen mit einem gepinnten
+#: Zielchat — siehe :func:`_shared_web_send_available`. Ein Betreiber, der
+#: seine Instanz ausschließlich für BYOB öffnen will, setzt ``0`` und
+#: schließt damit den anonymen Versand komplett (Zustand bis 2.5.0).
+SHARED_WEB_SEND = _env_flag("TELEGRAM_FORMATTER_SHARED_WEB_SEND", True)
+#: Anonyme Browser-Sendungen pro Minute und IP. Bewusst enger als
+#: ``SENDS_PER_MINUTE`` für authentifizierte API-Aufrufe: der geteilte Chat
+#: ist öffentlich, also ist Spam hier der Hauptfall, den es zu dämpfen gilt.
+SHARED_WEB_SENDS_PER_MINUTE = int(
+    os.environ.get("TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE", "4")
+)
+#: Anonyme Browser-Sendungen pro Minute **instanzweit** (alle IPs zusammen).
+#: Bremst Flash-artige Last von vielen Adressen, bevor Telegram den geteilten
+#: Bot wegen Rate-Limits drosselt oder sperrt.
+SHARED_WEB_SENDS_PER_MINUTE_TOTAL = int(
+    os.environ.get("TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE_TOTAL", "30")
+)
+#: Längenkappe für anonyme Browser-Sendungen (authentizierte Aufrufe behalten
+#: ``MAX_INPUT_CHARS``). Ein geteilter Chat soll keine 100k-Zeichen-Wände
+#: bekommen — lange Texte gehören in den privaten BYOB-Weg.
+SHARED_WEB_MAX_INPUT_CHARS = int(
+    os.environ.get("TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS", "8000")
+)
+#: Fehlerantwort, wenn kein Shared-Zugang offen ist (weder API noch Browser).
+SHARED_SEND_DISABLED = (
+    "Shared-Versand deaktiviert: nötig ist entweder der Operator-Token "
+    "(TELEGRAM_FORMATTER_API_TOKEN + Header X-Auth-Token) oder der "
+    "Browser-Versand (TELEGRAM_FORMATTER_SHARED_WEB_SEND=1 zusammen mit "
+    "gepinntem TELEGRAM_CHAT_ID)."
+)
+
+
+def _shared_web_send_available() -> bool:
+    """
+    Ist der geteilte Bot im Browser benutzbar?
+
+    Drei Bedingungen müssen *gleichzeitig* gelten — sonst bleibt der Endpunkt
+    fail-closed (503):
+
+    1. ``TELEGRAM_BOT_TOKEN`` ist gesetzt (es existiert ein geteilter Bot),
+    2. ``TELEGRAM_CHAT_ID`` ist gepinnt (Senden kann nur in *den einen*
+       Betreiber-Chat — die Bedingung, die K-2 geschlossen hält: ohne Pinning
+       wäre der Endpunkt ein offener Relay für beliebige Fremd-Chats),
+    3. ``TELEGRAM_FORMATTER_SHARED_WEB_SEND`` ist nicht abgeschaltet.
+    """
+    return bool(SHARED_WEB_SEND and BOT_TOKEN and CHAT_ID)
+
+
 # Fail-Closed-Hinweis beim Start: BOT_TOKEN ohne CHAT_ID und ohne API_TOKEN
-# würde den Versand anonymisieren — genau das verbietet R-1.
+# würde den Versand anonymisieren — genau das verbietet R-1. Der
+# Browser-Versand greift hier nicht, er verlangt den gepinnten Zielchat.
 if BOT_TOKEN and not CHAT_ID and not API_TOKEN:
     LOGGER.warning(
         "app.selfhost_unprotected: TELEGRAM_BOT_TOKEN ist gesetzt, aber weder "
@@ -159,14 +233,6 @@ if BOT_TOKEN and not CHAT_ID and not API_TOKEN:
 
 
 # --- BYOB: Eigene Bots in ephemeren Web-Sessions (botkit, Modus B) ---------- #
-def _env_flag(name: str, default: bool = True) -> bool:
-    """Liest ein Boolean-Flag aus der Umgebung (``1/true/yes/on`` ⇒ wahr)."""
-    raw = os.environ.get(name)
-    if raw is None or not raw.strip():
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 #: BYOB-Websessions aktiv? (Abschaltbar für Betreiber, die keine fremden
 #: Tokens über ihre Instanz relayen wollen.)
 BYOB_ENABLED = _env_flag("TELEGRAM_FORMATTER_BYOB_ENABLED", True)
@@ -237,11 +303,25 @@ _RATE_LOCK = threading.Lock()
 _RATE_HITS: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
 
-def _rate_limited(bucket: str, limit: int, window_seconds: float = 60.0) -> bool:
-    """``True``, wenn das Limit für die aktuelle IP im Fenster erreicht ist."""
+def _rate_limited(
+    bucket: str,
+    limit: int,
+    window_seconds: float = 60.0,
+    *,
+    per_ip: bool = True,
+) -> bool:
+    """
+    ``True``, wenn das Limit im Fenster erreicht ist.
+
+    ``per_ip=True`` zählt pro Client-Adresse (der Normalfall). Mit
+    ``per_ip=False`` zählt der Zähler **instanzweit** — das braucht der
+    anonyme Browser-Versand, damit viele Adressen zusammen den geteilten Bot
+    nicht gegen die Telegram-Rate-Limits laufen lassen.
+    """
     if limit <= 0:
         return False
-    key = (bucket, request.remote_addr or "unknown")
+    who = (request.remote_addr or "unknown") if per_ip else "alle"
+    key = (bucket, who)
     now = time.monotonic()
     with _RATE_LOCK:
         hits = _RATE_HITS[key]
@@ -425,6 +505,38 @@ def _byob() -> _ByobRuntime:
 # --------------------------------------------------------------------------- #
 # Request-Guards
 # --------------------------------------------------------------------------- #
+#: Endpoint-Name des geteilten Versands (``@app.route("/api/send")`` →
+#: ``def send()``). Nur dieser Endpunkt kann vom Operator-Token ausgenommen
+#: werden — und auch das nur, wenn der Browser-Versand freigeschaltet ist.
+#: Eine Wildcard-Ausnahme (etwa „alle BYOB-Endpunkte“) gibt es bewusst nicht:
+#: Der Operator-Token bleibt für jede Instanz, die ihn setzt, Pflicht.
+SHARED_SEND_ENDPOINT = "send"
+
+
+def _operator_token_required() -> bool:
+    """
+    Muss dieser Request den Operator-Token ``X-Auth-Token`` mitbringen?
+
+    Ja — sobald ``TELEGRAM_FORMATTER_API_TOKEN`` gesetzt ist. Einzige
+    Ausnahme: der geteilte Versand, wenn der Betreiber zusätzlich den
+    Browser-Versand freigeschaltet hat (:func:`_shared_web_send_available`).
+    Ohne diese Ausnahme wäre die Kombination „Operator-Token gesetzt +
+    ``SHARED_WEB_SEND=1``“ widersprüchlich: das Secret dürfte dem Browser nie
+    ausgehändigt werden, ``/api/send`` wäre aber gerade für den Browser
+    gedacht. Alle übrigen POSTs (auch ``/api/byob/*``) bleiben pflichtig.
+    """
+    if not API_TOKEN:
+        return False
+    return not (request.endpoint == SHARED_SEND_ENDPOINT and _shared_web_send_available())
+
+
+def _request_authenticated() -> bool:
+    """Zeitkonstanter Vergleich des ``X-Auth-Token``-Headers gegen den Operator-Token."""
+    if not API_TOKEN:
+        return False
+    return hmac.compare_digest(request.headers.get("X-Auth-Token", ""), API_TOKEN)
+
+
 @app.before_request
 def _guard():
     """Origin-Bindung und optionales API-Token für alle schreibenden Endpunkte."""
@@ -435,7 +547,7 @@ def _guard():
         parsed = urlparse(origin)
         if parsed.netloc and parsed.netloc != request.host:
             return jsonify({"error": "Ursprung (Origin) nicht erlaubt."}), 403
-    if API_TOKEN:
+    if _operator_token_required():
         supplied = request.headers.get("X-Auth-Token", "")
         if not hmac.compare_digest(supplied, API_TOKEN):
             return jsonify({"error": "Autorisierung erforderlich."}), 401
@@ -506,54 +618,67 @@ def _json_body() -> tuple[dict | None, tuple | None]:
     return data, None
 
 
-def _valid_text(data: dict) -> tuple[str | None, tuple | None]:
-    """``text``-Feld prüfen (Typ + Länge) — gemeinsam für alle Sendewege."""
+def _valid_text(data: dict, max_chars: int | None = None) -> tuple[str | None, tuple | None]:
+    """
+    ``text``-Feld prüfen (Typ + Länge) — gemeinsam für alle Sendewege.
+
+    ``max_chars`` erlaubt die kürzere Kappe des anonymen Browser-Versands
+    (:data:`SHARED_WEB_MAX_INPUT_CHARS`); ohne Wert gilt :data:`MAX_INPUT_CHARS`.
+    """
+    limit = MAX_INPUT_CHARS if max_chars is None else max_chars
     text = data.get("text", "")
     if not isinstance(text, str):
         return None, (jsonify({"error": "'text' muss ein String sein."}), 400)
-    if len(text) > MAX_INPUT_CHARS:
+    if len(text) > limit:
         return None, (
-            jsonify({"error": f"Eingabe zu lang (max. {MAX_INPUT_CHARS} Zeichen)."}),
+            jsonify({"error": f"Eingabe zu lang (max. {limit} Zeichen)."}),
             400,
         )
     return text, None
 
 
-def _extract_request(require_chat: bool):
-    """Liefert ``(text, chat_id, None)`` oder ``(None, None, error_response)``."""
-    data, err = _json_body()
-    if err is not None:
-        return None, None, err
+def _public_consent(data: dict) -> bool:
+    """
+    Anonyme Browser-Sendungen brauchen das Eingeständnis, dass der geteilte
+    Chat **öffentlich** ist (``"confirm_public": true``). Die Website holt es
+    im Sende-Bestätigungsdialog ein; ein Skript umgeht damit nichts — die
+    Hürde stellt sicher, dass niemand *unbeabsichtigt* in den öffentlichen Chat
+    postet. Authentizierte API-Aufrufe (Operator-Token) brauchen sie nicht.
+    """
+    return data.get("confirm_public") is True
 
-    text, err = _valid_text(data)
-    if err is not None:
-        return None, None, err
 
+def _resolve_target_chat(data: dict, *, require_chat: bool) -> tuple[str | None, tuple | None]:
+    """
+    Zielchat bestimmen — liefert ``(chat_id, None)`` oder ``(None, Fehlerantwort)``.
+
+    Gehosteter Betrieb (``TELEGRAM_CHAT_ID`` gesetzt) ist **gepinnt**: ein
+    abweichender ``chat_id``-Wert im Body wird abgewiesen (Audit K-2 — sonst
+    wäre der Endpunkt ein offener Relay). Selbstbetrieb ohne ENV-Chat muss
+    eine numerische ``chat_id`` im Body mitbringen; ungültige Werte werden
+    nicht still ersetzt, sondern abgelehnt.
+    """
     raw_chat = data.get("chat_id")
     if CHAT_ID:
-        # Gehosteter Betrieb: Zielchat ist fest konfiguriert, kein Override.
         if raw_chat is not None and _valid_chat_id(raw_chat) != CHAT_ID:
-            return None, None, (
+            return None, (
                 jsonify({"error": "chat_id kann hier nicht gesetzt werden — "
                                   "der Dienst sendet nur in den konfigurierten Chat."}),
                 400,
             )
-        return text, CHAT_ID, None
+        return CHAT_ID, None
 
-    # Selbstbetrieb ohne konfigurierten Chat: Body-Wert (falls vorhanden) muss
-    # eine numerische Chat-ID sein — ungültige Werte werden nicht still
-    # ersetzt, sondern abgewiesen.
     chat = _valid_chat_id(raw_chat)
     if chat is None:
         if raw_chat is not None:
-            return None, None, (
+            return None, (
                 jsonify({"error": "chat_id muss eine Ganzzahl sein (z. B. -1001234567890)."}),
                 400,
             )
         if require_chat:
-            return None, None, (jsonify({"error": "Keine Chat-ID angegeben."}), 400)
+            return None, (jsonify({"error": "Keine Chat-ID angegeben."}), 400)
         chat = "0"
-    return text, chat, None
+    return chat, None
 
 
 # --------------------------------------------------------------------------- #
@@ -564,11 +689,13 @@ def index() -> str:
     """Rendert die Editor-Seite (Markdown/LaTeX -> Telegram-Vorschau)."""
     return render_template(
         "index.html",
-        # ``configured`` controls privacy/status messaging. The browser never
-        # receives the operator API token, so shared sending is never enabled
-        # in this UI; authenticated shared calls remain API-only.
+        # ``configured`` = es gibt einen geteilten Bot mit gepinntem Zielchat
+        # (steuert die Privatsphäre-Warnung). ``shared_send_available`` = dieser
+        # Bot darf **vom Browser** genutzt werden (Opt-in + Pinning, siehe
+        # ``_shared_web_send_available``). Das Operator-Secret erhält der
+        # Browser nie — ohne Freischaltung bleibt der Shared-Versand API-only.
         configured=bool(BOT_TOKEN and CHAT_ID),
-        shared_send_available=False,
+        shared_send_available=_shared_web_send_available(),
         byob_enabled=BYOB_ENABLED,
         shared_bot_handle=SHARED_BOT_HANDLE,
         version=__version__,
@@ -584,7 +711,13 @@ def convert():
     """
     if _rate_limited("convert", CONVERTS_PER_MINUTE):
         return jsonify({"error": "Zu viele Anfragen — bitte kurz warten."}), 429
-    text, chat_id, err = _extract_request(require_chat=False)
+    data, err = _json_body()
+    if err is not None:
+        return err
+    text, err = _valid_text(data)
+    if err is not None:
+        return err
+    chat_id, err = _resolve_target_chat(data, require_chat=False)
     if err is not None:
         return err
     messages = build_messages(text, chat_id)
@@ -599,20 +732,61 @@ def convert():
 @app.route("/api/send", methods=["POST"])
 def send():
     """
-    Sendet den übermittelten Text an Telegram — ausschließlich in den
-    konfigurierten ``TELEGRAM_CHAT_ID`` (bzw. die geprüfte ``chat_id`` des
-    Selbstbetriebs ohne ENV-Chat).
+    Sendet den übermittelten Text über den **geteilten** Bot — ausschließlich
+    in den konfigurierten ``TELEGRAM_CHAT_ID`` (bzw. die geprüfte ``chat_id``
+    des Selbstbetriebs ohne ENV-Chat).
+
+    Zwei Zugangsarten, beide explizit — sonst 503 (fail-closed):
+
+    * **Authentifiziert** — ``X-Auth-Token`` passt zu
+      ``TELEGRAM_FORMATTER_API_TOKEN``: serverseitiger Aufruf des Betreibers,
+      volle Textlänge, Limit ``SENDS_PER_MINUTE``.
+    * **Anonym aus dem Browser** — nur bei freigeschaltetem
+      ``TELEGRAM_FORMATTER_SHARED_WEB_SEND`` **und** gepinntem Zielchat. Dafür
+      gelten die strengeren Regeln des öffentlichen Raums: Body-Feld
+      ``confirm_public: true`` als Bestätigung der öffentlichen Sichtbarkeit,
+      Kürzung auf ``SHARED_WEB_MAX_INPUT_CHARS``, engere Frequenzlimits
+      (pro IP und instanzweit).
     """
     if not BOT_TOKEN:
         return jsonify({"error": "TELEGRAM_BOT_TOKEN nicht konfiguriert."}), 400
-    if not API_TOKEN:
-        return jsonify(
-            {"error": "Der Shared-Versand ist deaktiviert: TELEGRAM_FORMATTER_API_TOKEN fehlt."}
-        ), 503
-    if _rate_limited("send", SENDS_PER_MINUTE):
-        return jsonify({"error": "Zu viele Sendeversuche — bitte kurz warten."}), 429
 
-    text, chat_id, err = _extract_request(require_chat=True)
+    authed = _request_authenticated()
+    if not authed and not _shared_web_send_available():
+        return jsonify({"error": SHARED_SEND_DISABLED}), 503
+
+    if authed:
+        if _rate_limited("send", SENDS_PER_MINUTE):
+            return jsonify({"error": "Zu viele Sendeversuche — bitte kurz warten."}), 429
+    elif _rate_limited("shared-web-send", SHARED_WEB_SENDS_PER_MINUTE) or _rate_limited(
+        "shared-web-send-total", SHARED_WEB_SENDS_PER_MINUTE_TOTAL, per_ip=False
+    ):
+        return jsonify({
+            "error": "Zu viele Sendeversuche — bitte kurz warten. Der geteilte Bot "
+                     "soll nicht zuboomen; für private Inhalte die eigene Bot-Session.",
+            "retry_after": 60,
+        }), 429
+
+    data, err = _json_body()
+    if err is not None:
+        return err
+
+    if authed:
+        text, err = _valid_text(data)
+    else:
+        # Anonymer Versand ist öffentlich sichtbar -> bewusste Bestätigung
+        # voraus und kürzere Längenkappe (siehe Docstring).
+        if not _public_consent(data):
+            return jsonify({
+                "error": "Öffentlicher Versand: bitte mit \"confirm_public\": true "
+                         "bestätigen, dass die Nachricht im geteilten Chat für alle "
+                         "Besucher sichtbar ist."
+            }), 400
+        text, err = _valid_text(data, SHARED_WEB_MAX_INPUT_CHARS)
+    if err is not None:
+        return err
+
+    chat_id, err = _resolve_target_chat(data, require_chat=True)
     if err is not None:
         return err
 
@@ -634,7 +808,13 @@ def send():
             return jsonify(payload), status
         results.append({"kind": m.kind, "status": "ok"})
 
-    return jsonify({"sent": len(results), "results": results})
+    return jsonify({
+        "sent": len(results),
+        "results": results,
+        # Reine Anzeigeinformation für die UI: worüber wurde gesendet?
+        # Enthält keine Secrets und keine Chat-Details außer dem Ziel.
+        "via": {"bot": SHARED_BOT_HANDLE, "chat_id": chat_id, "public": not authed},
+    })
 
 
 # --------------------------------------------------------------------------- #
