@@ -283,7 +283,7 @@ def collect_facts(tree: ast.Module) -> _ModuleFacts:
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             store_counts[node.id] = store_counts.get(node.id, 0) + 1
 
-    # Imports auf allen Ebenen (auch funktionslokal — Nutzer bots importieren gern späät).
+    # Imports auf allen Ebenen (auch funktionslokal — Nutzer bots importieren gern spät).
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:

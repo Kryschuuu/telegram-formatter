@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.7.0-blue)
+![Version](https://img.shields.io/badge/version-2.8.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -73,7 +73,7 @@ Pfad automatisch anhand des Inhalts:
 
 | Weg | Endpoint | Ziel | Sichtbarkeit | Einrichtung |
 |---|---|---|---|---|
-| **Geteilter Bot** `@mdtotxt_bot` | `POST /api/send` | der auf `TELEGRAM_CHAT_ID` **gepinnte** Chat des Betreibers | öffentlich — alle Besucher der Instanz (und wer den Bot zu Telegram hinzufügt) lesen mit | keine |
+| **Geteilter Bot** `@mdtotxt_bot` | `POST /api/send` | der auf `TELEGRAM_CHAT_ID` **gepinnte**, öffentliche Chat des Betreibers (public Supergroup/Channel) | öffentlich — alle Besucher der Instanz und jeder, der die Gruppe/den Kanal auf Telegram öffnet, lesen den **gesamten** Verlauf mit (auch nachträglich) | keine |
 | **Eigener Bot (BYOB)** | `POST /api/byob/send` | dein eigener Ziel-Chat | privat — nur Mitglieder deines Chats | Token + Chat-ID, Session max. 30 min |
 
 Der Sende-Knopf öffnet zuerst den Bestätigungsdialog: dort wird der Weg
@@ -114,7 +114,7 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 
 | Variable | Wirkung |
 |---|---|
-| `TELEGRAM_CHAT_ID` | **pinnt** den Zielchat von `/api/send`; ein abweichender Request-Wert wird abgewiesen |
+| `TELEGRAM_CHAT_ID` | **pinnt** den Zielchat von `/api/send`; ein abweichender Request-Wert wird abgewiesen. Für die öffentliche Demo empfiehlt sich eine **public Supergroup** oder ein **Channel** mit dem Bot als Mitglied (Recht *Nachrichten senden*) — so ist die Warnung auf der Seite wörtlich korrekt und jede Nachricht für neue Leser im Verlauf einsehbar |
 | `TELEGRAM_FORMATTER_API_TOKEN` | Operator-Secret für den **authentifizierten** Shared-Versand. Bei gesetztem Wert verlangen alle POST-Endpunkte den Header `X-Auth-Token` — nur `POST /api/send` bleibt offen, wenn zusätzlich `TELEGRAM_FORMATTER_SHARED_WEB_SEND=1` gilt (sonst wäre der Browser-Weg widersprüchlich: er darf das Secret nie erhalten). Ohne dieses Secret ist `/api/send` deaktiviert (503) |
 | `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` | Anzahl vertrauenswürdiger Proxy-Hops für Client-IP-Erkennung; Standard `0` (sicherer Direktbetrieb), Render-Blueprint setzt `1` |
 | `TELEGRAM_FORMATTER_MAX_INPUT_CHARS` | Eingabelimit (Standard 100000) |
@@ -330,7 +330,7 @@ Review-Checkliste: `python -m telegram_formatter.botctl checklist`
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                  # 297 Tests
+pytest -q                                  # 360+ Tests
 ruff check .                               # Stil & offensichtliche Fehler
 bandit -c pyproject.toml -r telegram_formatter -ll   # Sicherheits-Scan
 ```
@@ -428,6 +428,6 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.4.0** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.8.0** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).

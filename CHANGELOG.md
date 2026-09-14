@@ -4,6 +4,55 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.8.0] - 2026-09-14
+
+**Öffentliche Demo als public Supergroup/Channel — die Privatsphäre-Warnung ist
+damit wörtlich korrekt.** Bisher sagte die Warnung „jeder, der den Bot auf
+Telegram hinzufügt, kann den Verlauf lesen" — das traf nur auf private Chats
+zu. Die Demo läuft jetzt auf einem **öffentlichen** Zielchat, sodass jeder, der
+die Gruppe oder den Kanal öffnet, den gesamten Verlauf lesen kann (auch
+nachträglich, auch ohne Mitglied zu sein). Deployment, Blueprint und Warnung
+wurden daran angepasst; außerdem wurden Doku-Inkonsistenzen bereinigt.
+
+### Hinzugefügt
+
+- **Öffentlicher Demo-Chat** (`docs/DEPLOYMENT.md`, Schritt 4b): Anleitung,
+  den Zielchat als *public Supergroup* oder *Channel* (Bot mit Recht
+  *Nachrichten senden*) einzurichten, die negative Chat-ID (`-100…`) abzulesen
+  und als `TELEGRAM_CHAT_ID` zu pinnen. Dadurch ist die Seitenwarnung wahr und
+  das persönliche Postfach bleibt für die Demo unberührt.
+- `render.yaml`: Kommentar-Hinweis, dass `TELEGRAM_CHAT_ID` eine *public*
+  Supergroup/Channel sein sollte; zusätzlich ist
+  `TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` (Standard `@mdtotxt_bot`) deklariert.
+- Tests: `tests/test_public_demo_chat.py` — die Top-Warnung formuliert den
+  öffentlichen Chat wörtlich korrekt („Gruppe oder Kanal öffnen → gesamter
+  Verlauf"), die alte „Bot hinzufügen"-Formulierung ist verschwunden, und der
+  Blueprint deklariert den gepinnten Chat + geteilten Bot.
+
+### Geändert
+
+- **Warntexte auf den öffentlichen Chat umgestellt** (Template +
+  `app.py`-Modul-Docstring): vier Stellen (Top-Warnung, Sende-Bestätigung,
+  Privatsphäre-Sektion, zwei FAQ-Antworten) sagen jetzt einheitlich „jeder, der
+  die Gruppe oder den Kanal auf Telegram öffnet, kann den gesamten Verlauf
+  lesen" statt „wer den Bot hinzufügt".
+- **Doku-Inkonsistenzen bereinigt:** README-Versionsangabe (statt veraltetem
+  `2.4.0` nun `2.8.0`), Testanzahl (nun ~360+), Version-Badge und
+  `TELEGRAM_CHAT_ID`-Beschreibung mit public-Chat-Empfehlung; der
+  „Zwei Versandwege"-Tabelle wurde die öffentliche Sichtbarkeit präzise
+  zugeordnet.
+- **Redundanz entfernt:** die drei BYOB-Handler (`/api/byob/{send,status,close}`)
+  prüften `sid is None or session_secret is None` zusätzlich zu `err is not
+  None` — bei einem Fehler ist `err` stets gesetzt, die Zusatzprüfung war
+  toter Code und wurde entfernt (Klarheit, keine Verhaltensänderung).
+- Kosmetik: Tippfehler im Kommentar (`review.py`) korrigiert.
+
+### Housekeeping
+
+- Version `2.7.0` → `2.8.0` (`telegram_formatter/__init__.py`), passender
+  Eintrag in `peer-review/2026-09_PUBLIC-DEMO-CHAT.md` und archivierte
+  PR-Beschreibung.
+
 ## [2.7.0] - 2026-09-14
 
 **Redirect-URLs werden auf ihr Ziel entpackt — Links in Nachrichten zeigen

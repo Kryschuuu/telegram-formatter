@@ -39,6 +39,12 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+        # Empfehlung für die öffentliche Demo: hier die ID einer *public*
+        # Supergroup (oder eines Channels mit dem Bot-Recht „Nachrichten senden“)
+        # eintragen. Damit ist die Warnung auf der Seite wörtlich korrekt
+        # („jeder, der die Gruppe öffnet, kann den gesamten Verlauf lesen“) und
+        # dein persönliches Postfach bleibt ruhig. Eine Nachricht dort schreiben,
+        # die negative ID (meist -100…) ablesen, dann hier eintragen → Redeploy.
       # Operator secret for the *authenticated* shared-send path (X-Auth-Token).
       # Leave unset on public demo instances: the browser never receives it.
       - key: TELEGRAM_FORMATTER_API_TOKEN
@@ -49,6 +55,10 @@ services:
       # TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE[_TOTAL] / …_MAX_INPUT_CHARS.
       - key: TELEGRAM_FORMATTER_SHARED_WEB_SEND
         value: "1"
+      # Anzeige-Name des geteilten Bots in der Privatsphäre-Warnung (Standard
+      # @mdtotxt_bot). Muss zum Bot passen, der hinter TELEGRAM_BOT_TOKEN steht.
+      - key: TELEGRAM_FORMATTER_SHARED_BOT_HANDLE
+        value: "@mdtotxt_bot"
       # Render provides exactly one trusted proxy hop. The application
       # defaults to zero for safe direct/self-hosted deployments.
       - key: TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS
