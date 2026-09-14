@@ -216,9 +216,14 @@ Zustandsklassen, die JS an Stellschrauben klebt (nur diese drei, alle in
 2. **Top-Warnung** (`.tf-top-warning`, nur wenn ein geteilter Bot
    konfiguriert ist): rotes Vollbreite-Band direkt unter dem Header — die
    „geteilte Bot ist öffentlich“-Warnung steht bewusst VOR Hero und Editor,
-   weil der geteilte Bot der Default-Versandweg ist (v2.3.0).
+   weil der geteilte Bot der Default-Versandweg ist (v2.3.0). Seit v2.9.0
+   nennt sie den konkreten Kanal mit Link und Löschfrist.
 3. **Hero-Zeile** erklärt in einem Satz + Tagline, was das Tool tut — vor
-   jedem Eingriff.
+   jedem Eingriff. Direkt darunter seit v2.9.0 das **Kanal-Banner**
+   (`.tf-channel`): „Ohne eigenen Bot landet jede Nachricht in diesem
+   öffentlichen Kanal" + klickbarer Link + Bot-Name + Löschfrist. Die wichtigste
+   Information vor dem ersten Senden steht damit im Sichtbereich, nicht erst
+   im Kleingedruckten.
 3. **Zwei-Spalten-Arbeitsbereich** (`≥ 64rem`): links Eingabe (Erzeugen),
    rechts Ausgabe (Prüfen) — Lesereihenfolge = Arbeitsfluss. Die Ausgabespalte
    ist auf dem Desktop sticky (`top: 4.5rem`), die Vorschau sitzt in einer
@@ -232,7 +237,11 @@ Zustandsklassen, die JS an Stellschrauben klebt (nur diese drei, alle in
    signalisiert: „rohe API-Daten, hier nichts ändern“.
 6. **Sende-Bestätigung** (`.tf-modal`, v2.3.0): Modal über neutralem
    Backdrop, das vor jedem Versand Absender-Bot, Ziel und Vorschau zeigt —
-   bewusst als Sperre zwischen „Senden klicken“ und „wirklich senden“.
+   bewusst als Sperre zwischen „Senden klicken“ und „wirklich senden“. Beim
+   geteilten Weg kommt seit v2.9.0 eine eigene Faktenzeile „Kanal (öffentlich)"
+   dazu: klickbarer Link zum Ziel-Kanal plus Löschfrist als Zusatzzeile
+   (`.tf-facts__note`). Der Bestätigungs-Knopf selbst nennt das Ziel
+   („In den Kanal t.me/… senden“), nicht nur den Bot.
 7. **Howto & FAQ** darunter (scrollend nachrangig), inkl.
    Privatsphäre-Sektion (`.tf-privacy*`) zwischen BYOB und Howto; Footer mit
    Version/Lizenz/Kurz-Disclaimer.
@@ -325,6 +334,15 @@ Zusätzlich seit v2.6.0 (Versandweg-Auswahl im Dialog):
 | `.tf-note--ok` | grüne Gegenbox zu `.tf-note--danger` (Titel `--ok`, Fließtext normal) |
 | `.tf-privacy__grid/__item/__lead/__note` | Privatsphäre-Sektion: 2×2 Erklär-Karten (BotFather, Bots, geteilter Bot, BYOB) mit `--danger`/`--ok` Akzentkante |
 
+Zusätzlich seit v2.9.0 (Offenlegung des geteilten Ziel-Kanals):
+
+| Klasse | Zweck |
+|---|---|
+| `.tf-channel`, `.tf-channel__title/__target/__bot/__meta` | Kanal-Banner im Hero: Facts-Box (kein Fließtext-Warnung) mit dicker `--danger-border`-Kante links; nennt Link, Bot-Name und Löschfrist |
+| `.tf-channel-link` | der Kanal-Link selbst — eine Klasse für alle sieben Stellen (Banner, Top-Warnung, Dialog, Privatsphäre, FAQ, Footer); `color: inherit`, damit sie in jeder Umgebung (Danger-Box, Modal, dunkler Footer) lesbar bleibt |
+| `.tf-facts__note` | Zusatzzeile unter einem Faktenwert im Dialog (hier: Löschfrist unter dem Kanal-Link) |
+| `.tf-footer__channel` | Kanal-Angabe im Footer (Abstand zur Versionszeile) |
+
 JS-Vertrag zwischen `app.js` und `byob.js` (bewusst minimal, kein Framework):
 
 * `window.tfByob = { isActive(): bool, describeTarget(): {bot, chat}|null, sendText(text): Promise }` — ist eine
@@ -343,6 +361,14 @@ JS-Vertrag zwischen `app.js` und `byob.js` (bewusst minimal, kein Framework):
   nur per API) und `data-byob-enabled`. `app.js#availablePaths()`/
   `activePath()` leiten daraus die wählbaren Wege ab — die UI entscheidet
   nie selbst über Konfiguration, sie spiegelt nur diese Flags.
+* Seit v2.9.0 zusätzlich `data-shared-chat-url` (geprüfter Kanal-Link, leer
+  wenn keiner konfiguriert ist), `data-shared-chat-label` (Kurzform
+  `t.me/<handle>`) und `data-shared-retention-text` (fertiger Satz zur
+  automatischen Löschung). **`app.js` erfindet weder Kanalnamen noch Fristen**
+  — alle drei Werte kommen aus `app.py::_shared_channel`, derselben Quelle,
+  aus der auch das serverseitig gerenderte Markup und das `via`-Feld von
+  `/api/send` gespeist werden. Ohne Link bleibt die Kanal-Zeile im Dialog
+  ausgeblendet (kein toter `href="#"`).
 * Statusanzeigen teilen sich `#sendStatus` (Editor) und `#byobError` (BYOB).
 
 ## 9. Umgebungs-/Deployment-Hinweise

@@ -42,7 +42,10 @@ const read = (p) => fs.readFileSync(p, "utf-8");
 function buildHarnessHtml(flags = {}) {
     let html = read(htmlPath);
     for (const [name, value] of Object.entries(flags)) {
-        html = html.replace(new RegExp(`data-${name}="[01]"`), `data-${name}="${value}"`);
+        // `[^"]*` statt `[01]`: außer den Flags (shared-send/byob-enabled)
+        // werden auch Textattribute überschrieben (shared-chat-url/-label,
+        // shared-retention-text), um die degradierte Konfiguration zu testen.
+        html = html.replace(new RegExp(`data-${name}="[^"]*"`), `data-${name}="${value}"`);
     }
     // CSS-Links sind für jsdom bedeutungslos, Skript-/Linktags stören beim
     // Nachladen (kein Server) -> entfernen und die echten Dateien inline
@@ -224,12 +227,23 @@ async function main() {
         doc.getElementById("sendConfirmPaths").outerHTML.slice(0, 80));
     check("Dialog: geteilter Bot ist vorausgewählt",
         doc.getElementById("sendConfirmPathShared").checked === true);
-    check("Dialog: nennt @mdtotxt_bot als Absender und den öffentlichen Chat als Ziel",
+    check("Dialog: nennt @mdtotxt_bot als Absender und den öffentlichen Kanal als Ziel",
         doc.getElementById("sendConfirmBot").textContent.includes("@mdtotxt_bot") &&
         doc.getElementById("sendConfirmBot").textContent.includes("geteilter Bot") &&
-        doc.getElementById("sendConfirmTarget").textContent.includes("öffentlich"),
+        /öffentlich/i.test(doc.getElementById("sendConfirmTarget").textContent) &&
+        doc.getElementById("sendConfirmTarget").textContent.includes("t.me/mdtotxt_bot_web"),
         doc.getElementById("sendConfirmBot").textContent + " / " +
         doc.getElementById("sendConfirmTarget").textContent);
+    check("Dialog: Kanal-Zeile zeigt den klickbaren Link zum Ziel-Kanal",
+        doc.getElementById("sendConfirmChannelRow").hidden === false &&
+        doc.getElementById("sendConfirmChannelLink").getAttribute("href") ===
+            "https://t.me/mdtotxt_bot_web" &&
+        doc.getElementById("sendConfirmChannelLink").textContent === "t.me/mdtotxt_bot_web",
+        doc.getElementById("sendConfirmChannelLink").outerHTML);
+    check("Dialog: Kanal-Zeile nennt die automatische Löschung (30 Tage)",
+        /automatisch nach 30 Tagen gelöscht/.test(
+            doc.getElementById("sendConfirmChannelNote").textContent),
+        doc.getElementById("sendConfirmChannelNote").textContent);
     check("Dialog: öffentliche Warnung ist eingeblendet, Privat-/Blocker-Hinweis nicht",
         doc.getElementById("sendConfirmWarning").hidden === false &&
         doc.getElementById("sendConfirmPrivate").hidden === true &&
@@ -258,8 +272,10 @@ async function main() {
     check("Senden: öffentliche Sichtbarkeit wird bestätigt mitgeschickt (confirm_public)",
         Boolean(sharedCall) && JSON.parse(sharedCall.body).confirm_public === true,
         sharedCall && sharedCall.body);
-    check("Senden: Erfolgsstatus mit Bot-Angabe",
-        sendStatus.textContent.includes("2 Nachricht(en)") && sendStatus.textContent.includes("@mdtotxt_bot"),
+    check("Senden: Erfolgsstatus nennt Bot und Ziel-Kanal",
+        sendStatus.textContent.includes("2 Nachricht(en)") &&
+        sendStatus.textContent.includes("@mdtotxt_bot") &&
+        sendStatus.textContent.includes("t.me/mdtotxt_bot_web"),
         sendStatus.textContent);
     check("Senden: Button bleibt bedienbar", doc.getElementById("sendBtn").disabled === false);
     check("Senden: Statuszeile bekommt is-ok", sendStatus.classList.contains("is-ok"));
@@ -458,6 +474,8 @@ async function main() {
     check("BYOB-Dialog: Privat-Hinweis statt öffentlicher Warnung",
         doc.getElementById("sendConfirmPrivate").hidden === false &&
         doc.getElementById("sendConfirmWarning").hidden === true);
+    check("BYOB-Dialog: Kanal-Zeile bleibt beim eigenen Bot ausgeblendet",
+        doc.getElementById("sendConfirmChannelRow").hidden === true);
     doc.getElementById("sendConfirmOk").click();
     await sleep(60);
     const sendCall = byobCalls.filter((u) => u.includes("/api/byob/send")).pop();
@@ -611,6 +629,70 @@ async function main() {
         apiOnlyCalls.some((u) => u.includes("/api/byob/send")) &&
         !apiOnlyCalls.some((u) => u.includes("/api/send")),
         JSON.stringify(apiOnlyCalls));
+    dom.window.close();
+
+    /* ------------------------------------------------------------------ */
+    /* Fall 7: Regression — kein Kanal-Link konfiguriert                    */
+    /* ------------------------------------------------------------------ */
+    /* Der Betreiber hat TELEGRAM_FORMATTER_SHARED_CHAT_URL nicht (oder
+       ungültig) gesetzt. Die UI darf dann weder einen Kanal *erfinden* noch
+       einen toten Link anbieten — und die Sätze müssen grammatikalisch ganz
+       bleiben („in einen öffentlichen, gemeinsamen Chat", nicht
+       „in den öffentlichen Kanal "). */
+    dom = new JSDOM(buildHarnessHtml({
+        "shared-chat-url": "",
+        "shared-chat-label": "",
+        "shared-retention-text": "",
+    }), {
+        runScripts: "dangerously",
+        virtualConsole: trackedConsole(scriptErrors),
+        url: "https://formatter.local/",
+        beforeParse(window) {
+            window.matchMedia = () => ({
+                matches: false, media: "", addEventListener() {}, removeEventListener() {},
+                addListener() {}, removeListener() {},
+            });
+            window.fetch = (url) => Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve(String(url).includes("/api/send")
+                    ? { sent: 1, via: { bot: "@mdtotxt_bot", chat_id: "-100999", chat_url: null, public: true } }
+                    : { count: 1, messages: [] }),
+            });
+        },
+    });
+    window = dom.window;
+    doc = window.document;
+    await new Promise((resolve) => window.addEventListener("load", resolve));
+    await sleep(60);
+
+    check("Ohne Kanal-Link: Hinweis nennt keinen erfundenen Kanal",
+        !/Kanal /.test(doc.getElementById("sendPathNote").textContent) &&
+        /öffentlichen, gemeinsamen Chat/.test(doc.getElementById("sendPathNote").textContent),
+        doc.getElementById("sendPathNote").textContent);
+    check("Ohne Kanal-Link: Hinweis verspricht keine Löschung",
+        !/gelöscht/.test(doc.getElementById("sendPathNote").textContent),
+        doc.getElementById("sendPathNote").textContent);
+
+    doc.getElementById("input").value = "Test ohne Kanal-Link";
+    doc.getElementById("sendBtn").click();
+    await sleep(20);
+    check("Ohne Kanal-Link: Kanal-Zeile im Dialog bleibt ausgeblendet",
+        doc.getElementById("sendConfirmChannelRow").hidden === true);
+    check("Ohne Kanal-Link: Ziel-Fakt bleibt allgemein (und ganz)",
+        doc.getElementById("sendConfirmTarget").textContent.startsWith("Öffentlicher, gemeinsamer Chat"),
+        doc.getElementById("sendConfirmTarget").textContent);
+    check("Ohne Kanal-Link: Bestätigungs-Knopf verspricht keinen Kanal",
+        doc.getElementById("sendConfirmOkLabel").textContent === "Öffentlich senden",
+        doc.getElementById("sendConfirmOkLabel").textContent);
+    doc.getElementById("sendConfirmOk").click();
+    await sleep(60);
+    check("Ohne Kanal-Link: Erfolgsstatus nennt Bot, aber keinen Kanal",
+        doc.getElementById("sendStatus").textContent.includes("@mdtotxt_bot") &&
+        !doc.getElementById("sendStatus").textContent.includes("Kanal"),
+        doc.getElementById("sendStatus").textContent);
+    check("Ohne Kanal-Link: keine Skriptfehler", scriptErrors.length === 0,
+        scriptErrors.slice(-2).join(" / "));
     dom.window.close();
 
     console.log(failures === 0 ? "\nJSDOM_SPEC_OK" : `\nJSDOM_SPEC_FAILED (${failures})`);

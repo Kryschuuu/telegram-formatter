@@ -520,7 +520,10 @@ def test_index_renders_byob_panel_and_warning(byob_client, monkeypatch):
     assert page.index('class="tf-top-warning"') < page.index('class="tf-hero"')
     assert "tf-note--danger" in page
     assert "@mdtotxt_bot" in page
-    assert "gemeinsamen Chat" in page
+    # Seit v2.9.0 benennt die Warnung den konkreten öffentlichen Kanal statt
+    # nur „einen gemeinsamen Chat" (Details: tests/test_shared_channel.py).
+    assert "öffentlichen Telegram-Kanal" in page
+    assert "t.me/mdtotxt_bot_web" in page
     assert "Bring Your Own Bot" in page
     # js/byob.js ist eingebunden.
     assert "js/byob.js" in page

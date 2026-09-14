@@ -1,3 +1,43 @@
+{# =====================================================================
+   Kanalbegriffe — EINMAL definiert, an jeder Stelle gleich benutzt.
+   Der geteilte Ziel-Kanal wird auf dieser Seite an mehreren Orten genannt
+   (Top-Warnung, Kanal-Banner, Hinweis unter dem Senden-Button,
+   Bestätigungsdialog, Privatsphäre-Sektion, FAQ, Footer). Damit diese
+   Aussagen nicht auseinanderdriften, liefern die beiden Makros unten den
+   immer gleichen Baustein aus dem Server-View-Model `channel`
+   (telegram_formatter/app.py::_shared_channel):
+
+     channel.bot           Anzeige-Name des geteilten Bots (@mdtotxt_bot)
+     channel.url           öffentlicher Link (https://t.me/…) oder None
+     channel.label         Kurzform ohne Schema (t.me/mdtotxt_bot_web)
+     channel.retention_text Satz zur automatischen Löschung oder None
+
+   `channel.url` kann leer sein (Betreiber hat keinen gültigen Link gesetzt,
+   oder es ist gar kein Zielchat gepinnt). Dann darf die Seite keinen Kanal
+   *behaupten*, den sie nicht benennen kann — `channel_noun()` wechselt in
+   diesem Fall auf die allgemeine Formulierung „einen öffentlichen,
+   gemeinsamen Chat". app.js macht denselben Wechsel (`sharedTargetLabel()`).
+   ===================================================================== #}
+{%- macro channel_link(label=None) -%}
+    {%- if channel.url -%}
+        <a class="tf-channel-link" href="{{ channel.url }}" target="_blank"
+           rel="noopener noreferrer"
+           title="Öffnet den öffentlichen Telegram-Kanal in einem neuen Tab">{{ label or channel.label }}</a>
+    {%- else -%}
+        <strong class="tf-channel-link">{{ label or channel.bot }}</strong>
+    {%- endif -%}
+{%- endmacro -%}
+{#- Satzbaustein im Akkusativ: „… sendet in {{ channel_noun() }}." -#}
+{%- macro channel_noun() -%}
+    {%- if channel.url -%}
+        den öffentlichen Telegram-Kanal {{ channel_link() }}
+    {%- else -%}
+        einen öffentlichen, gemeinsamen Chat
+    {%- endif -%}
+{%- endmacro -%}
+{%- macro retention_note(prefix=" ") -%}
+    {%- if channel.retention_text -%}{{ prefix }}{{ channel.retention_text }}{%- endif -%}
+{%- endmacro -%}
 <!DOCTYPE html>
 <html lang="de">
 <head>
@@ -24,7 +64,10 @@
 </head>
 <body data-convert-url="{{ url_for('convert') }}" data-send-url="{{ url_for('send') }}"
       data-byob-base="{{ url_for('byob_session_open').rsplit('/', 1)[0] }}"
-      data-shared-bot="{{ shared_bot_handle }}"
+      data-shared-bot="{{ channel.bot }}"
+      data-shared-chat-url="{{ channel.url or '' }}"
+      data-shared-chat-label="{{ channel.label }}"
+      data-shared-retention-text="{{ channel.retention_text or '' }}"
       data-shared-send="{{ '1' if shared_send_available else '0' }}"
       data-shared-configured="{{ '1' if configured else '0' }}"
       data-byob-enabled="{{ '1' if byob_enabled else '0' }}">
@@ -45,7 +88,7 @@
         <span class="tf-header__spacer"></span>
 
         <span id="status" class="tf-status {{ 'tf-status--ok' if shared_send_available else 'tf-status--warn' }}"
-              title="{{ ('Geteilter Bot ' ~ shared_bot_handle ~ ' ist im Browser freigeschaltet — senden bereit') if shared_send_available else ('Geteilter Bot konfiguriert, aber nur API-authentifiziert — TELEGRAM_FORMATTER_SHARED_WEB_SEND=1 schaltet den Browser-Versand frei' if configured else 'Kein TELEGRAM_BOT_TOKEN gesetzt — Konvertierung und Vorschau laufen, Versand über BYOB') }}">
+              title="{{ ('Geteilter Bot ' ~ channel.bot ~ ' ist im Browser freigeschaltet — senden bereit') if shared_send_available else ('Geteilter Bot konfiguriert, aber nur API-authentifiziert — TELEGRAM_FORMATTER_SHARED_WEB_SEND=1 schaltet den Browser-Versand frei' if configured else 'Kein TELEGRAM_BOT_TOKEN gesetzt — Konvertierung und Vorschau laufen, Versand über BYOB') }}">
             {%- if shared_send_available -%}
                 Bot konfiguriert — senden bereit
             {%- elif configured -%}
@@ -121,22 +164,23 @@
             <p>
                 {%- if shared_send_available %}
                     Ohne eigene Session sendet der Standard-Bot
-                    <strong>{{ shared_bot_handle }}</strong> in <strong>einen öffentlichen, gemeinsamen Chat</strong>:
+                    <strong>{{ channel.bot }}</strong> in {{ channel_noun() }}.
                     Alles, was du darüber sendest, sehen <strong>alle Besucher dieser Seite</strong> —
                     und jeder, der die Gruppe oder den Kanal auf Telegram öffnet, kann den
                     gesamten Verlauf lesen (auch nachträglich, auch ohne Mitglied zu sein).
+                    {{ retention_note() }}
                     Nutze den geteilten Bot nur für öffentliche Tests, <strong>niemals für private
                     Inhalte</strong>. Für private Nachrichten gehört dein eigener Bot in eine
                     <a href="#byob">Session</a> (unten, ca. 3 Minuten Einrichtung) — ist eine Session
                     aktiv, steht sie im Sende-Dialog als Weg an erster Stelle.
                 {%- else %}
-                    Diese Instanz hat einen geteilten Bot (<strong>{{ shared_bot_handle }}</strong>),
+                    Diese Instanz hat einen geteilten Bot (<strong>{{ channel.bot }}</strong>),
                     der Browser darf ihn aber nicht nutzen: Shared-Versand ist auf ihr nur
                     <strong>API-authentifiziert</strong> möglich. Senden kannst du hier über eine
                     <a href="#byob">eigene Bot-Session</a> (unten, ca. 3 Minuten Einrichtung).
                     Betreiber können den Browser-Versand mit
                     <code>TELEGRAM_FORMATTER_SHARED_WEB_SEND=1</code> freigeben — danach gilt der
-                    Hinweis von oben: alles landet in einem <strong>öffentlichen</strong> Chat.
+                    Hinweis von oben: alles landet in {{ channel_noun() }}.
                 {%- endif %}
             </p>
         </aside>
@@ -154,6 +198,41 @@
             API-Payload sehen — inklusive LaTeX-Formeln, Pipe-Tabellen und automatischer
             Aufteilung langer Nachrichten.
         </p>
+
+        {%- if configured %}
+        <!-- ===== Kanal-Offenlegung (2. Stelle): wohin ohne eigenen Bot gesendet wird
+             Bewusst direkt unter der Überschrift — das ist die wichtigste
+             Information vor dem allerersten Senden und darf nicht erst im
+             Kleingedruckten stehen. -->
+        <aside class="tf-channel" id="sharedChannel" role="note"
+               aria-labelledby="sharedChannelTitle">
+            <p class="tf-channel__title" id="sharedChannelTitle">
+                <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 21 3l-8 18-2.5-7.5L3 11Z"/><path d="M10.5 13.5 21 3"/></svg>
+                {%- if shared_send_available %}
+                    Ohne eigenen Bot landet jede Nachricht in diesem öffentlichen Kanal
+                {%- else %}
+                    Der geteilte Bot dieser Instanz sendet in diesen öffentlichen Kanal
+                {%- endif %}
+            </p>
+            <p class="tf-channel__target">
+                {{ channel_link() }}
+                {%- if channel.url %}
+                <span class="tf-channel__bot">via {{ channel.bot }}</span>
+                {%- endif %}
+            </p>
+            <p class="tf-channel__meta">
+                {%- if shared_send_available %}
+                    Öffentlich — jede Nachricht ist für alle sichtbar und bleibt im
+                    Kanalverlauf lesbar.{{ retention_note() }}
+                    Privater Versand: <a href="#byob">eigene Bot-Session starten</a>.
+                {%- else %}
+                    Der Browser darf diesen Bot hier nicht nutzen (Shared-Versand ist
+                    API-authentifiziert).{{ retention_note() }}
+                    Senden kannst du über eine <a href="#byob">eigene Bot-Session</a>.
+                {%- endif %}
+            </p>
+        </aside>
+        {%- endif %}
     </section>
 
     <div class="tf-workspace">
@@ -184,15 +263,20 @@
 
             <!-- ===== Aktiver Versandweg (app.js hält den Text aktuell) =====
                  Serverseitiger Zustand = Fallback ohne JavaScript; mit JS setzt
-                 app.js den Text aus dem tatsächlich gewählten Weg. -->
+                 app.js den Text aus dem tatsächlich gewählten Weg. Beide
+                 Fassungen nennen denselben Kanal (app.js liest ihn aus den
+                 data-shared-chat-* Attributen am <body>). -->
             <p id="sendPathNote" class="tf-send-path">
                 {%- if shared_send_available -%}
-                    ⚠ Versand über den geteilten Bot {{ shared_bot_handle }} — <strong>öffentlich
-                    sichtbar für alle!</strong> Für private Inhalte: eigene Bot-Session starten
+                    ⚠ Versand über den geteilten Bot {{ channel.bot }} in
+                    {{ channel_noun() }} — <strong>öffentlich sichtbar für alle!</strong>
+                    {{ channel.retention_text or '' }}
+                    Für private Inhalte: eigene Bot-Session starten
                     (Abschnitt „Eigener Bot — BYOB“ unten).
                 {%- elif configured -%}
-                    Geteilter Bot {{ shared_bot_handle }} ist nur per API erreichbar — senden über
-                    eine eigene Bot-Session (BYOB, Abschnitt unten) oder <code>botctl</code>.
+                    Geteilter Bot {{ channel.bot }}{% if channel.url %} (Kanal
+                    {{ channel.label }}){% endif %} ist nur per API erreichbar — senden über eine eigene Bot-Session (BYOB, Abschnitt unten)
+                    oder <code>botctl</code>.
                 {%- else -%}
                     Kein geteilter Bot konfiguriert — unten eine eigene Bot-Session (BYOB)
                     starten, um zu senden.
@@ -261,7 +345,7 @@
             </p>
 
             <!-- ===== Versandweg wählen (app.js baut die Verfügbarkeiten) =====
-                 Ohne eigene Bot-Session ist der geteilte Bot {{ shared_bot_handle }}
+                 Ohne eigene Bot-Session ist der geteilte Bot {{ channel.bot }}
                  wählbar, sobald der Betreiber den Browser-Versand freigeschaltet
                  hat (TELEGRAM_FORMATTER_SHARED_WEB_SEND). Läuft eine eigene
                  Session, steht sie an erster Stelle und ist vorausgewählt. -->
@@ -287,7 +371,8 @@
                             Geteilter Bot
                         </span>
                         <span class="tf-send-path-option__meta" id="sendConfirmPathSharedMeta">
-                            öffentlicher Chat dieser Seite
+                            {%- if channel.url %} öffentlicher Kanal {{ channel.label }}
+                            {%- else %} öffentlicher Chat dieser Seite{% endif %}
                         </span>
                     </span>
                 </label>
@@ -302,6 +387,17 @@
                     <dt>Ziel (Wohin?)</dt>
                     <dd id="sendConfirmTarget">—</dd>
                 </div>
+                <!-- Kanal-Zeile: nur beim geteilten Weg sichtbar (app.js schaltet).
+                     Der Link ist das stärkste Mittel der Offenlegung — hier steht
+                     er unmittelbar neben dem Knopf, der die Nachricht abschickt. -->
+                <div class="tf-facts__row" id="sendConfirmChannelRow" hidden>
+                    <dt>Kanal (öffentlich)</dt>
+                    <dd>
+                        <a id="sendConfirmChannelLink" class="tf-channel-link" href="#"
+                           target="_blank" rel="noopener noreferrer">—</a>
+                        <span id="sendConfirmChannelNote" class="tf-facts__note"></span>
+                    </dd>
+                </div>
                 <div class="tf-facts__row">
                     <dt>Nachricht</dt>
                     <dd>
@@ -315,12 +411,13 @@
             <div id="sendConfirmWarning" class="tf-note tf-note--danger" role="note" hidden>
                 <p class="tf-note__title">
                     <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-                    Öffentlich sichtbar!
+                    Öffentlich sichtbar{%- if channel.url %} — Kanal {{ channel.label }}{% endif %}!
                 </p>
                 <p>
-                    Der geteilte Bot sendet in den <strong>gemeinsamen, öffentlichen Chat</strong> dieser
-                    Seite: Alle Besucher sehen diese Nachricht — und jeder, der die Gruppe
-                    oder den Kanal auf Telegram öffnet, kann sie auch nachträglich lesen.
+                    Der geteilte Bot sendet in {{ channel_noun() }} dieser Seite: Alle
+                    Besucher sehen diese Nachricht —
+                    und jeder, der die Gruppe oder den Kanal auf Telegram öffnet, kann sie
+                    auch nachträglich lesen.{{ retention_note() }}
                     Für private Inhalte zuerst eine eigene Bot-Session starten
                     (Abschnitt <a href="#byob">„Eigener Bot — BYOB“</a> unten).
                 </p>
@@ -569,11 +666,13 @@
                 </h3>
                 <p>
                     {%- if configured %}
-                        Der Standard-Bot <strong>{{ shared_bot_handle }}</strong> sendet in
-                        <strong>einen gemeinsamen Chat</strong>: Alles Gesendete sehen alle
+                        Der Standard-Bot <strong>{{ channel.bot }}</strong> sendet in
+                        {{ channel_noun() }}: Alles Gesendete sehen alle
                         Besucher dieser Seite — und jeder, der die Gruppe oder den Kanal auf
-                        Telegram öffnet, kann den gesamten Verlauf nachlesen. Der Token liegt beim Betreiber
-                        dieser Instanz; für private Inhalte ist dieser Weg ungeeignet.
+                        Telegram öffnet, kann den gesamten Verlauf nachlesen.
+                        {{ retention_note() }}
+                        Der Token liegt beim Betreiber dieser Instanz; für private Inhalte ist
+                        dieser Weg ungeeignet.
                     {%- else %}
                         Auf dieser Instanz ist kein geteilter Bot konfiguriert — gesendet
                         werden kann ausschließlich über die eigene Bot-Session (BYOB) bzw.
@@ -666,11 +765,11 @@
                     <p class="tf-step__text">
                         Läuft eine eigene Bot-Session (Abschnitt BYOB), sendet der Button automatisch
                         über <strong>deinen</strong> Bot — privat. Ohne Session geht es über den
-                        geteilten Bot in den <strong>öffentlichen</strong> Chat (Warnhinweis beachten!).
+                        geteilten Bot in {{ channel_noun() }} (Warnhinweis beachten!).
                         Vor dem Absenden erscheint eine <strong>Bestätigung</strong>: Sie zeigt den
                         konkreten Bot, das Ziel und — falls beides verfügbar — einen
                         <strong>Versandweg</strong> zum Umschalten (eigener Bot = privat,
-                        geteilter Bot = öffentlich). Dort kannst du den Versand jederzeit abbrechen.
+                        geteilter Bot = öffentlicher Kanal). Dort kannst du den Versand jederzeit abbrechen.
                         Der Status unter dem Button zeigt Erfolg oder Fehler, mit „Zurücksetzen“
                         lässt sich alles leeren.
                     </p>
@@ -686,6 +785,60 @@
             FAQ — Häufige Fragen
         </h2>
         <div class="tf-faq-list">
+            {%- if configured %}
+            <details class="tf-faq__item faq-item">
+                <summary>
+                    In welchen Kanal gehen meine Nachrichten, wenn ich keinen eigenen Bot nutze?
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </summary>
+                <div class="tf-faq__answer">
+                    <p>
+                        Ohne eigene Bot-Session sendet der geteilte Bot
+                        <strong>{{ channel.bot }}</strong> in {{ channel_noun() }} —
+                        <strong>genau dorthin und nirgendwohin sonst</strong>.
+                        Der Zielchat ist auf dem Server fest eingestellt
+                        (<code>TELEGRAM_CHAT_ID</code>); eine andere Chat-ID kann über die
+                        Website nicht angegeben werden. Der Kanal ist öffentlich: Jede
+                        Nachricht ist für alle sichtbar, die ihn öffnen — auch nachträglich und
+                        ohne Mitglied zu sein.{{ retention_note() }}
+                        Den Kanal erreichst du über den Link oben, über das Banner unter der
+                        Überschrift, über den Hinweis am Senden-Button und über die Zeile
+                        „Kanal (öffentlich)" im Bestätigungsdialog.
+                    </p>
+                    <p>
+                        Soll die Nachricht <strong>nicht</strong> dort landen, starte vorher eine
+                        <a href="#byob">eigene Bot-Session</a> (BYOB): Dann sendet dein Bot
+                        ausschließlich in deinen eigenen Ziel-Chat, und der geteilte Kanal wird
+                        nicht benutzt.
+                    </p>
+                </div>
+            </details>
+            <details class="tf-faq__item faq-item">
+                <summary>
+                    Bleiben meine Nachrichten dauerhaft im öffentlichen Kanal?
+                    <svg class="tf-icon tf-faq__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </summary>
+                <div class="tf-faq__answer">
+                    <p>
+                        {%- if channel.retention_text %}
+                            Nein. {{ channel.retention_text }} Die Einstellung
+                            „Nachrichten automatisch löschen" ist am Kanal
+                            {{ channel_link() }} aktiv und gilt für alle Beiträge gleichermaßen —
+                            auch für bereits gesendete. Bis dahin ist jede Nachricht jedoch
+                            <strong>vollständig öffentlich</strong>: Wer den Kanal in diesem
+                            Zeitfenster öffnet, liest sie mit.
+                        {%- else %}
+                            Ja — für diesen Kanal ist keine automatische Löschung hinterlegt,
+                            die Nachrichten bleiben auf Dauer öffentlich lesbar.
+                        {%- endif %}
+                        Das Löschen ersetzt also keine Verschlüsselung und keine
+                        Privatsphäre: Was einmal im öffentlichen Kanal stand, kann in der
+                        Zwischenzeit gelesen, weitergeleitet oder gesichert worden sein. Für
+                        private Inhalte immer eine <a href="#byob">eigene Bot-Session</a> nutzen.
+                    </p>
+                </div>
+            </details>
+            {%- endif %}
             <details class="tf-faq__item faq-item">
                 <summary>
                     Ist der Bot-Token sicher? Wo wird er gespeichert?
@@ -821,12 +974,13 @@
                         <strong>wer mitliest</strong>. Der <strong>eigene Bot</strong> (BYOB-Session)
                         sendet direkt in <strong>deinen</strong> Ziel-Chat — privat; ist eine Session
                         aktiv, steht dieser Weg deshalb vorausgewählt oben. Der
-                        <strong>geteilte Bot</strong> <code>@mdtotxt_bot</code> sendet in den
-                        <strong>öffentlichen, gemeinsamen Chat</strong> der Instanz — für alle Besucher sichtbar und
-                        nachträglich lesbar, auch von jedem, der die Gruppe oder den Kanal auf Telegram öffnet.
+                        <strong>geteilte Bot</strong> <code>{{ channel.bot }}</code> sendet in den
+                        {{ channel_noun() }} der Instanz — für alle Besucher
+                        sichtbar und nachträglich lesbar, auch von jedem, der die Gruppe oder den
+                        Kanal auf Telegram öffnet.{{ retention_note() }}
                         Ohne eigene Session ist er der angebotene Weg (gut für öffentliche Tests,
                         nie für private Inhalte); beide Wege lassen sich im Dialog umschalten,
-                        Bot, Ziel und Warnhinweis werden dabei neu angezeigt.
+                        Bot, Kanal und Warnhinweis werden dabei neu angezeigt.
                     </p>
                     <p>
                         Zeigt der Dialog stattdessen „<em>Kein Versandweg aktiv</em>“, hat der
@@ -939,6 +1093,15 @@
                 Markdown + LaTeX → sendefertige Telegram-Nachrichten.
                 Open Source unter GNU GPL v3 · Version {{ version }}.
             </p>
+            {%- if configured %}
+            <!-- 7. Stelle der Kanal-Offenlegung: auch am Seitenende bleibt
+                 sichtbar, wohin der geteilte Bot ohne eigene Session sendet. -->
+            <p class="tf-footer__small tf-footer__channel">
+                Ohne eigene Session sendet {{ channel.bot }} in
+                {{ channel_noun() }}.
+                {{ channel.retention_text or '' }}
+            </p>
+            {%- endif %}
         </div>
         <div>
             <p class="tf-footer__title">

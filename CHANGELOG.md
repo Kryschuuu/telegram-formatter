@@ -4,6 +4,114 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.9.0] - 2026-09-14
+
+**Der Ziel-Kanal wird offen benannt — `t.me/mdtotxt_bot_web` steht an sieben
+Stellen auf der Seite, inklusive Löschfrist.** Bisher warnte die UI zwar
+mehrfach vor „einem öffentlichen, gemeinsamen Chat", nannte aber **nie**,
+welcher Chat das ist: Ohne eigenen Bot gesendete Nachrichten waren für
+Besuchende nicht auffindbar, und die automatische Löschung nach einem Monat
+blieb völlig unerwähnt. Eine Warnung ohne Namen ist keine Aufklärung. Der
+Kanal ist jetzt Konfiguration (`TELEGRAM_FORMATTER_SHARED_CHAT_URL`,
+`TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS`) und wird aus **einer** Quelle
+(`app.py::_shared_channel`) in Template, `app.js` und API-Antwort gespeist.
+Zusätzlich behebt dieses Release drei im Peer-Review gefundene Mängel
+(HTTP-Status-Flattening, unbegrenzt wachsende Rate-Limit-Eimer, ENV-Parsing
+ohne Fallback).
+
+### Hinzugefügt
+
+- **Kanal-Offenlegung im UI (sieben Stellen):**
+  1. Top-Warnung ganz oben (Link + Löschfrist),
+  2. neues **Kanal-Banner** `.tf-channel` direkt unter der Hero-Überschrift
+     („Ohne eigenen Bot landet jede Nachricht in diesem öffentlichen Kanal"
+     + klickbarer Link + Bot-Name + Löschfrist),
+  3. Hinweis am Senden-Button (`#sendPathNote`),
+  4. Bestätigungsdialog: eigene Faktenzeile **„Kanal (öffentlich)"** mit
+     klickbarem Link (`#sendConfirmChannelLink`) und Löschfrist als
+     Zusatzzeile; der Bestätigungs-Knopf nennt das Ziel („In den Kanal
+     t.me/mdtotxt_bot_web senden") und die Warnbox den Kanal im Titel,
+  5. Privatsphäre-Sektion („Der geteilte Bot dieser Seite"),
+  6. zwei neue FAQ-Einträge („In welchen Kanal gehen meine Nachrichten, wenn
+     ich keinen eigenen Bot nutze?" und „Bleiben meine Nachrichten dauerhaft
+     im öffentlichen Kanal?") plus der bestehende Dialog-FAQ-Eintrag,
+  7. Footer und Howto-Schritt 5; die Erfolgsstatusmeldung nach dem Senden
+     wiederholt Bot **und** Kanal.
+- **Neue ENV-Variablen:** `TELEGRAM_FORMATTER_SHARED_CHAT_URL` (Standard
+  `https://t.me/mdtotxt_bot_web`) und
+  `TELEGRAM_FORMATTER_SHARED_RETENTION_DAYS` (Standard `30` = ein Monat,
+  `0` = „keine Aussage"). Deklariert in `render.yaml`, dokumentiert in
+  `README.md` und `docs/DEPLOYMENT.md` (Schritt 4b inkl. Telegram-Einstellung
+  „Nachrichten automatisch löschen").
+- **`app.py::normalize_public_chat_url`:** kanonisiert `@handle`,
+  `t.me/<handle>` und `https://t.me/<handle>` auf `https://t.me/<handle>`;
+  fremde Domains, andere Schemata (`javascript:`, `data:`), private
+  Einladelinks (`t.me/+…`), numerische Privat-Kanäle (`t.me/c/…`),
+  Nachrichten-Deep-Links, Query/Fragment und ungültige Handles ergeben `None`
+  — dann zeigt die UI keinen Link, ein Konfigurationswert kann also nie als
+  Klickziel auf eine fremde Seite missbraucht werden.
+- **`app.py::_shared_channel`:** ein View-Model (Bot, URL, Kurzname,
+  Aufbewahrungstage, fertiger Löschsatz) für Template, `<body>`-Attribute und
+  das `via`-Feld von `POST /api/send`. Ohne gepinnten `TELEGRAM_CHAT_ID` wird
+  **kein** Kanal behauptet (eine Kanal-Angabe ohne Zielchat wäre eine falsche
+  Zusage); beim Start wird diese Inkonsistenz zusätzlich geloggt.
+- **`POST /api/send`** meldet im `via`-Feld jetzt `chat_url` und
+  `retention_days` — die Erfolgsanzeige im Browser nennt damit denselben Kanal
+  wie die Seite.
+- Tests: `tests/test_shared_channel.py` — URL-Normalisierung (inkl.
+  Phishing-/Schema-/Privatlink-Negativfälle), ENV-Fallbacks,
+  Löschsatz-Formulierung, View-Model, Rendering an allen sieben Stellen,
+  Abbau der Aussagen ohne konfigurierten Bot, `via`-Vertrag und die beiden
+  Review-Fixes; ergänzt um DOM-Verträge in `tests/test_frontend.py` und
+  Kanal-Prüfungen in `tests/frontend/jsdom_spec.cjs`.
+
+### Geändert
+
+- **ENV-Parsing zentralisiert:** `_env_int(name, default, minimum, maximum)`
+  ersetzt alle nackten `int(os.environ.get(...))`-Aufrufe. Ein Tippfehler im
+  Dashboard (`6/min`, `3.5`, `-5`) startet den Dienst nicht mehr mit einem
+  `ValueError`-Traceback und deaktiviert kein Schutzlimit mehr stillschweigend
+  — er fällt laut (Log-Warnung) auf den dokumentierten Standardwert zurück.
+- **Eine Quelle für die Kanal-Aussagen:** Template-Makros
+  `channel_link()`/`retention_note()` ersetzen sieben handgeschriebene
+  Fassungen derselben Aussage; das früher im FAQ hartkodierte
+  `<code>@mdtotxt_bot</code>` nutzt jetzt wie alles andere `channel.bot`
+  (driftete bei Umbenennung des Bots).
+- **Wording:** „gemeinsamer/öffentlicher Chat" wird durchgehend zum konkreten
+  „öffentlichen Kanal `t.me/mdtotxt_bot_web`" (Template, `app.js`, README,
+  `docs/DEPLOYMENT.md`, `docs/DESIGN.md`, `docs/ARCHITECTURE.md`).
+
+### Behoben
+
+Peer-Review 2026-09, Bericht
+[`peer-review/2026-09_CHANNEL-DISCLOSURE.md`](peer-review/2026-09_CHANNEL-DISCLOSURE.md):
+
+- **HTTP-Fehler wurden zu 500 geflattet:** `@app.errorhandler(Exception)` fing
+  jede `HTTPException` ohne eigenen Code-Handler (`abort(400)`, 408, 414, 503)
+  und antwortete mit „Interner Fehler" plus irreführender Log-Warnung. Neuer
+  `@app.errorhandler(HTTPException)` erhält Status und liefert eine feste,
+  HTML-freie JSON-Meldung; 404/405/413 behalten ihre speziellen Handler.
+- **`_RATE_HITS` wuchs unbegrenzt:** das `defaultdict` behielt für jede jemals
+  gesehene Client-Adresse einen (leeren) Eintrag — in einem langlebigen
+  Prozess ein Speicherleck. `_prune_rate_buckets()` entfernt leere Eimer
+  amortisiert ab `_RATE_PRUNE_THRESHOLD` (4096) Einträgen; `_RATE_LOCK` ist
+  dafür jetzt eine `RLock`.
+- **`SHARED_BOT_HANDLE` lag im BYOB-Konfigurationsblock:** die Anzeige-Konstante
+  des *geteilten* Bots stand zwischen BYOB-Session-Limits — jetzt im
+  Shared-Abschnitt neben Kanal-Link und Löschfrist (reine Ordnungsänderung,
+  kein Verhaltensunterschied).
+- **`BYOB_TTL_SECONDS`/`BYOB_IDLE_SECONDS` als ungeprüftes `float(...)`:**
+  ebenfalls auf `_env_int` umgestellt (mit sinnvollen Untergrenzen 60/30 s),
+  damit ein Tippfehler keine Session mit 0 s Lebensdauer erzeugt.
+
+### Housekeeping
+
+- Version `2.8.0` → `2.9.0` (`telegram_formatter/__init__.py`, README-Badge,
+  README-Versionsabschnitt, `tests/test_public_demo_chat.py`).
+- Peer-Review-Bericht `peer-review/2026-09_CHANNEL-DISCLOSURE.md` und
+  archivierte PR-Beschreibung
+  `peer-review/archive/PR-DESCRIPTION-v2.9.0-CHANNEL-DISCLOSURE.md`.
+
 ## [2.8.0] - 2026-09-14
 
 **Öffentliche Demo als public Supergroup/Channel — die Privatsphäre-Warnung ist
