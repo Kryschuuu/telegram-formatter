@@ -38,6 +38,11 @@ Projekt **strukturell** durchsetzt (nicht nur dokumentarisch).
 - HTML-Escaping vor Markdown-Konvertierung (`_escape_html`), `&`, `<`, `>`
   im Regular-Pfad; Formeln werden 1:1 übernommen, aber geklammert-balanciert
   geprüft (`validate_latex_braces`).
+- Redirect-Unwrap (v2.7.0): extrahierte Ziel-URLs gelangen nur in Link-Ziele,
+  wenn sie selbst absolute `http(s)`-URLs sind (`_looks_like_http_url`) —
+  `javascript:`/`data:` können über Redirect-Parameter nicht eingeschleust
+  werden; Host-Regeln sind `fullmatch`-verankert (kein Suffix-Phishing à la
+  `evilgoogle.com`). Negativtests: `tests/test_utils.py::TestUnwrapRedirectUrl`.
 - Web-Endpunkte nehmen nur `text`/`chat_id` entgegen; kein Pfad, keine
   URL, kein Template aus Nutkereingabe.
 

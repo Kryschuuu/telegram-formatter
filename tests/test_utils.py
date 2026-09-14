@@ -612,3 +612,205 @@ class TestMathBoundaryAndEscaping:
         # mehr ausloesen, die ueber die echten Bloecke hinausgehen:
         segs = split_formulas(out)
         assert [s.kind for s in segs if s.kind != "text"] == ["inline_math", "display_math"]
+
+
+# ---------------------------------------------------------------------------
+# Redirect-URLs: Entpacken auf die Ziel-URL (v2.7.0)
+# ---------------------------------------------------------------------------
+class TestUnwrapRedirectUrl:
+    """Unit-Tests für :func:`unwrap_redirect_url` (Regelwerk + Sicherheit)."""
+
+    YOUTUBE_TARGET = "https://www.youtube.com/watch?v=VWsUuTQLEJQ&t=38"
+    # Das Originalbeispiel: Such-KI-Zitat mit percent-kodiertem Ziel im q-Param.
+    GOOGLE_SEARCH_WRAP = (
+        "https://www.google.com/search?q=https%3A%2F%2Fwww.youtube.com%2Fwatch"
+        "%3Fv%3DVWsUuTQLEJQ%26t%3D38"
+    )
+
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            # Nutzerbeispiel: google.com/search?q=<kodierte URL>
+            (
+                "https://www.google.com/search?q=https%3A%2F%2Fwww.youtube.com"
+                "%2Fwatch%3Fv%3DVWsUuTQLEJQ%26t%3D38",
+                YOUTUBE_TARGET,
+            ),
+            # klassische Google-Weiterleitung mit Tracking-Anhang
+            (
+                "https://www.google.com/url?sa=t&q=https%3A%2F%2Fexample.com"
+                "%2Fseite&ved=2ahUKEwj",
+                "https://example.com/seite",
+            ),
+            # regionale Google-Domain
+            (
+                "https://www.google.de/url?q=https%3A%2F%2Fexample.org%2Fx",
+                "https://example.org/x",
+            ),
+            # YouTube-Beschreibungs-Redirect
+            (
+                "https://www.youtube.com/redirect?event=video_description"
+                "&redir_token=QUFFLUhqbA&q=https%3A%2F%2Fexample.com%2Fvideo",
+                "https://example.com/video",
+            ),
+            # Facebook-Ausstiegsseite
+            (
+                "https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Ffb"
+                "&h=AT0xyz",
+                "https://example.com/fb",
+            ),
+            # DuckDuckGo-Exit
+            (
+                "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fddg&rut=abc",
+                "https://example.com/ddg",
+            ),
+            # Reddit-Exit
+            (
+                "https://out.reddit.com/t3_1abc?url=https%3A%2F%2Fexample.com%2Freddit"
+                "&app_name=web2x",
+                "https://example.com/reddit",
+            ),
+            # Steam-Linkfilter
+            (
+                "https://steamcommunity.com/linkfilter/?url=https%3A%2F%2Fexample.com%2Fsteam",
+                "https://example.com/steam",
+            ),
+            # LinkedIn-Weiterleitung
+            (
+                "https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Fexample.com%2Fin",
+                "https://example.com/in",
+            ),
+        ],
+    )
+    def test_known_redirects_unwrap(self, url, expected):
+        from telegram_formatter.utils import unwrap_redirect_url
+
+        assert unwrap_redirect_url(url) == expected
+
+    def test_bing_click_base64(self):
+        """Bing /ck/a?u=a1<Base64URL> — Ziel ist base64-kodiert."""
+        import base64
+
+        from telegram_formatter.utils import unwrap_redirect_url
+
+        token = base64.urlsafe_b64encode(b"https://example.com/item?id=42").decode().rstrip("=")
+        url = f"https://www.bing.com/ck/a?!&&p=abc123&u=a1{token}&ntb=1"
+        assert unwrap_redirect_url(url) == "https://example.com/item?id=42"
+
+    def test_nested_redirects_unwrap_recursively(self):
+        """Facebook-Seite linkt einen Google-Redirect -> beide Ebenen weg."""
+        from urllib.parse import quote
+
+        from telegram_formatter.utils import unwrap_redirect_url
+
+        inner = "https://www.google.com/url?q=" + quote(self.YOUTUBE_TARGET, safe="")
+        outer = "https://l.facebook.com/l.php?u=" + quote(inner, safe="") + "&h=AT0"
+        assert unwrap_redirect_url(outer) == self.YOUTUBE_TARGET
+
+    def test_double_percent_encoding(self):
+        """Doppelt kodierte Ziele (ein Klassiker bei Copy-Paste-Ketten)."""
+        from urllib.parse import quote
+
+        from telegram_formatter.utils import unwrap_redirect_url
+
+        url = "https://www.google.com/url?q=" + quote(quote("https://example.com/a", safe=""), safe="")
+        assert unwrap_redirect_url(url) == "https://example.com/a"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            # normale Suchanfrage: q ist keine URL -> unverändert
+            "https://www.google.com/search?q=hallo+welt",
+            "https://www.google.com/search?q=youtube+videos",
+            # unbekannte Domain, selbst mit url-Parameter
+            "https://example.com/redirect?url=https%3A%2F%2Fevil.example",
+            # Phishing-Versuch: Host klingt nur wie Google
+            "https://www.evilgoogle.com/url?q=https%3A%2F%2Fexample.com",
+            "https://notgoogle.de/url?q=https%3A%2F%2Fexample.com",
+            # falscher Pfad bei bekanntem Host
+            "https://www.google.com/maps?q=https%3A%2F%2Fexample.com",
+            # kein http(s)-Ziel im Parameter -> niemals ersetzen (Injection-Schutz)
+            "https://www.google.com/url?q=javascript:alert(1)",
+            "https://www.google.com/url?q=data:text/html;base64,PHNjcmlwdD4=",
+            # leere/fehlende Parameter
+            "https://www.google.com/url?q=",
+            "https://www.google.com/url?sa=t",
+            # Kurz-URLn sind offline nicht auflösbar -> 1:1
+            "https://t.co/abc123",
+            "https://bit.ly/xyz",
+            # keine URL
+            "kein-link",
+        ],
+    )
+    def test_non_redirects_stay_untouched(self, url):
+        from telegram_formatter.utils import unwrap_redirect_url
+
+        assert unwrap_redirect_url(url) == url
+
+    def test_idempotent(self):
+        from telegram_formatter.utils import unwrap_redirect_url
+
+        once = unwrap_redirect_url(self.GOOGLE_SEARCH_WRAP)
+        assert unwrap_redirect_url(once) == once
+
+
+class TestRedirectLinksInMessages:
+    """Integration: Redirect-Unwrap in beiden Konvertierungspfaden."""
+
+    YOUTUBE_TARGET = TestUnwrapRedirectUrl.YOUTUBE_TARGET
+    GOOGLE_SEARCH_WRAP = TestUnwrapRedirectUrl.GOOGLE_SEARCH_WRAP
+
+    def test_user_reported_artifact_regular_path(self):
+        """Das gemeldete Beispiel: [[00:38]([url](url))] -> sauberer Link."""
+        src = f"[[00:38]([{self.GOOGLE_SEARCH_WRAP}]({self.GOOGLE_SEARCH_WRAP}))]"
+        html = markdown_to_html(src)
+        assert html == '<a href="https://www.youtube.com/watch?v=VWsUuTQLEJQ&amp;t=38">00:38</a>'
+        assert "google.com" not in html
+
+    def test_user_reported_artifact_rich_path(self):
+        src = f"$x$ [[00:38]([{self.GOOGLE_SEARCH_WRAP}]({self.GOOGLE_SEARCH_WRAP}))]"
+        messages = build_messages(src, "1")
+        assert messages[0].kind == "rich"
+        md = messages[0].payload["rich_message"]["markdown"]
+        assert f"[00:38]({self.YOUTUBE_TARGET})" in md
+        assert "google.com" not in md
+
+    def test_html_href_unwrapped(self):
+        html = markdown_to_html(f"[Video]({self.GOOGLE_SEARCH_WRAP})")
+        assert f'<a href="{self.YOUTUBE_TARGET.replace("&", "&amp;")}">Video</a>' in html
+
+    def test_rich_href_unwrapped(self):
+        md = markdown_to_rich_markdown(f"[Video]({self.GOOGLE_SEARCH_WRAP})")
+        assert f"[Video]({self.YOUTUBE_TARGET})" in md
+
+    def test_label_repeating_redirect_shows_target(self):
+        url = "https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fx"
+        html = markdown_to_html(f"[{url}]({url})")
+        assert '<a href="https://example.com/x">https://example.com/x</a>' in html
+
+    def test_bare_redirect_url_in_text(self):
+        html = markdown_to_html(f"Schau mal: {self.GOOGLE_SEARCH_WRAP}. Ende.")
+        assert self.YOUTUBE_TARGET.replace("&", "&amp;") in html
+        assert "google.com" not in html
+        assert html.endswith("Ende.")  # Satzbau bleibt erhalten
+
+    def test_urls_inside_code_are_never_rewritten(self):
+        inline = markdown_to_html(f"`{self.GOOGLE_SEARCH_WRAP}`")
+        assert "google.com" in inline
+        fence = markdown_to_html(f"```\n{self.GOOGLE_SEARCH_WRAP}\n```")
+        assert "google.com" in fence
+        rich = markdown_to_rich_markdown(f"`{self.GOOGLE_SEARCH_WRAP}`")
+        assert "google.com" in rich
+
+    def test_normal_links_and_searches_untouched(self):
+        html = markdown_to_html("[Suche](https://www.google.com/search?q=hallo)")
+        assert '<a href="https://www.google.com/search?q=hallo">Suche</a>' in html
+        plain = markdown_to_html("[Text](https://example.com)")
+        assert '<a href="https://example.com">Text</a>' in plain
+
+    def test_nested_artifact_inside_list(self):
+        """Artefakt-Glättung darf Listenpunkte nicht zerlegen."""
+        src = f"- Clip: [[00:38]([{self.GOOGLE_SEARCH_WRAP}]({self.GOOGLE_SEARCH_WRAP}))]"
+        html = markdown_to_html(src)
+        assert html.startswith("• Clip: <a href=")
+        assert "google.com" not in html

@@ -4,6 +4,52 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.7.0] - 2026-09-14
+
+**Redirect-URLs werden auf ihr Ziel entpackt — Links in Nachrichten zeigen
+jetzt das echte Ziel statt Tracking-Adressen.** Suchmaschinen, YouTube,
+Facebook & Co. leiten externe Links über eigene Redirect-Adressen, und
+Such-KIs zitieren diese Wrapper. Bisher landten dadurch unbrauchbare Adressen
+wie `google.com/search?q=<percent-kodiertes Ziel>` 1:1 in der Nachricht.
+Der Parser extrahiert jetzt die Ziel-URL — in Link-Zielen, Link-Texten und
+nackten URLs im Fließtext, auf beiden Konvertierungspfaden.
+
+### Hinzugefügt
+
+- **Redirect-Unwrap** (`telegram_formatter/utils.py::unwrap_redirect_url`):
+  bekannte Redirect-Dienste werden auf ihre Ziel-URL entpackt — Google
+  (`/url?q=…` und die `/search?q=<URL>`-Wrapper-Links von Such-KIs),
+  YouTube (`/redirect?q=…`), Facebook (`l.facebook.com/l.php?u=…`),
+  DuckDuckGo (`/l/?uddg=…`), Reddit (`out.reddit.com?url=…`), Steam
+  (`/linkfilter/?url=…`), LinkedIn (`/redir/redirect?url=…`) und Bing
+  (`/ck/a?u=a1<Base64URL>`). Verschachtelte Redirects werden rekursiv
+  entpackt (bis 5 Ebenen), mehrfach percent-kodierte Werte dekodiert.
+- **Link-Artefakt-Bereinigung** (`_normalize_links`): verschachtelte Links
+  aus Such-KI-Zitaten `[text]([label](url))` und Klammer-Wicklungen
+  `[[text](url)]` werden zu `[text](url)` geglättet; wiederholt der
+  Link-Text nur die Redirect-URL, wird stattdessen die Ziel-URL angezeigt.
+- **Schutzschienen:** das extrahierte Ziel wird nur akzeptiert, wenn es
+  selbst eine absolute `http(s)`-URL ist — `javascript:`/`data:` u. Ä.
+  werden nie ausgegeben; normale Suchanfragen (`google.com/search?q=katze`)
+  bleiben unverändert; Codeblöcke und Formeln sind über Platzhalter
+  geschützt; Kurz-URLs (t.co, bit.ly, goo.gl) bleiben 1:1, weil sie offline
+  nicht auflösbar sind.
+- **Neue Vergleichs-Doku** [docs/FORMATTING.md](docs/FORMATTING.md):
+  Telegram-Formatierung (Regular-HTML, MarkdownV2, Rich Messages) vs.
+  Ausgabeformate gängiger LLMs (ChatGPT, Claude, Gemini, DeepSeek,
+  Perplexity) vs. Implementierungsstand dieses Projekts — inkl. Liste der
+  noch nicht implementierten Telegram-Features.
+- Tests: 35 neue Fälle in `tests/test_utils.py` (alle Redirect-Dienste,
+  Negativ-/Phishing-/Schema-Fälle, verschachtelte und doppelt kodierte
+  Redirects, beide Konvertierungspfade, Code-Schutz, Artefakt-Glättung).
+
+### Geändert
+
+- Beide Konvertierungspfade rufen `_normalize_links` auf (Regular-Pfad vor
+  dem HTML-Escaping, Rich-Pfad vor dem Unterstreichungs-/Link-Schutz). Die
+  Ausgabe ändert sich nur für Redirect-URLs und ihre Artefakte — alle
+  anderen Eingaben bleiben byteweise identisch konvertiert.
+
 ## [2.6.0] - 2026-09-13
 
 **Der geteilte Bot `@mdtotxt_bot` ist im Browser wählbar — Versandweg-Auswahl
