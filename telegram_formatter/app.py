@@ -14,9 +14,11 @@ Zwei Versand-Wege (seit v2.2.0):
 
 * **Geteilter Bot** (``/api/send``): sendet über den zentral konfigurierten
   Bot in den gepinnten ``TELEGRAM_CHAT_ID``. Auf einer öffentlichen Instanz
-  ist das ein **gemeinsamer Chat** — jeder Besucher sieht alle bisher
-  gesendeten Nachrichten. Die Oberfläche warnt entsprechend; für private
-  Inhalte ist BYOB der empfohlene Weg. Zwei Zugangsarten (seit 2.6.0):
+  ist das ein **öffentlicher, gemeinsamer Chat** (public Supergroup/Channel) —
+  jeder Besucher sieht alle bisher gesendeten Nachrichten und jeder, der die
+  Gruppe/den Kanal öffnet, kann den gesamten Verlauf lesen. Die Oberfläche
+  warnt entsprechend; für private Inhalte ist BYOB der empfohlene Weg.
+  Zwei Zugangsarten (seit 2.6.0):
 
   - **Browser-Versand** (``TELEGRAM_FORMATTER_SHARED_WEB_SEND``, Standard
     ``1``): nur wirksam, wenn *beide* Bedingungen gelten — Bot-Token gesetzt
@@ -1007,7 +1009,7 @@ def byob_session_send():
         return err
 
     sid, session_secret, err = _byob_session_id(data)
-    if err is not None or sid is None or session_secret is None:
+    if err is not None:
         return err
 
     text, err = _valid_text(data)
@@ -1068,7 +1070,7 @@ def byob_session_status():
     if err is not None:
         return err
     sid, session_secret, err = _byob_session_id(data)
-    if err is not None or sid is None or session_secret is None:
+    if err is not None:
         return err
 
     runtime = _byob()
@@ -1102,7 +1104,7 @@ def byob_session_close():
     if err is not None:
         return err
     sid, session_secret, err = _byob_session_id(data)
-    if err is not None or sid is None or session_secret is None:
+    if err is not None:
         return err
 
     runtime = _byob()

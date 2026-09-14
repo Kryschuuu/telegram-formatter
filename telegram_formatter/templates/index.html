@@ -121,9 +121,10 @@
             <p>
                 {%- if shared_send_available %}
                     Ohne eigene Session sendet der Standard-Bot
-                    <strong>{{ shared_bot_handle }}</strong> in <strong>einen gemeinsamen Chat</strong>:
+                    <strong>{{ shared_bot_handle }}</strong> in <strong>einen öffentlichen, gemeinsamen Chat</strong>:
                     Alles, was du darüber sendest, sehen <strong>alle Besucher dieser Seite</strong> —
-                    und jeder, der den Bot auf Telegram hinzufügt, kann den bisherigen Verlauf lesen.
+                    und jeder, der die Gruppe oder den Kanal auf Telegram öffnet, kann den
+                    gesamten Verlauf lesen (auch nachträglich, auch ohne Mitglied zu sein).
                     Nutze den geteilten Bot nur für öffentliche Tests, <strong>niemals für private
                     Inhalte</strong>. Für private Nachrichten gehört dein eigener Bot in eine
                     <a href="#byob">Session</a> (unten, ca. 3 Minuten Einrichtung) — ist eine Session
@@ -317,10 +318,10 @@
                     Öffentlich sichtbar!
                 </p>
                 <p>
-                    Der geteilte Bot sendet in den <strong>gemeinsamen Chat</strong> dieser
-                    Seite: Alle Besucher sehen diese Nachricht — und jeder, der den Bot auf
-                    Telegram hinzufügt, kann sie auch nachträglich lesen. Für private Inhalte
-                    zuerst eine eigene Bot-Session starten
+                    Der geteilte Bot sendet in den <strong>gemeinsamen, öffentlichen Chat</strong> dieser
+                    Seite: Alle Besucher sehen diese Nachricht — und jeder, der die Gruppe
+                    oder den Kanal auf Telegram öffnet, kann sie auch nachträglich lesen.
+                    Für private Inhalte zuerst eine eigene Bot-Session starten
                     (Abschnitt <a href="#byob">„Eigener Bot — BYOB“</a> unten).
                 </p>
             </div>
@@ -570,8 +571,8 @@
                     {%- if configured %}
                         Der Standard-Bot <strong>{{ shared_bot_handle }}</strong> sendet in
                         <strong>einen gemeinsamen Chat</strong>: Alles Gesendete sehen alle
-                        Besucher dieser Seite — und jeder, der den Bot auf Telegram hinzufügt,
-                        kann den bisherigen Verlauf nachlesen. Der Token liegt beim Betreiber
+                        Besucher dieser Seite — und jeder, der die Gruppe oder den Kanal auf
+                        Telegram öffnet, kann den gesamten Verlauf nachlesen. Der Token liegt beim Betreiber
                         dieser Instanz; für private Inhalte ist dieser Weg ungeeignet.
                     {%- else %}
                         Auf dieser Instanz ist kein geteilter Bot konfiguriert — gesendet
@@ -802,9 +803,9 @@
                         Telegram-Bot (Token von @BotFather) in einer ephemeren Session —
                         deine Nachrichten laufen dann im Namen deines Bots direkt in deinen
                         Ziel-Chat, ohne geteilte Historie. Der geteilte Standard-Bot
-                        dagegen sendet in <strong>einen gemeinsamen Chat</strong>: Alle Besucher
+                        dagegen sendet in <strong>einen gemeinsamen, öffentlichen Chat</strong>: Alle Besucher
                         sehen alles, was damit gesendet wurde — auch nachträglich, wenn sie
-                        den Bot auf Telegram hinzufügen. Deshalb die Warnung im Abschnitt
+                        die Gruppe oder den Kanal auf Telegram öffnen. Deshalb die Warnung im Abschnitt
                         „Versandweg“.
                     </p>
                 </div>
@@ -821,8 +822,8 @@
                         sendet direkt in <strong>deinen</strong> Ziel-Chat — privat; ist eine Session
                         aktiv, steht dieser Weg deshalb vorausgewählt oben. Der
                         <strong>geteilte Bot</strong> <code>@mdtotxt_bot</code> sendet in den
-                        <strong>gemeinsamen Chat</strong> der Instanz — für alle Besucher sichtbar und
-                        nachträglich lesbar, auch von jedem, der den Bot zu Telegram hinzufügt.
+                        <strong>öffentlichen, gemeinsamen Chat</strong> der Instanz — für alle Besucher sichtbar und
+                        nachträglich lesbar, auch von jedem, der die Gruppe oder den Kanal auf Telegram öffnet.
                         Ohne eigene Session ist er der angebotene Weg (gut für öffentliche Tests,
                         nie für private Inhalte); beide Wege lassen sich im Dialog umschalten,
                         Bot, Ziel und Warnhinweis werden dabei neu angezeigt.

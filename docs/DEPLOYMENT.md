@@ -103,6 +103,28 @@ Unter **Environment → Environment Variables** diese Einträge hinzufügen:
 > Website führt Browser-Nutzer konsequent zu BYOB — der Versandweg-Dialog sagt
 > das auch so.
 
+### Schritt 4b: Öffentliche Demo — Zielchat als public Supergroup/Channel
+
+Damit die Privatsphäre-Warnung auf der Seite **wörtlich korrekt** ist („jeder,
+der die Gruppe öffnet, kann den gesamten Verlauf lesen“) und dein persönliches
+Postfach ruhig bleibt, richte den Demo-Zielchat als **öffentlichen** Chat ein:
+
+1. **Gruppe oder Kanal anlegen** und `@mdtotxt_bot` hinzufügen. Bei einem
+   **Kanal** braucht der Bot das Recht *Nachrichten senden* (Admin-Recht
+   *Post Messages*). Für die Demo empfiehlt sich eine **public Supergroup**
+   (nicht geheim) — dann ist der Verlauf auch für neue Leser einsehbar; bei
+   einem nicht-öffentlichen Chat sieht den Verlauf nur, wer Mitglied ist.
+2. **Eine Nachricht dort schreiben** und die Chat-ID ablesen (negativ, meist
+   `-100…`) — z. B. über die `/getUpdates`-Antwort oder `@userinfobot`.
+3. **`TELEGRAM_CHAT_ID` auf diese ID setzen** (siehe Variable oben) → der
+   Dienst deployt neu und pinnt fortan diesen Chat.
+
+Der geteilte Bot `@mdtotxt_bot` (bzw. der in
+`TELEGRAM_FORMATTER_SHARED_BOT_HANDLE` konfigurierte) darf **kein** privater
+Chat sein: sonst wäre die öffentliche Sichtbarkeit nur vorgetäuscht. Mit einer
+public Supergroup ist die Warnung wahr und dein Postfach (DM) bleibt für die
+Demo unberührt.
+
 Mit **Add Variable** speichern.
 
 ## Schritt 5: Deploy starten
