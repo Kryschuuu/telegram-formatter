@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.6.0-blue)
+![Version](https://img.shields.io/badge/version-2.7.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -21,7 +21,15 @@ Nachrichten.
   Zerschneiden durch naive Regex.
 - **Telegram-Formatierung** — Fett `**x**`, Kursiv `*x*`/`_x_`,
   Unterstreichen `__x__`, Durchgestrichen `~~x~~`, Inline-Code `` `x` ``,
-  Codeblöcke, Links, Überschriften, Listen und Blockquotes.
+  Codeblöcke, Links, Überschriften, Listen und Blockquotes. Vollständige
+  Gegenüberstellung von Telegram-Features, LLM-Ausgabeformaten und
+  Implementierungsstand: [docs/FORMATTING.md](docs/FORMATTING.md).
+- **Redirect-URLs werden entpackt (seit v2.7.0)** — Links aus Such-KIs und
+  sozialen Netzwerken führen oft über Tracking-Adressen
+  (`google.com/search?q=<percent-kodiertes Ziel>`, `youtube.com/redirect?q=…`,
+  `l.facebook.com/l.php?u=…`, …). Der Parser extrahiert die eigentliche
+  Ziel-URL (rekursiv, schema-geschützt); Link-Artefakte wie
+  `[text]([url](url))` werden geglättet.
 - **Tabellen** — Pipe-Tabellen werden in native Rich-Markdown-Tabellen
   übersetzt (GFM).
 - **Automatisches Splitting** — Nachrichten werden an Absatz-, Zeilen- und
@@ -403,6 +411,8 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 
 - [Architektur](docs/ARCHITECTURE.md) — Schichten, Komponenten, Datenflüsse,
   Abhängigkeiten.
+- [Formatierung](docs/FORMATTING.md) — Telegram-Features vs. LLM-Ausgabe vs.
+  Implementierungsstand (inkl. Redirect-Unwrap).
 - [Dezentrale Bot-Architektur](docs/DECENTRAL_BOT_ARCHITECTURE.md) — eigene
   Bots registrieren, reviewen und in Sessions nutzen; Peer-Review-Prozess.
 - [Deployment](docs/DEPLOYMENT.md) — Schritt-für-Schritt für Render.com.

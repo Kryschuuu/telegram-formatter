@@ -53,7 +53,7 @@ darin ist ein eigenständiger Sub-Layer für das dezentrale BYOB-Modell.
 | Modul | Verantwortung |
 |---|---|
 | `telegram_formatter/__init__.py` | Fassade: `__version__`, Re-Exports (`build_messages`, `send_message`) |
-| `telegram_formatter/utils.py` | Reine, I/O-freie Konvertierungs- und Aufteilungslogik. Enthält `normalize_text`, `split_formulas`, `validate_latex_braces`, `parse_pipe_table`, `markdown_to_html`, `markdown_to_rich_markdown`, `build_messages`, `chunk_text`. |
+| `telegram_formatter/utils.py` | Reine, I/O-freie Konvertierungs- und Aufteilungslogik. Enthält `normalize_text`, `split_formulas`, `validate_latex_braces`, `parse_pipe_table`, `markdown_to_html`, `markdown_to_rich_markdown`, `build_messages`, `chunk_text` sowie seit v2.7.0 `unwrap_redirect_url`/`_normalize_links` (Redirect-URLs → Ziel-URL, Link-Artefakt-Glättung; Regelwerk und Vergleich: [FORMATTING.md](FORMATTING.md)). |
 | `telegram_formatter/sender.py` | Versand einzelner `TelegramMessage`-Objekte via HTTP (`sendMessage`/`sendRichMessage`). Lazy-Import von `requests`. |
 | `telegram_formatter/cli.py` | Kommandozeilen-Einstieg (Datei/STDIN → Payloads anzeigen oder senden). |
 | `telegram_formatter/app.py` | Flask-Weboberfläche mit Editor, Live-Vorschau und den Routen `/api/convert`, `/api/send` (geteilter Bot, gepinnter Chat; aus dem Browser nur mit `TELEGRAM_FORMATTER_SHARED_WEB_SEND` + `confirm_public`) sowie `/api/byob/*` (eigene Bot-Sessions: `session`, `discover`, `send`, `status`, `close` — botkit-Betriebsmodus B, seit v2.2.0). Templates liegen in `telegram_formatter/templates/`. |
@@ -78,6 +78,12 @@ Parameter ein. `utils.py` importiert weder `flask` noch `requests` noch
    - **Nein → Regular-Pfad:** `markdown_to_html` (Telegram-HTML, mit
      Platzhalter-Schutz für Code/Formeln und vollständigem Escaping) →
      `chunk_text(…, 4096)` → Payload `text` + `parse_mode="HTML"`.
+   - Auf **beiden** Pfaden werden vorher die Links normalisiert
+     (`_normalize_links`, v2.7.0): bekannte Redirect-URLs
+     (`google.com/url?q=…`, `youtube.com/redirect?q=…`, …) werden über
+     `unwrap_redirect_url` auf ihre Ziel-URL entpackt, Such-KI-Artefakte
+     (`[text]([label](url))`) geglättet. Code und Formeln sind dabei über
+     Platzhalter geschützt.
 3. **Versand** (`telegram_formatter/sender.py::send_message`): wählt
    `sendRichMessage` bzw. `sendMessage` anhand von `message.kind`.
 

@@ -39,9 +39,12 @@ Wichtige Telegram-Fakten (Bot API 10.1+, Stand 2026):
 
 from __future__ import annotations
 
+import base64
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 # ---------------------------------------------------------------------------
 # Konstanten (Telegram-Limits)
@@ -429,6 +432,228 @@ def _safe_fence_lang(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Redirect-URLs: Entpacken auf die eigentliche Ziel-URL
+# ---------------------------------------------------------------------------
+# Suchmaschinen, Videoplattformen und soziale Netzwerke leiten externe Links
+# über eigene Redirect-Adressen (google.com/url?q=…, youtube.com/redirect?q=…,
+# l.facebook.com/l.php?u=…, …). Such-KIs zitieren solche Wrapper-Adressen,
+# wodurch die eigentliche Ziel-URL nur percent-kodiert in einem
+# Query-Parameter sichtbar ist. unwrap_redirect_url() holt das Ziel heraus,
+# damit in Telegram-Nachrichten lesbare Links statt Tracking-Adressen stehen.
+
+
+def _looks_like_http_url(value: str) -> bool:
+    """True, wenn ``value`` eine absolute http(s)-URL mit Host ist.
+
+    Einzige akzeptierte Zielschemata: ``http``/``https`` — dadurch können
+    über Redirect-Parameter niemals ``javascript:``, ``data:`` o. Ä.
+    in Link-Ziele eingeschleust werden.
+    """
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    try:
+        return bool(parts.hostname)
+    except ValueError:  # z. B. ungültige IPv6-Klammern
+        return False
+
+
+def _decode_param_value(raw: str) -> str | None:
+    """Dekodiert einen (ggf. mehrfach percent-kodierten) Parameter-Wert in
+    eine http(s)-URL; sonst ``None``."""
+    value = raw
+    for _ in range(3):
+        if _looks_like_http_url(value):
+            return value
+        decoded = unquote(value)
+        if decoded == value:
+            return None
+        value = decoded
+    return None
+
+
+def _decode_bing_click(raw: str) -> str | None:
+    """Bing-Klicktracking trägt das Ziel als Base64URL nach dem Präfix ``a1``."""
+    token = raw[2:] if raw.startswith("a1") else raw
+    token += "=" * (-len(token) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(token).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return decoded if _looks_like_http_url(decoded) else None
+
+
+@dataclass(frozen=True)
+class _RedirectRule:
+    """Ein bekannter Redirect-Dienst: Host-Muster, Pfadpräfix, Parameternamen."""
+
+    host: re.Pattern
+    path: str
+    params: tuple[str, ...]
+    decode: Callable[[str], str | None] | None = None
+
+
+_GOOGLE_HOST = re.compile(r"(?:[a-z0-9-]+\.)*google\.[a-z]{2,}(?:\.[a-z]{2,})?")
+
+#: Regelwerk bekannter Redirect-Dienste. Eine URL wird nur dann ersetzt,
+#: wenn der jeweilige Parameter eine gültige absolute http(s)-URL ergibt —
+#: normale Suchanfragen (``google.com/search?q=hello``) bleiben stehen.
+_REDIRECT_RULES: tuple[_RedirectRule, ...] = (
+    # Google: klassische Weiterleitung /url?q=… sowie die /search?q=<URL>-
+    # Wrapper-Links, die Such-KIs (z. B. Perplexity) als Zitate ausgeben.
+    _RedirectRule(_GOOGLE_HOST, "/url", ("q", "url")),
+    _RedirectRule(_GOOGLE_HOST, "/search", ("q",)),
+    # YouTube-Weiterleitung aus Videobeschreibungen
+    _RedirectRule(re.compile(r"(?:[a-z0-9-]+\.)*youtube\.com"), "/redirect", ("q", "redirect_url")),
+    # Ausstiegsseiten von Facebook (l.facebook.com, lm.facebook.com)
+    _RedirectRule(re.compile(r"(?:l|lm)\.facebook\.com"), "/l.php", ("u",)),
+    # DuckDuckGo-Exit-Link
+    _RedirectRule(re.compile(r"(?:[a-z0-9-]+\.)*duckduckgo\.com"), "/l/", ("uddg",)),
+    # Reddit-Exit-Link
+    _RedirectRule(re.compile(r"(?:out|click)\.reddit\.com"), "/", ("url",)),
+    # Steam-Linkfilter
+    _RedirectRule(re.compile(r"(?:[a-z0-9-]+\.)*steamcommunity\.com"), "/linkfilter/", ("url", "u")),
+    # LinkedIn-Weiterleitung
+    _RedirectRule(re.compile(r"(?:[a-z0-9-]+\.)*linkedin\.com"), "/redir/redirect", ("url",)),
+    # Bing-Klicktracking (Ziel als Base64URL im u-Parameter)
+    _RedirectRule(re.compile(r"(?:www\.)?bing\.com"), "/ck/a", ("u",), _decode_bing_click),
+)
+
+#: Maximale Entpackungstiefe — Redirects können ineinander verschachtelt
+#: sein (z. B. Facebook-Seite, die einen Google-Redirect linkt).
+_MAX_REDIRECT_DEPTH = 5
+
+
+def _match_redirect_rule(url: str) -> str | None:
+    """Liefert die Ziel-URL, falls ``url`` auf eine Redirect-Regel passt."""
+    if not url.lower().startswith(("http://", "https://")):
+        return None
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    query_params: dict[str, list[str]] = {}
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        query_params.setdefault(key, []).append(value)
+    path = parts.path or "/"
+    for rule in _REDIRECT_RULES:
+        if rule.host.fullmatch(host) is None or not path.startswith(rule.path):
+            continue
+        for name in rule.params:
+            for raw in query_params.get(name, ()):
+                target = (rule.decode or _decode_param_value)(raw)
+                if target:
+                    return target
+    return None
+
+
+def unwrap_redirect_url(url: str) -> str:
+    """
+    Entpackt bekannte Redirect-/Tracking-URLs auf die eigentliche Ziel-URL.
+
+    Unterstützte Dienste (Ziel steht als absolute http(s)-URL im genannten
+    Query-Parameter)::
+
+        google.*/url?q=…                     google.*/search?q=<URL>
+        youtube.com/redirect?q=…             l.facebook.com/l.php?u=…
+        duckduckgo.com/l/?uddg=…             out.reddit.com/…?url=…
+        steamcommunity.com/linkfilter/?url=… linkedin.com/redir/redirect?url=…
+        bing.com/ck/a?u=a1<Base64URL>
+
+    Regeln:
+
+    - Das extrahierte Ziel wird nur akzeptiert, wenn es selbst eine
+      absolute ``http(s)``-URL ist. Andere Schemata werden nie ausgegeben,
+      und normale Suchanfragen (``google.com/search?q=katze``) bleiben
+      unverändert.
+    - Es wird rekursiv entpackt (bis :data:`_MAX_REDIRECT_DEPTH` Ebenen),
+      damit auch ineinander verschachtelte Redirects beim Ziel ankommen.
+    - Unbekannte Adressen werden unverändert zurückgegeben — Offline-Parser
+      können Kurz-URLs (t.co, bit.ly, goo.gl, …) nicht auflösen.
+    """
+    current = url.strip()
+    seen: set[str] = set()
+    for _ in range(_MAX_REDIRECT_DEPTH):
+        if current in seen:
+            break
+        seen.add(current)
+        target = _match_redirect_rule(current)
+        if target is None or target == current:
+            break
+        current = target
+    return current
+
+
+def _clean_redirect_label(label: str, url: str, target: str) -> str:
+    """Linktext, der nur die (Redirect-)URL wiederholt, wird durch die
+    Ziel-URL ersetzt — die Nachricht zeigt dann das echte Ziel."""
+    stripped = label.strip()
+    if stripped == url:
+        return target
+    if stripped.lower().startswith(("http://", "https://")):
+        unwrapped = unwrap_redirect_url(stripped)
+        if unwrapped != stripped:
+            return unwrapped
+    return label
+
+
+#: Verschachtelter Link ``[text]([label](url))`` — ungültiges Markdown,
+#: typisches Artefakt von Such-KI-Zitaten; wird zu ``[text](url)``.
+_NESTED_LINK_RE = re.compile(r"\[([^\[\]]+)\]\(\[[^\[\]]*\]\((https?://[^)\s]+)\)\)")
+#: Einzelner, in eckige Klammern gewickelter Link ``[[text](url)]``.
+_WRAPPED_LINK_RE = re.compile(r"\[(\[[^\[\]]+\]\(https?://[^)\s]+\))\]")
+#: Gewöhnlicher Markdown-Link.
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\[\]]+)\]\((https?://[^)\s]+)\)")
+#: Nackte URL im Fließtext (Telegram verlinkt sie automatisch).
+_BARE_URL_RE = re.compile(r"https?://[^\s\[\]()<>\"'|`]+")
+#: Satzzeichen, die im Fließtext direkt an einer URL kleben können.
+_TRAILING_PUNCT = ".,;:!?…"
+
+
+def _unwrap_bare_url(m: re.Match) -> str:
+    """Ersetzt nackte Redirect-URLs im Fließtext durch ihre Ziel-URL."""
+    url = m.group(0)
+    trail = ""
+    while url and url[-1] in _TRAILING_PUNCT:
+        trail = url[-1] + trail
+        url = url[:-1]
+    target = unwrap_redirect_url(url)
+    return target + trail if target != url else m.group(0)
+
+
+def _normalize_links(text: str) -> str:
+    """
+    Bereinigt Links vor der eigentlichen Konvertierung.
+
+    1. Link-Artefakte von Such-KIs werden geglättet: verschachtelte Links
+       ``[text]([label](url))`` und Klammer-Wicklungen ``[[text](url)]``
+       werden zu ``[text](url)``.
+    2. Redirect-URLs (:func:`unwrap_redirect_url`) werden in Link-Zielen,
+       Link-Texten und nackten URLs auf die Ziel-URL entpackt.
+
+    Muss **vor** dem HTML-Escaping laufen (damit ``&`` in Query-Strings
+    noch als Trenner lesbar ist) und **nach** dem Schutz von Code/Formeln
+    (URLs in Codeblöcken bleiben 1:1 stehen).
+    """
+    text = _NESTED_LINK_RE.sub(lambda m: f"[{m.group(1)}]({m.group(2)})", text)
+    text = _WRAPPED_LINK_RE.sub(lambda m: m.group(1), text)
+
+    def _link_repl(m: re.Match) -> str:
+        label, url = m.group(1), m.group(2)
+        target = unwrap_redirect_url(url)
+        return f"[{_clean_redirect_label(label, url, target)}]({target})"
+
+    text = _MARKDOWN_LINK_RE.sub(_link_repl, text)
+    return _BARE_URL_RE.sub(_unwrap_bare_url, text)
+
+
+# ---------------------------------------------------------------------------
 # Markdown -> Telegram-HTML (Regular-Pfad, sendMessage)
 # ---------------------------------------------------------------------------
 def markdown_to_html(text: str) -> str:
@@ -440,6 +665,9 @@ def markdown_to_html(text: str) -> str:
     Links, Überschriften, Blockquotes und Listen. Code und (defensiv) LaTeX
     werden vor den Ersetzungen geschützt und am Ende unverändert
     wiederhergestellt.
+
+    Bekannte Redirect-/Tracking-URLs (z. B. ``google.com/url?q=…``) werden
+    über :func:`_normalize_links` auf ihre Ziel-URL entpackt.
     """
     text = normalize_text(text)
     store = _PlaceholderStore()
@@ -468,6 +696,11 @@ def markdown_to_html(text: str) -> str:
     # 3. Formeln defensiv schützen (HTML kann sie nicht rendern, aber der
     #    Inhalt darf durch die folgenden Regexes nicht zerstört werden).
     text = _protect_math(text, store)
+
+    # 3b. Links normalisieren: Redirect-URLs auf die Ziel-URL entpacken und
+    #     Such-KI-Link-Artefakte glätten. Läuft vor dem Escapen, damit "&"
+    #     in Query-Strings noch als Trenner lesbar ist.
+    text = _normalize_links(text)
 
     # 4. Verbleibenden Text escapen.
     text = _escape_html(text)
@@ -662,6 +895,9 @@ def markdown_to_rich_markdown(text: str) -> str:
     Der einzige Unterschied zur Eingabe: Unterstreichen wird hier über
     ``<u>...</u>`` ausgedrückt, weil ``__...__`` in Rich Markdown Fett
     bedeutet. Tabellen werden zusätzlich in gültige GFM-Form normalisiert.
+
+    Bekannte Redirect-/Tracking-URLs (z. B. ``youtube.com/redirect?q=…``)
+    werden über :func:`_normalize_links` auf ihre Ziel-URL entpackt.
     """
     text = normalize_text(text)
     store = _PlaceholderStore()
@@ -681,6 +917,10 @@ def markdown_to_rich_markdown(text: str) -> str:
     # 2. DeepSeek/Gemini-Delimiter auf Telegram-Syntax normalisieren
     #    (\(...\) -> $...$, \[...\] -> $$...$$). Code ist bereits geschützt.
     text = convert_deepseek_latex_syntax(text)
+
+    # 2b. Links normalisieren: Redirect-URLs auf die Ziel-URL entpacken und
+    #     Such-KI-Link-Artefakte glätten (vor Unterstreichungs-/Link-Schutz).
+    text = _normalize_links(text)
 
     # 3. Unterstreichen __x__ -> <u>x</u> — URLs dürfen dabei nicht
     #    angefasst werden (z. B. https://.../__foo__ würde sonst zu
