@@ -7,6 +7,7 @@ import re
 import pytest
 
 from telegram_formatter.utils import (
+    _PADDED_MATH_MAX_CHARS,
     REGULAR_MESSAGE_MAX_CHARS,
     RICH_MESSAGE_MAX_CHARS,
     _safe_chunk,
@@ -15,6 +16,7 @@ from telegram_formatter.utils import (
     convert_deepseek_latex_syntax,
     has_latex,
     has_table,
+    iter_math_spans,
     markdown_to_html,
     markdown_to_rich_markdown,
     normalize_text,
@@ -302,6 +304,208 @@ def test_html_renders_deepseek_math_content():
     html = markdown_to_html(r"Energie \(E\) hier")
     assert "E" in html
     assert r"\(" not in html
+
+
+# ---------------------------------------------------------------------------
+# Bugfix v2.10.0: Rand-Whitespace in LLM-Delimitern machte Formeln zu Text
+# ---------------------------------------------------------------------------
+# DeepSeek/Gemini liefern Inline-Formeln häufig mit Leerzeichen (``\( x \)``)
+# oder über mehrere Zeilen verteilt. Die Konvertierung schrieb daraus
+# ``$ x $`` — das ist nach den GFM/Pandoc-Randregeln KEINE Formel, Telegram
+# zeigt den Quelltext wörtlich an (sichtbares ``\cdot``, sichtbares ``$``).
+class TestMathNormalization:
+    """Regression zu „\\( x \\)“ → „$ x $“ (Formel blieb als Text stehen)."""
+
+    @pytest.mark.parametrize(
+        "source,expected",
+        [
+            (r"Die Kraft \( a \cdot b \) wirkt.", r"Die Kraft $a \cdot b$ wirkt."),
+            (r"\( a \cdot b\)", r"$a \cdot b$"),
+            (r"\(a \cdot b \)", r"$a \cdot b$"),
+            (r"\(   a \cdot b   \)", r"$a \cdot b$"),
+            (r"\(\frac{a}{b} \cdot \frac{c}{d}\)", r"$\frac{a}{b} \cdot \frac{c}{d}$"),
+            ("\\(a \\cdot b\n\\)", r"$a \cdot b$"),  # Umbruch vor dem Schließer
+            ("\\(\na \\cdot b\n\\)", r"$a \cdot b$"),  # Umbruch an beiden Rändern
+            ("\\(a \\cdot\nb\\)", r"$a \cdot b$"),  # Umbruch mitten in der Formel
+        ],
+    )
+    def test_padded_inline_math(self, source, expected):
+        assert convert_deepseek_latex_syntax(source) == expected
+        assert markdown_to_rich_markdown(source) == expected
+
+    @pytest.mark.parametrize("body", [r"a \cdot b", r"\frac{1}{2} m v^2", r"\alpha \cdot \beta"])
+    def test_padded_inline_math_is_rendered_by_telegram(self, body):
+        """Was der Konverter ausgibt, muss nach denselben Regeln eine Formel
+        sein, die Telegram rendert — sonst bleibt der Quelltext sichtbar."""
+        out = convert_deepseek_latex_syntax(rf"Text \( {body} \) Ende")
+        spans = list(iter_math_spans(out))
+        assert len(spans) == 1
+        assert spans[0].delimiter == "$"
+        assert spans[0].content == body
+        assert not spans[0].content[:1].isspace()
+        assert not spans[0].content[-1:].isspace()
+        assert "\n" not in spans[0].content
+
+    @pytest.mark.parametrize(
+        "source,expected",
+        [
+            ("\\[\n a \\cdot b \n\\]", "$$\n a \\cdot b \n$$"),
+            (
+                "\\[\na \\cdot b\n\nc \\cdot d\n\\]",
+                "$$\na \\cdot b\nc \\cdot d\n$$",
+            ),
+            (
+                "\\[\n\na \\cdot b\n\n\\]",
+                "$$\na \\cdot b\n$$",
+            ),
+        ],
+    )
+    def test_display_math_blank_lines_collapsed(self, source, expected):
+        """Eine Leerzeile beendet GFM-Block-Math: Sie wird zu einem Umbruch."""
+        assert convert_deepseek_latex_syntax(source) == expected
+
+    def test_multiline_display_keeps_single_newlines(self):
+        """Bestandsverhalten: ``\\[\\n…\\n\\]`` bleibt mehrzeilig (nur Leerzeilen fliegen)."""
+        source = "\\[\\nE = \\\\frac{1}{2} C U^2\\n\\]"
+        assert convert_deepseek_latex_syntax(source) == "$$\\nE = \\\\frac{1}{2} C U^2\\n$$"
+
+    def test_padded_dollar_math_with_leading_latex_command(self):
+        """``$ \\frac{a}{b} $`` ist eine Formel: Das Kommando steht am Anfang."""
+        assert convert_deepseek_latex_syntax(r"$ \frac{a}{b} $") == r"$\frac{a}{b}$"
+        assert convert_deepseek_latex_syntax(r"$ \sum_{i=1}^{n} i $") == r"$\sum_{i=1}^{n} i$"
+        assert has_latex(r"$ \frac{a}{b} $") is True
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            r"$ x \cdot y $",                    # Formel-Text, aber wie Prosa lesbar
+            r"Kosten $ 5 (\circa) und $ 10.",    # Kommando mitten im Text zwischen Preisen
+            r"Zins: $ 100 bei \alpha = 2\% und $ 200",
+        ],
+    )
+    def test_padded_dollar_without_leading_command_stays_text(self, source):
+        """Die Ausnahme ist bewusst eng: nur ein *führendes* Kommando zählt.
+
+        Alles andere ist von Prosa mit Preisen nicht unterscheidbar — lieber
+        unangetastet lassen (Bestandsverhalten) als Prosa als Formel senden.
+        """
+        assert has_latex(source) is False
+        assert convert_deepseek_latex_syntax(source) == source
+
+    def test_dollar_math_with_line_break_is_repaired(self):
+        assert convert_deepseek_latex_syntax("$a \\cdot\nb$") == r"$a \cdot b$"
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "Der Preis ist $ 20 und $ 30.",
+            "Kosten $100 und $200.",
+            "Der Stift kostet $ 20 (netto) und $ 30 (brutto).",
+            "Preis: $ 5 , Rabatt $ 1 .",
+        ],
+    )
+    def test_prices_stay_prices(self, source):
+        """B-4 bleibt gewahrt: Preise werden nie zur Formel."""
+        assert has_latex(source) is False
+        assert convert_deepseek_latex_syntax(source) == source
+        assert markdown_to_rich_markdown(source) == source
+
+    def test_padded_dollar_exception_is_length_bounded(self):
+        """Ein Kommando in weiter Ferne darf zwei ``$`` nicht verschmelzen."""
+        source = r"$ \frac{a}{b}" + "x" * (_PADDED_MATH_MAX_CHARS + 10) + " $ 30"
+        assert has_latex(source) is False
+
+    def test_display_block_with_blank_line_is_no_math(self):
+        """GFM-Regel (Pandoc): Eine Leerzeile zwischen ``$$`` beendet den Block."""
+        assert has_latex("$$\na\n\nb\n$$") is False
+
+    def test_empty_delimiters_stay_text(self):
+        """``\\(\\\\)``/``\\[\\]`` erzeugen keine leere Formel (»$$«)."""
+        for source in (r"leer \(\) und \[] hier", "$$$$"):
+            assert has_latex(source) is False
+            assert convert_deepseek_latex_syntax(source) == source
+
+    def test_backslash_escape_still_no_delimiter(self):
+        source = r"Zeile \\ (kein Delimiter) und \(x\)"
+        assert convert_deepseek_latex_syntax(source) == r"Zeile \\ (kein Delimiter) und $x$"
+
+    def test_deepseek_answer_end_to_end_has_no_visible_source(self):
+        """Realistische DeepSeek-Antwort: nichts davon darf wörtlich ankommen."""
+        source = (
+            "Die Kraft lautet:\n\n"
+            "\\[\nF = m \\cdot a\n\\]\n\n"
+            "Mit \\( m = 2 \\) und \\( a = 3 \\) folgt:\n\n"
+            "| Größe | Wert |\n|---|---|\n| Kraft | \\( 2 \\cdot 3 \\) |\n\n"
+            "Also \\( F = 6 \\) Newton.\n"
+        )
+        messages = build_messages(source, 123)
+        assert len(messages) == 1
+        assert messages[0].kind == "rich"
+        markdown = messages[0].payload["rich_message"]["markdown"]
+        assert r"\(" not in markdown and r"\)" not in markdown
+        assert "$$\nF = m \\cdot a\n$$" in markdown
+        assert "$m = 2$" in markdown and "$a = 3$" in markdown
+        assert "| Kraft | $2 \\cdot 3$ |" in markdown
+        assert "$F = 6$" in markdown
+        # Jede Formel im Ergebnis ist nach den eigenen GFM-Regeln gültig —
+        # sonst würde Telegram sie als Text anzeigen (genau der gemeldete Bug).
+        assert [s.content for s in iter_math_spans(markdown)] == [
+            "\nF = m \\cdot a\n",
+            "m = 2",
+            "a = 3",
+            "2 \\cdot 3",
+            "F = 6",
+        ]
+
+    def test_padded_math_survives_chunking(self):
+        """Formeln mit Rand-Whitespace bleiben über Chunk-Grenzen intakt."""
+        source = " ".join(rf"Satz \( a_{{{i}}} \cdot b_{{{i}}} \) Ende." for i in range(1500))
+        messages = build_messages(source, "1")
+        texts = [m.payload["rich_message"]["markdown"] for m in messages]
+        assert len(texts) > 1
+        expected = [s.content for s in iter_math_spans(convert_deepseek_latex_syntax(source))]
+        produced = [s.content for s in iter_math_spans("".join(texts))]
+        assert produced == expected
+        assert len(produced) == 1500
+
+    def test_html_path_keeps_content_without_delimiters(self):
+        html = markdown_to_html(r"Energie \( E = m \cdot c^2 \) hier")
+        assert "E = m \\cdot c^2" in html
+        assert r"\(" not in html and r"\)" not in html
+
+
+class TestMathSpans:
+    """Der gemeinsame Scanner (Audit O-3) — eine Regelbasis für alle Pfade."""
+
+    def test_spans_have_delimiter_and_kind(self):
+        text = r"$a$ und $$b$$ und \(c\) und \[d\]"
+        spans = list(iter_math_spans(text))
+        assert [(s.delimiter, s.kind, s.content) for s in spans] == [
+            ("$", "inline_math", "a"),
+            ("$$", "display_math", "b"),
+            (r"\(", "inline_math", "c"),
+            (r"\[", "display_math", "d"),
+        ]
+        assert [text[s.start : s.end] for s in spans] == ["$a$", "$$b$$", r"\(c\)", r"\[d\]"]
+
+    def test_spans_skip_code_fences_on_demand(self):
+        text = "```\n$not math$\n```\n\n$x$"
+        assert [s.content for s in iter_math_spans(text)] == ["not math", "x"]
+        assert [s.content for s in iter_math_spans(text, skip_code_fences=True)] == ["x"]
+
+    def test_split_formulas_yields_text_and_math(self):
+        """Segmente enthalten den Formelinhalt *ohne* Delimiter (Bestand)."""
+        text = r"Text \( x \) und $y$ Ende"
+        segs = split_formulas(text)
+        assert [s.kind for s in segs] == ["text", "inline_math", "text", "inline_math", "text"]
+        assert [s.content for s in segs] == ["Text ", " x ", " und ", "y", " Ende"]
+        assert [s.kind for s in segs] == [
+            "text",
+            "inline_math",
+            "text",
+            "inline_math",
+            "text",
+        ]
 
 
 # ---------------------------------------------------------------------------
