@@ -16,17 +16,26 @@ Eingabe (Markdown mit LaTeX ``$...$``/``$$...$$`` und Pipe-Tabellen)
        |-- Rich-Pfad  (LaTeX/Tabellen vorhanden)
        |     -> markdown_to_rich_markdown()   GFM + nativem LaTeX
        |        `-> convert_deepseek_latex_syntax()  \(..\)->$..$, \[..\]->$$..$$
-       |     -> chunk_text(..., 32768)        Aufteilung am Blocklimit
+       |            (Inhalt normalisiert: $ x $ -> $x$, Leerzeilen im Block raus)
+       |     -> _safe_chunk(..., 32768)       Aufteilung an Formel-/Blockgrenzen
        |     -> payload "sendRichMessage"
        `-- Regular-Pfad (reiner Text mit Formatierung)
              -> markdown_to_html()            Telegram-HTML (fett/kursiv/...)
              -> chunk_text(..., 4096)         Aufteilung am 4096-Limit
              -> payload "sendMessage"
 
-Unterstützte LaTeX-Delimiter in der Eingabe:
+`iter_math_spans()` ist der gemeinsame Formel-Scanner für alle vier Pfade
+(Erkennung/Routing, Konvertierung, Schutz im HTML-Pfad, Chunk-Sicherheit) —
+Audit O-3: vorher liefen drei leicht divergierende Zeichen-Schleifen parallel.
+
+Unterstützte LaTeX-Delimiter in der Eingabe (Details: :func:`iter_math_spans`):
 - ``$...$`` / ``$$...$$``  (klassisch, von Telegram nativ gerendert)
 - ``\(...\)`` / ``\[...\]`` (DeepSeek/Gemini) -- werden vor dem Versand in die
   Dollar-Syntax übersetzt, weil Telegram sie sonst als Text ausgeben würde.
+  Rand-Whitespace und Zeilenumbrüche werden dabei entfernt bzw. zusammengezogen:
+  ``\( x \)`` -> ``$x$``. Ohne diese Normalisierung entsteht ``$ x $``, das
+  Telegram/GFM nicht als Formel wertet -- die Formel steht dann wörtlich
+  (sichtbares ``\cdot`` samt ``$``) in der Nachricht.
 
 Wichtige Telegram-Fakten (Bot API 10.1+, Stand 2026):
 - ``sendMessage`` limitiert den Text auf **4096** Zeichen und unterstützt
@@ -42,7 +51,7 @@ from __future__ import annotations
 import base64
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -117,15 +126,183 @@ def validate_latex_braces(formula: str) -> bool:
     return depth == 0
 
 
+# ---------------------------------------------------------------------------
+# Formel-Scanner: EIN Durchlauf für Erkennung, Konvertierung, Schutz, Chunking
+# ---------------------------------------------------------------------------
+# Früher liefen vier handgeschriebene Zeichen-Schleifen nebeneinander
+# (`split_formulas`, `convert_deepseek_latex_syntax`, `_protect_math` und
+# `_atomic_ranges`) und waren leicht divergent — genau daraus entstand der Bug
+# „`\( x \)`“: Die Konvertierung schrieb `$ x $` (Leerzeichen am Rand), was
+# Telegram/GFM nicht als Formel rendert, während `\(x\)` funktionierte. Seit
+# v2.10.0 gibt es nur noch `iter_math_spans()`; alle Pfade teilen dieselben
+# Regeln (Audit O-3: ein Scanner statt vier).
+#
+# Regeln (Pandoc/GFM — Telegram übernimmt sie für Rich Markdown):
+# * ``$…$``   — kein Whitespace direkt hinter dem öffnenden bzw. vor dem
+#   schließenden ``$``, keine Ziffer direkt danach (sonst gälten
+#   ``$20,000 und $30,000`` als Formel), keine Leerzeile im Inhalt.
+# * ``$$…$$`` — die Delimiter dürfen durch Whitespace vom Inhalt getrennt sein,
+#   eine Leerzeile beendet den Block (der Inhalt darf also keine enthalten).
+# * ``\(…\)`` / ``\[…\]`` — Backslash-Delimiter von DeepSeek/Gemini. Sie sind
+#   eindeutig (mit Preisen nicht verwechselbar) und werden deshalb großzügig
+#   erkannt: Rand-Whitespace und Zeilenumbrüche sind erlaubt und werden bei der
+#   Übersetzung in die Dollar-Syntax normalisiert, damit Telegram rendert.
+# * Ein ``$ … $`` mit Rand-Whitespace, dessen Inhalt **mit** einem
+#   Backslash-Kommando beginnt (``$ \frac{a}{b} $``), ist ebenfalls eine
+#   Formel — zwischen zwei Preisen steht dort nie ein Kommando.
+
+#: Backslash-Kommando (``\cdot``, ``\frac``, …) — eindeutiges LaTeX-Signal.
+_LATEX_COMMAND_RE = re.compile(r"\\[A-Za-z]{2,}")
+
+#: Obergrenze für die Erkennung rand-behafteter ``$ … $``-Formeln. Verhindert,
+#: dass zwei weit auseinanderliegende ``$`` (z. B. zwei Preise über mehrere
+#: Absätze) wegen eines zufälligen Backslashs im Text zu einer „Formel“
+#: verschmelzen.
+_PADDED_MATH_MAX_CHARS = 400
+
+
+@dataclass(frozen=True)
+class MathSpan:
+    """Ein gefundener Formelbereich — Delimiter inklusive (``text[start:end]``).
+
+    ``delimiter`` ist einer der vier erkannten Delimiter (``"$$"``, ``r"\\["``,
+    ``r"\\("``, ``"$"``), ``kind`` die daraus folgende Formelart
+    (``"display_math"``/``"inline_math"``). ``content`` ist der Rohtext
+    zwischen den Delimitern — 1:1, ohne Trim und ohne Normalisierung.
+    """
+
+    start: int
+    end: int
+    kind: str  # "inline_math" | "display_math"
+    delimiter: str
+    content: str
+
+
+def _math_bounds_ok(text: str, start: int, end: int) -> bool:
+    """Telegram/GFM-Regeln für Inline-Math: nicht leer, keine Leerzeichen an
+    den Rändern, kein Leerabsatz innen, keine Ziffer direkt nach dem ``$``."""
+    if end <= start:
+        return False
+    inner = text[start:end]
+    if inner[:1].isspace() or inner[-1:].isspace() or _has_blank_line(inner):
+        return False
+    following = text[end + 1 : end + 2]
+    return not following.isdigit()
+
+
+def _has_blank_line(inner: str) -> bool:
+    """True, wenn ``inner`` eine Leerzeile enthält (beendet GFM-Block-Math)."""
+    return re.search(r"\n[ \t]*\n", inner) is not None
+
+
+def _dollar_inline_ok(text: str, start: int, end: int) -> bool:
+    """True, wenn ``text[start:end]`` zwischen zwei ``$`` Inline-Math ist.
+
+    Maßstab sind die GFM-/Pandoc-Randregeln (:func:`_math_bounds_ok`, Audit
+    B-4). Zusätzlich gilt ein rand-behafteter Bereich als Formel, wenn er
+    **mit** einem Backslash-Kommando beginnt (``$ \\frac{a}{b} $``,
+    ``$ \\sum_{i=1}^{n} i $``) — eine so geschriebene Formel stammt aus einem
+    Formelkontext, während zwischen zwei Preisen (``$ 5 und $ 10``) nie ein
+    Kommando am Anfang steht. Bewusst eng gefasst: ``$ 5 (\\circa) und $ 10``
+    und ``$ x \\cdot y $`` bleiben Text, weil beide nicht von Prosa zu
+    unterscheiden sind (dokumentiert in ``docs/FORMATTING.md`` §5).
+    """
+    if _math_bounds_ok(text, start, end):
+        return True
+    inner = text[start:end]
+    if not (inner[:1].isspace() or inner[-1:].isspace()):
+        return False
+    stripped = inner.strip()
+    if not stripped or len(stripped) > _PADDED_MATH_MAX_CHARS or _has_blank_line(stripped):
+        return False
+    return _LATEX_COMMAND_RE.match(stripped) is not None
+
+
+def _match_math_span(text: str, i: int) -> MathSpan | None:
+    """Erkennt an Position ``i`` einen Formelbeginn; sonst ``None``."""
+    # 1. $$…$$ (Display) — Inhalt nicht leer, keine Leerzeile.
+    if text.startswith("$$", i):
+        close = text.find("$$", i + 2)
+        if close == -1:
+            return None
+        inner = text[i + 2 : close]
+        if inner.strip() and not _has_blank_line(inner):
+            return MathSpan(i, close + 2, "display_math", "$$", inner)
+        return None
+
+    # 2. \[…\] (Display, DeepSeek/Gemini) — großzügig, wird normalisiert.
+    if text.startswith(r"\[", i):
+        close = text.find(r"\]", i + 2)
+        if close == -1:
+            return None
+        inner = text[i + 2 : close]
+        if inner.strip():
+            return MathSpan(i, close + 2, "display_math", r"\[", inner)
+        return None
+
+    # 3. \(…\) (Inline, DeepSeek/Gemini) — großzügig, wird normalisiert.
+    if text.startswith(r"\(", i):
+        close = text.find(r"\)", i + 2)
+        if close == -1:
+            return None
+        inner = text[i + 2 : close]
+        if inner.strip():
+            return MathSpan(i, close + 2, "inline_math", r"\(", inner)
+        return None
+
+    # 4. $…$ (Inline) — GFM-Randregeln plus Backslash-Ausnahme.
+    if text[i] == "$":
+        close = text.find("$", i + 1)
+        if (
+            close != -1
+            and (close == i + 1 or text[close - 1] != "$")
+            and _dollar_inline_ok(text, i + 1, close)
+        ):
+            return MathSpan(i, close + 1, "inline_math", "$", text[i + 1 : close])
+    return None
+
+
+def iter_math_spans(text: str, *, skip_code_fences: bool = False) -> Iterator[MathSpan]:
+    """Liefert alle Formelbereiche in ``text`` in Reihenfolge (Delimiter inkl.).
+
+    Der **einzige** Formel-Scanner des Moduls — Erkennung/Routing
+    (:func:`split_formulas`), Konvertierung
+    (:func:`convert_deepseek_latex_syntax`), Schutz im HTML-Pfad
+    (:func:`_protect_math`) und Chunk-Sicherheit (:func:`_atomic_ranges`)
+    nutzen ihn, damit die Pfade nicht auseinanderdriften (Audit O-3).
+
+    :param skip_code_fences: Überspringt ```` ``` ````-Codeblöcke. Nötig beim
+        Aufteilen von Rich-Markdown (dort stehen echte Fences); die übrigen
+        Aufrufer haben Code vorher durch Platzhalter ersetzt.
+    """
+    i, n = 0, len(text)
+    while i < n:
+        if skip_code_fences and text.startswith("```", i):
+            close = text.find("```", i + 3)
+            if close != -1:
+                i = close + 3
+                continue
+        if text.startswith("\\\\", i):
+            i += 2  # Doppelter Backslash (Zeilenumbruch/Escape), kein Delimiter
+            continue
+        span = _match_math_span(text, i)
+        if span is not None:
+            yield span
+            i = span.end
+            continue
+        i += 1
+
+
 def split_formulas(text: str) -> list[Segment]:
     """
-    Zerlegt ``text`` zeichenweise in Text- und Formel-Segmente.
+    Zerlegt ``text`` in Text- und Formel-Segmente.
 
-    Unterstützte Formel-Delimiter:
+    Unterstützte Formel-Delimiter (Details: :func:`iter_math_spans`):
+
     - ``$$...$$`` markiert eine Display-Formel (Block, zentriert).
     - ``$...$`` markiert eine Inline-Formel.
-    - ``\\[...\\]`` markiert eine Display-Formel (DeepSeek/Gemini-Syntax).
-    - ``\\(...\\)`` markiert eine Inline-Formel (DeepSeek/Gemini-Syntax).
+    - ``\\\\[...\\\\]`` markiert eine Display-Formel (DeepSeek/Gemini-Syntax).
+    - ``\\\\(...\\\\)`` markiert eine Inline-Formel (DeepSeek/Gemini-Syntax).
 
     Ein ``$`` gefolgt von Leerzeichen (z. B. Preisangabe ``$ 20``) wird
     NICHT als Formelbeginn gewertet.
@@ -134,93 +311,70 @@ def split_formulas(text: str) -> list[Segment]:
 
     Entscheidend ist, dass der Formelinhalt 1:1 (unverändert) übernommen
     wird -- inklusive verschachtelter Strukturen wie
-    ``\\binom{\\binom{70}{6}}{33}`` und Spezialsymbole wie ``\\alpha``,
-    ``\\sum``, ``\\int``. Es wird nur die Fundstelle der schließenden
+    ``\\\\binom{\\\\binom{70}{6}}{33}`` und Spezialsymbole wie ``\\\\alpha``,
+    ``\\\\sum``, ``\\\\int``. Es wird nur die Fundstelle der schließenden
     Marke gesucht, nie der Klammerinhalt per Regex gruppiert.
     """
     segments: list[Segment] = []
-    buf: list[str] = []
-    i, n = 0, len(text)
-
-    def flush_text() -> None:
-        """Sammelt gepufferten Text in ein Text-Segment."""
-        if buf:
-            segments.append(Segment("text", "".join(buf)))
-            buf.clear()
-
-    while i < n:
-        ch = text[i]
-
-        # Prüfe auf die verschiedenen Formel-Delimiter (Priorität wichtig!)
-        # 1. $$...$$ (Display)
-        if text[i:i+2] == "$$":
-            start = i + 2
-            end = text.find("$$", start)
-            if end != -1 and text[start:end].strip() and "\n\n" not in text[start:end]:
-                formula = text[start:end]
-                flush_text()
-                segments.append(Segment("display_math", formula))
-                i = end + 2
-                continue
-
-        # 2. \[...\] (Display, DeepSeek/Gemini)
-        if text[i:i+2] == r"\[":
-            start = i + 2
-            end = text.find(r"\]", start)
-            if end != -1:
-                formula = text[start:end]
-                flush_text()
-                segments.append(Segment("display_math", formula))
-                i = end + 2
-                continue
-
-        # 3. \(...\) (Inline, DeepSeek/Gemini)
-        if text[i:i+2] == r"\(":
-            start = i + 2
-            end = text.find(r"\)", start)
-            if end != -1:
-                formula = text[start:end]
-                flush_text()
-                segments.append(Segment("inline_math", formula))
-                i = end + 2
-                continue
-
-        # 4. $...$ (Inline)
-        if ch == "$":
-            # "$ " -> Preisangabe, kein Formelbeginn.
-            if i + 1 < n and text[i + 1].isspace():
-                buf.append(ch)
-                i += 1
-                continue
-
-            # Einzelnes $ suchen (nicht $$). GFM-Grenzregeln (Audit B-4):
-            # ""$100 und $200"" ist eine Preisangabe, keine Formel —
-            # schließendes $ darf nicht auf Leerzeichen treffen und nicht
-            # direkt vor einer Ziffer stehen.
-            start = i + 1
-            end = text.find("$", start)
-            if (
-                end != -1
-                and (end == start or text[end - 1] != "$")
-                and _math_bounds_ok(text, start, end)
-            ):
-                formula = text[start:end]
-                flush_text()
-                segments.append(Segment("inline_math", formula))
-                i = end + 1
-                continue
-
-        # Kein Delimiter -> normaler Text
-        buf.append(ch)
-        i += 1
-
-    flush_text()
+    last = 0
+    for span in iter_math_spans(text):
+        if span.start > last:
+            segments.append(Segment("text", text[last : span.start]))
+        segments.append(Segment(span.kind, span.content))
+        last = span.end
+    if last < len(text):
+        segments.append(Segment("text", text[last:]))
     return segments
 
 
 def has_latex(text: str) -> bool:
     """True, wenn ``text`` mindestens eine gültige ``$...$``/``$$...$$``-Formel enthält."""
     return any(seg.kind != "text" for seg in split_formulas(text))
+
+
+def _normalize_inline_math(content: str) -> str:
+    r"""
+    Normalisiert den Inhalt einer Inline-Formel für Telegram.
+
+    GFM verlangt ein Whitespace-freies Zeichen direkt hinter dem öffnenden und
+    direkt vor dem schließenden ``$``; außerdem darf eine Inline-Formel keine
+    Zeilenumbrüche enthalten. Beides erzeugen LLMs aber regelmäßig
+    (``\( x \)``, ``\(\n x \)\n``). Zeilenumbrüche innerhalb der Formel werden
+    zu Leerzeichen (LaTeX wertet sie im Mathe-Modus ohnehin so), der Rest wird
+    an den Rändern getrimmt.
+    """
+    return re.sub(r"\s*\n\s*", " ", content).strip()
+
+
+def _normalize_display_math(content: str) -> str:
+    r"""
+    Normalisiert den Inhalt einer Block-Formel für Telegram.
+
+    Whitespace um die Formel ist bei ``$$…$$`` erlaubt, eine Leerzeile beendet
+    den Block jedoch. LLM-Antworten trennen mehrere Zeilen einer Blockformel
+    gern mit Leerzeilen (``\[\n a\n\n b\n\]``); diese werden zu einem
+    Zeilenumbruch zusammengezogen, damit Telegram die Formel rendert.
+    """
+    return re.sub(r"[ \t]*\n[ \t]*\n[ \t\n]*", "\n", content)
+
+
+def _render_math_span(span: MathSpan) -> str:
+    """Gibt einen Formelbereich in Telegram-Syntax aus (``$…$`` / ``$$…$$``).
+
+    Bereits vorhandene Dollar-Formeln bleiben unangetastet, sofern sie gültig
+    sind. Backslash-Delimiter (DeepSeek/Gemini) werden übersetzt und ihr Inhalt
+    dabei normalisiert — sonst würde Telegram die Formel als Text anzeigen
+    (genau der Bug aus dem Issue: sichtbares ``\\cdot`` samt ``$``).
+    """
+    if span.delimiter == "$$":
+        return "$$" + span.content + "$$"
+    if span.delimiter == "$":
+        if not span.content[:1].isspace() and not span.content[-1:].isspace() and "\n" not in span.content:
+            return "$" + span.content + "$"  # gültige Formel: 1:1 übernehmen
+        return "$" + _normalize_inline_math(span.content) + "$"
+    if span.delimiter == r"\(":
+        return "$" + _normalize_inline_math(span.content) + "$"
+    return "$$" + _normalize_display_math(span.content) + "$$"
 
 
 def convert_deepseek_latex_syntax(text: str) -> str:
@@ -234,12 +388,22 @@ def convert_deepseek_latex_syntax(text: str) -> str:
     KI-Tools wie DeepSeek Chat und Gemini liefern jedoch die
     Backslash-Delimiter, die Telegram unverändert als Text ausgeben würde.
 
-    Der Formelinhalt wird **1:1** übernommen (inklusive Zeilenumbrüchen und
-    verschachtelter Strukturen wie ``\binom{\binom{70}{6}}{33}``).
+    Der Formelinhalt wird inhaltlich **1:1** übernommen (inklusive
+    verschachtelter Strukturen wie ``\binom{\binom{70}{6}}{33}``), aber für
+    Telegram normalisiert:
+
+    - Inline: Rand-Whitespace und Zeilenumbrüche werden entfernt
+      (``\( x \)`` -> ``$x$``). Ohne diesen Schritt entsteht ``$ x $``, das
+      Telegram weder als Formel noch als Code rendert — die Formel steht dann
+      wörtlich in der Nachricht (sichtbares ``\cdot``, sichtbares ``$``).
+    - Display: Leerzeilen im Block werden zu einem Zeilenumbruch
+      (``\[\n a\n\n b\n\]`` -> ``$$\na\n b\n$$``), weil eine Leerzeile den
+      GFM-Block beendet.
 
     Robustheit:
-    - Bereits vorhandene ``$...$``/``$$...$$``-Formeln werden übersprungen und
-      bleiben unangetastet -- gemischte Dokumente funktionieren dadurch.
+
+    - Bereits vorhandene gültige ``$...$``/``$$...$$``-Formeln bleiben
+      unangetastet -- gemischte Dokumente funktionieren dadurch.
     - Ein doppelter Backslash (``\\``, LaTeX-Zeilenumbruch bzw. escapter
       Backslash) wird nicht als Delimiter-Beginn fehlinterpretiert.
     - Unvollständige Delimiter ohne Gegenstück bleiben unverändert stehen,
@@ -249,59 +413,12 @@ def convert_deepseek_latex_syntax(text: str) -> str:
     Backslash-Klammern in Codeblöcken nicht umgeschrieben werden.
     """
     out: list[str] = []
-    i, n = 0, len(text)
-
-    while i < n:
-        pair = text[i : i + 2]
-
-        # 1. Bestehende $$...$$-Formel unverändert übernehmen.
-        if pair == "$$":
-            end = text.find("$$", i + 2)
-            if end != -1 and text[i + 2 : end].strip() and "\n\n" not in text[i + 2 : end]:
-                out.append(text[i : end + 2])
-                i = end + 2
-                continue
-
-        # 2. Bestehende $...$-Formel unverändert übernehmen — mit denselben
-        #    GFM-Grenzregeln wie split_formulas ("$ 20"/"$100 und $200" sind
-        #    Preise; Audit B-4), damit Routing und Konversion dieselben
-        #    Bereiche als Mathematik ansehen.
-        if text[i] == "$" and not (i + 1 < n and text[i + 1].isspace()):
-            end = text.find("$", i + 1)
-            if (
-                end != -1
-                and (end == i + 1 or text[end - 1] != "$")
-                and _math_bounds_ok(text, i + 1, end)
-            ):
-                out.append(text[i : end + 1])
-                i = end + 1
-                continue
-
-        # 3. Doppelter Backslash -> kein Delimiter (z. B. LaTeX-Zeilenumbruch).
-        if pair == "\\\\":
-            out.append(pair)
-            i += 2
-            continue
-
-        # 4. \[...\] -> $$...$$ (Display, DeepSeek/Gemini)
-        if pair == r"\[":
-            end = text.find(r"\]", i + 2)
-            if end != -1:
-                out.append("$$" + text[i + 2 : end] + "$$")
-                i = end + 2
-                continue
-
-        # 5. \(...\) -> $...$ (Inline, DeepSeek/Gemini)
-        if pair == r"\(":
-            end = text.find(r"\)", i + 2)
-            if end != -1:
-                out.append("$" + text[i + 2 : end] + "$")
-                i = end + 2
-                continue
-
-        out.append(text[i])
-        i += 1
-
+    last = 0
+    for span in iter_math_spans(text):
+        out.append(text[last : span.start])
+        out.append(_render_math_span(span))
+        last = span.end
+    out.append(text[last:])
     return "".join(out)
 
 
@@ -752,88 +869,26 @@ def markdown_to_html(text: str) -> str:
 
 
 def _protect_math(text: str, store: _PlaceholderStore) -> str:
-    """
+    r"""
     Ersetzt gültige LaTeX-Formeln durch Platzhalter.
 
-    Unterstützte Delimiter:
-    - ``$...$`` / ``$$...$$`` (klassisch)
-    - ``\\(...\\)`` / ``\\[...\\]`` (DeepSeek/Gemini-Syntax)
+    HTML (``parse_mode="HTML"``) kann keine Formeln rendern: Der Inhalt bleibt
+    als Text erhalten, nur die Delimiter fallen weg. Erkannt werden dieselben
+    Bereiche wie überall sonst (:func:`iter_math_spans`) — ``$...$``,
+    ``$$...$$``, ``\\(...\\)`` und ``\\[...\\]``. Formeln mit
+    unbalancierten geschweiften Klammern bleiben unangetastet (sie sind
+    vermutlich Fließtext und keine Formel).
     """
     out: list[str] = []
-    i, n = 0, len(text)
-
-    while i < n:
-        ch = text[i]
-
-        # 1. $$...$$ (Display)
-        if text[i:i+2] == "$$":
-            start = i + 2
-            end = text.find("$$", start)
-            if end != -1 and text[start:end].strip() and "\n\n" not in text[start:end]:
-                formula = text[start:end]
-                if validate_latex_braces(formula):
-                    out.append(store(_escape_html(formula)))
-                    i = end + 2
-                    continue
-                out.append(text[i])
-                i += 1
-                continue
-
-        # 2. \\[...\\] (Display, DeepSeek/Gemini)
-        if text[i:i+2] == r"\[":
-            start = i + 2
-            end = text.find(r"\]", start)
-            if end != -1:
-                formula = text[start:end]
-                if validate_latex_braces(formula):
-                    out.append(store(_escape_html(formula)))
-                    i = end + 2
-                    continue
-                out.append(text[i])
-                i += 1
-                continue
-
-        # 3. \\(...\\) (Inline, DeepSeek/Gemini)
-        if text[i:i+2] == r"\(":
-            start = i + 2
-            end = text.find(r"\)", start)
-            if end != -1:
-                formula = text[start:end]
-                if validate_latex_braces(formula):
-                    out.append(store(_escape_html(formula)))
-                    i = end + 2
-                    continue
-                out.append(text[i])
-                i += 1
-                continue
-
-        # 4. $...$ (Inline)
-        if ch == "$":
-            # "$ " -> Preisangabe, kein Formelbeginn.
-            if i + 1 < n and text[i + 1].isspace():
-                out.append(ch)
-                i += 1
-                continue
-
-            start = i + 1
-            end = text.find("$", start)
-            if (
-                end != -1
-                and (end == start or text[end - 1] != "$")
-                and _math_bounds_ok(text, start, end)  # GFM-Grenzregeln (B-4)
-            ):
-                formula = text[start:end]
-                if validate_latex_braces(formula):
-                    out.append(store(_escape_html(formula)))
-                    i = end + 1
-                    continue
-                out.append(ch)
-                i += 1
-                continue
-
-        out.append(ch)
-        i += 1
-
+    last = 0
+    for span in iter_math_spans(text):
+        out.append(text[last : span.start])
+        if validate_latex_braces(span.content):
+            out.append(store(_escape_html(span.content)))
+        else:
+            out.append(text[span.start : span.end])
+        last = span.end
+    out.append(text[last:])
     return "".join(out)
 
 
@@ -1047,23 +1102,15 @@ def _rebalance_html_chunks(chunks: list[str]) -> list[str]:
     return result
 
 
-def _math_bounds_ok(text: str, start: int, end: int) -> bool:
-    """Telegram/GFM-Regeln für Inline-Math: nicht leer, keine Leerzeichen an
-    den Rändern, kein Leerabsatz innen, keine Ziffer direkt nach dem ``$``."""
-    if end <= start:
-        return False
-    inner = text[start:end]
-    if inner[:1].isspace() or inner[-1:].isspace() or "\n\n" in inner:
-        return False
-    following = text[end + 1 : end + 2]
-    return not following.isdigit()
-
-
 def _atomic_ranges(text: str) -> list[tuple[int, int]]:
-    """Indivisble Bereiche des Rich-Textes: Fenced Code, ``$$…$$``, ``$…$``.
+    """Indivisible Bereiche des Rich-Textes: Fenced Code und Formeln
+    (``$$\u2026$$``, ``$\u2026$`` — und defensiv die Backslash-Delimiter).
 
     Liefert sortierte, nicht überlappende ``(start, end)``-Paare. Ein Chunk-
-    schnitt darf nie *in* einem dieser Bereiche landen (B-1).
+    schnitt darf nie *in* einem dieser Bereiche landen (B-1). Der Formel-Teil
+    kommt aus dem gemeinsamen Scanner (:func:`iter_math_spans`, Audit O-3),
+    damit „ist Formel“ überall dieselbe Bedeutung hat — inklusive der
+    Normalisierung, die :func:`convert_deepseek_latex_syntax` davor anwendet.
     """
     ranges: list[tuple[int, int]] = []
     i, n = 0, len(text)
@@ -1074,22 +1121,14 @@ def _atomic_ranges(text: str) -> list[tuple[int, int]]:
                 ranges.append((i, close + 3))
                 i = close + 3
                 continue
-        if text.startswith("$$", i):
-            close = text.find("$$", i + 2)
-            if close != -1 and text[i + 2 : close].strip():
-                ranges.append((i, close + 2))
-                i = close + 2
-                continue
-        if text[i] == "$" and not (i + 1 < n and text[i + 1].isspace()):
-            close = text.find("$", i + 1)
-            if (
-                close != -1
-                and (close == i + 1 or text[close - 1] != "$")
-                and _math_bounds_ok(text, i + 1, close)
-            ):
-                ranges.append((i, close + 1))
-                i = close + 1
-                continue
+        if text.startswith("\\\\", i):
+            i += 2  # Doppelter Backslash: kein Delimiter-Beginn
+            continue
+        span = _match_math_span(text, i)
+        if span is not None:
+            ranges.append((span.start, span.end))
+            i = span.end
+            continue
         i += 1
     return ranges
 

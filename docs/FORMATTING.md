@@ -42,7 +42,9 @@ liegen bei LaTeX-Delimitern, Tabellen und Zitaten/Links:
 
 Konsequenz für den Formatter: Er muss die **Backslash-Delimiter** von
 DeepSeek/Gemini in die Telegram-Dollar-Syntax übersetzen (seit v1.x
-implementiert, `convert_deepseek_latex_syntax`) und seit v2.7.0 die
+implementiert, `convert_deepseek_latex_syntax`) — seit v2.10.0 inklusive
+Normalisierung der Rand-Whitespaces, die diese Modelle typischerweise setzen
+(siehe §5) und seit v2.7.0 die
 **Redirect-Wrapper der Such-KIs** auf ihre Ziel-URL entpacken.
 
 ## 3. Gegenüberstellung: Feature × Telegram × LLM × Status
@@ -63,7 +65,7 @@ Legende: ✅ umgesetzt · 🟡 teilweise/Fallback · ❌ nicht umgesetzt
 | Listen | keine Entität (Text) | `- x`, `1. x` | ✅ | Einrückung bleibt erhalten; nummeriert → Bullet |
 | Blockquote | `<blockquote>`; MDV2 `>x` | `> x` | ✅ | Regular: zusammenhängende Zeilen → `<blockquote>`; Rich: natives GFM |
 | Tabellen | **nur Rich** (GFM) | Pipe-Tabellen | ✅ | Rich: normalisiertes GFM; Regular: Fallback als `Header: Wert`-Zeilen |
-| LaTeX | **nur Rich** (`$…$`/`$$…$$`) | `$`, `$$`, `\(…\)`, `\[…\]` | ✅ | Backslash-Delimiter → Dollar-Syntax; Formeln bleiben 1:1 intakt |
+| LaTeX | **nur Rich** (`$…$`/`$$…$$`) | `$`, `$$`, `\(…\)`, `\[…\]` | ✅ | Backslash-Delimiter → Dollar-Syntax; Inhalt wird normalisiert (Rand-Whitespace/Zeilenumbrüche — §5) |
 | **Spoiler** | `<tg-spoiler>`; MDV2 `\|\|x\|\|` | keine gängige LLM-Syntax | ❌ | Telegram-exklusiv; nachrüstbar (Markdown-Eingang `??x??` o. Ä. wäre Konventionssache) |
 | **Aufklappbares Blockquote** | `<blockquote expandable>`; MDV2 `**>…\|\|` | keine LLM-Syntax | ❌ | Telegram-exklusiv; sinnvoll für lange Zitate |
 | **Details/Summary** (aufklappbar) | `<details>/<summary>` (HTML-Modus); Rich-Block `details` | keine LLM-Syntax | ❌ | Telegram-exklusiv |
@@ -106,7 +108,60 @@ Garantien:
 **Offline-Grenze:** Kurz-URL-Dienste (t.co, bit.ly, goo.gl, tinyurl, …)
 können ohne Netzwerkaufruf nicht aufgelöst werden und bleiben 1:1 stehen.
 
-## 5. Was kann man noch verbessern? (Ausbau-Kandidaten)
+## 5. LaTeX-Normalisierung (v2.10.0)
+
+Telegram rendert Rich-Markdown-Formeln nach den **Pandoc/GFM-Randregeln**:
+
+| Syntax | Randregel | Leerzeile im Inhalt |
+|---|---|---|
+| `$…$` (Inline) | direkt hinter dem öffnenden und direkt vor dem schließenden `$` muss ein Nicht-Whitespace-Zeichen stehen; auf das schließende `$` darf keine Ziffer folgen (sonst gälten `$20,000 und $30,000` als Formel) | beendet die Formel |
+| `$$…$$` (Block) | die Delimiter dürfen durch Whitespace vom Inhalt getrennt sein | beendet den Block |
+
+Quelle der Regeln: Pandoc (`tex_math_dollars`), das GFM/GitLab für `$`-Mathe
+übernommen haben; Telegram nennt Rich Markdown „GFM-kompatibel". Verstößt eine
+Formel dagegen, rendert der Client **nichts** — der Quelltext steht wörtlich in
+der Nachricht (sichtbares `\cdot`, sichtbares `$`). Genau das passierte bei
+LLM-Ausgaben mit Leerzeichen in den Delimitern.
+
+Der Formatter normalisiert deshalb beim Übersetzen in die Dollar-Syntax
+(`utils.py::convert_deepseek_latex_syntax` → `_normalize_inline_math` /
+`_normalize_display_math`):
+
+| Eingabe (LLM) | Ausgabe (Telegram) | Warum |
+|---|---|---|
+| `\( x \)`, `\(a \cdot b \)` | `$x$`, `$a \cdot b$` | Rand-Whitespace wird getrimmt |
+| `\(\na \cdot b\n\)` | `$a \cdot b$` | Inline-Formeln sind einzeilig (Umbruch → Leerzeichen) |
+| `\[\n a\n\n b \n\]` | `$$\n a\n b\n$$` | Leerzeile würde den Block beenden |
+| `\[\n a\n b \n\]` | `$$\n a\n b \n$$` | einzelne Umbrüche bleiben erhalten |
+| `$ \frac{a}{b} $` | `$\frac{a}{b}$` | Dollar-Delimiter mit Rand-Whitespace, aber **führendem** LaTeX-Kommando |
+| `$a \cdot\nb$` | `$a \cdot b$` | Umbruch innerhalb der Delimiter |
+| `$ x $` ohne Backslash | unverändert Text | Preis-/Prosa-Schutz (B-4) |
+
+Grenzen (bewusst, mit Begründung im Peer-Review):
+
+- **Preise bleiben Preise:** Ohne **führendes** Backslash-Kommando wird ein
+  `$ … $` mit Rand-Whitespace nicht als Formel gelesen (`$ 20 und $ 30`,
+  `$ 5 (\circa) und $ 10`). Die Regel ist bewusst eng: `$ x \cdot y $`
+  (Kommando in der Mitte) bleibt ebenfalls stehen, weil es sich nicht sicher
+  von Prosa unterscheiden lässt — ein Fehlalarm würde Prosa als Formel
+  rendern. Ein als Formel erkannter Bereich muss zusätzlich ≤ 400 Zeichen lang
+  sein, damit ein Kommando in weiter Ferne nicht zwei `$` verschmilzt.
+- **Ziffer direkt hinter dem Schließer** (`\(x\)2` → `$a$2`) ist nach GFM keine
+  Formel; eine Reparatur ohne Textänderung gibt es nicht (Optionen wären ein
+  unsichtbares Zeichen oder ein `<tg-math>`-Island — beides bewusst nicht).
+- **Doppelte Backslashes** (`\\(x\\)`, z. B. aus rohen JSON-Antworten) gelten
+  weiterhin als Escape (LaTeX-Zeilenumbruch) und werden nicht als Delimiter
+  gelesen.
+- **`$$a\n\nb$$` in Dollar-Syntax** bleibt Text — die GFM-Regel („Leerzeile
+  beendet den Block") gilt hier, nur die Backslash-Delimiter der LLMs werden
+  verlustarm repariert.
+
+Alle vier Verarbeitungspfade (Erkennung/Routing über `has_latex`,
+Konvertierung, Schutz im HTML-Pfad, Chunk-Sicherheit) nutzen denselben Scanner
+`iter_math_spans()` (Audit O-3), sodass die Regeln nicht mehr auseinanderlaufen
+können.
+
+## 6. Was kann man noch verbessern? (Ausbau-Kandidaten)
 
 Nach Priorität für den typischen Anwendungsfall „LLM-Antwort → Telegram“:
 

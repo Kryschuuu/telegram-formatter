@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.9.0-blue)
+![Version](https://img.shields.io/badge/version-2.10.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -14,11 +14,14 @@ Nachrichten.
 - **LaTeX-Konvertierung** — Unterstützt mehrere Delimiter-Syntaxe:
   - Klassisch: `$…$` (Inline) und `$$…$$` (Display)
   - DeepSeek/Gemini: `\(…\)` und `\[…\]` — werden automatisch in die
-    Telegram-Syntax `$…$`/`$$…$$` umgewandelt
-  
+    Telegram-Syntax `$…$`/`$$…$$` umgewandelt und dabei normalisiert
+    (Rand-Leerzeichen, Umbrüche, Leerzeilen in Block-Formeln; seit v2.10.0)
+
   Verschachtelte Strukturen wie `$\binom{\binom{70}{6}}{33}$` und
   Spezialsymbole (`\sum`, `\int`, `\alpha`, …) bleiben intakt. Kein
-  Zerschneiden durch naive Regex.
+  Zerschneiden durch naive Regex. Preise (`$ 20 und $ 30`) bleiben Text —
+  die Unterscheidung Formel/Preis folgt den GFM-Randregeln
+  ([docs/FORMATTING.md §5](docs/FORMATTING.md)).
 - **Telegram-Formatierung** — Fett `**x**`, Kursiv `*x*`/`_x_`,
   Unterstreichen `__x__`, Durchgestrichen `~~x~~`, Inline-Code `` `x` ``,
   Codeblöcke, Links, Überschriften, Listen und Blockquotes. Vollständige
@@ -259,8 +262,22 @@ $$
 ```
 
 Beide Syntaxformen (`$...$`/`$$...$$` und `\(...\)`/`\[...\]`) werden erkannt
-und als Rich-Message versendet. Der Formelinhalt bleibt dabei unverändert;
-Formeln in Code-Blöcken werden nicht angefasst.
+und als Rich-Message versendet. Formeln in Code-Blöcken werden nicht angefasst.
+
+Dabei wird der Inhalt von der LLM-Schreibweise auf das gebracht, was Telegram
+tatsächlich rendert (seit v2.10.0) — ohne diesen Schritt bleibt die Formel
+wörtlich sichtbar (samt `\cdot` und `$`):
+
+```markdown
+\( x \)                  →  $x$              (Rand-Leerzeichen entfernt)
+\(\n a \cdot b\n\)          →  $a \cdot b$      (Inline-Formel wird einzeilig)
+\[\n a\n\n b\n\]            →  $$\n a\n b\n$$     (Leerzeile beendet sonst den Block)
+$ \frac{a}{b} $         →  $\frac{a}{b}$   (führendes Backslash-Kommando = Formel)
+```
+
+Formeln in Code-Blöcken bleiben unangetastet, und Preisangaben
+(`$ 20 und $ 30`, `$100 und $200`) werden nicht als Formel geroutet.
+Regeln, Grenzen und Begründungen: [docs/FORMATTING.md §5](docs/FORMATTING.md).
 
 ### Als Bibliothek
 
@@ -462,6 +479,6 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.9.0** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.10.0** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).

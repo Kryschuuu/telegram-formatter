@@ -53,7 +53,7 @@ darin ist ein eigenständiger Sub-Layer für das dezentrale BYOB-Modell.
 | Modul | Verantwortung |
 |---|---|
 | `telegram_formatter/__init__.py` | Fassade: `__version__`, Re-Exports (`build_messages`, `send_message`) |
-| `telegram_formatter/utils.py` | Reine, I/O-freie Konvertierungs- und Aufteilungslogik. Enthält `normalize_text`, `split_formulas`, `validate_latex_braces`, `parse_pipe_table`, `markdown_to_html`, `markdown_to_rich_markdown`, `build_messages`, `chunk_text` sowie seit v2.7.0 `unwrap_redirect_url`/`_normalize_links` (Redirect-URLs → Ziel-URL, Link-Artefakt-Glättung; Regelwerk und Vergleich: [FORMATTING.md](FORMATTING.md)). |
+| `telegram_formatter/utils.py` | Reine, I/O-freie Konvertierungs- und Aufteilungslogik. Enthält `normalize_text`, `iter_math_spans`/`MathSpan` (der **einzige** Formel-Scanner: `split_formulas`, `convert_deepseek_latex_syntax`, `_protect_math` und `_atomic_ranges` sind dünne Aufrufer — seit v2.10.0, Audit O-3), `validate_latex_braces`, `parse_pipe_table`, `markdown_to_html`, `markdown_to_rich_markdown`, `build_messages`, `chunk_text` sowie seit v2.7.0 `unwrap_redirect_url`/`_normalize_links` (Redirect-URLs → Ziel-URL, Link-Artefakt-Glättung; Regelwerk und Vergleich: [FORMATTING.md](FORMATTING.md)). |
 | `telegram_formatter/sender.py` | Versand einzelner `TelegramMessage`-Objekte via HTTP (`sendMessage`/`sendRichMessage`). Lazy-Import von `requests`. |
 | `telegram_formatter/cli.py` | Kommandozeilen-Einstieg (Datei/STDIN → Payloads anzeigen oder senden). |
 | `telegram_formatter/app.py` | Flask-Weboberfläche mit Editor, Live-Vorschau und den Routen `/api/convert`, `/api/send` (geteilter Bot, gepinnter Chat; aus dem Browser nur mit `TELEGRAM_FORMATTER_SHARED_WEB_SEND` + `confirm_public`) sowie `/api/byob/*` (eigene Bot-Sessions: `session`, `discover`, `send`, `status`, `close` — botkit-Betriebsmodus B, seit v2.2.0). Hält außerdem die ENV-Konfiguration der Instanz (`_env_flag`/`_env_int` mit lautem Fallback) und seit v2.9.0 die Offenlegung des geteilten Ziel-Kanals (`normalize_public_chat_url`, `_shared_channel` — eine Quelle für Template, `app.js` und das `via`-Feld von `/api/send`). Templates liegen in `telegram_formatter/templates/`. |
@@ -73,7 +73,12 @@ Parameter ein. `utils.py` importiert weder `flask` noch `requests` noch
 2. **Pfadentscheidung** (`needs_rich_message`): Enthält der Text eine gültige
    `$…$`/`$$…$$`-Formel (`has_latex`) oder eine Pipe-Tabelle (`has_table`)?
    - **Ja → Rich-Pfad:** `markdown_to_rich_markdown` (GFM + nativem LaTeX,
-     `__x__` → `<u>x</u>`, Tabellen normalisiert) → `chunk_text(…, 32768)`
+     `__x__` → `<u>x</u>`, Tabellen normalisiert). Darin übersetzt
+     `convert_deepseek_latex_syntax` die Backslash-Delimiter von
+     DeepSeek/Gemini in die Telegram-Syntax und **normalisiert den Inhalt**
+     (Rand-Whitespace raus, Zeilenumbrüche in Inline-Formeln zu Leerzeichen,
+     Leerzeilen im Block zu einem Umbruch) — ohne das rendert Telegram die
+     Formel nicht und zeigt den Quelltext (v2.10.0) → `_safe_chunk(…, 32768)`
      → Payload `rich_message.markdown`.
    - **Nein → Regular-Pfad:** `markdown_to_html` (Telegram-HTML, mit
      Platzhalter-Schutz für Code/Formeln und vollständigem Escaping) →
@@ -90,6 +95,9 @@ Parameter ein. `utils.py` importiert weder `flask` noch `requests` noch
 ## 4. Zentrale Datenstrukturen
 
 - `Segment(kind, content)` — `"text" | "inline_math" | "display_math"`.
+- `MathSpan(start, end, kind, delimiter, content)` — gefundener Formelbereich
+  inklusive Delimiter, wie ihn `iter_math_spans()` liefert (`delimiter` ist
+  `"$"`, `"$$"`, `r"\("` oder `r"\["`).
 - `TelegramMessage(kind, payload)` — `"rich" | "regular"` plus API-Payload.
 - `_PlaceholderStore` — schützt Code/Formeln vor Regex-Ersetzungen über
   NUL-basierte Marker.
@@ -144,7 +152,10 @@ Entwicklung: `pytest` (siehe `requirements-dev.txt`).
 ## 7. Teststrategie
 
 - `tests/test_utils.py` — Konvertierung, LaTeX-Erkennung (inkl. verschachtelte
-  `\binom`), Tabellen, Splitting (4096/32768, Absatz-/Wort-/Hard-Splits).
+  `\binom`), Formel-Normalisierung (`TestMathNormalization`: gepolsterte
+  `\( x \)`, Umbruch-/Leerzeilen-Fälle, Preis-Negativfälle) und der
+  Scanner-Vertrag (`TestMathSpans`), Tabellen, Splitting (4096/32768,
+  Absatz-/Wort-/Hard-Splits).
 - `tests/test_sender.py` — Versand mit gemocktem `requests` (Methodenwahl,
   Fehlerpfade).
 - `tests/test_app.py` — Flask-Routen über Testclient (geteilter Bot,
