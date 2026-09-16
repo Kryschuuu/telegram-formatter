@@ -4,6 +4,36 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.11.1] - 2026-09-16
+
+Patch-Release aus dem Code-Review v2.11.1 (Peer-Review-Bericht:
+`peer-review/2026-09_CODE-REVIEW-V2.11.1.md`): 15 Befunde behoben, keine
+API-Änderung, keine Migration nötig.
+
+### Fixed
+- **UTF-16-Längenmaß beim Splitting:** Telegram zählt Textlimits (4096/32768) in UTF-16-Code-Units — Emoji und andere Astral-Zeichen kosten zwei. Die Aufteilung maß in Codepoints (`len()`), sodass Emoji-reiche Nachrichten fälschlich als passend gechunkt und von Telegram mit 400 abgewiesen wurden (Reproduktion: 4000 × 🚀 ergab zwei Chunks, ersterer mit 7744 Units). Alle Limit-Prüfungen (`_group`, `chunk_text`, `_safe_chunk`, `_split_guarded_unit`) messen jetzt mit `_telegram_len()`; harte Schnitte laufen über `_hard_split()` (O(n), zerreißt nie einen Codepoint).
+- **Ungeschlossene Code-Fences:** Ein ```-Block ohne Closing-Fence fiel aus dem Atomic-Schutz — `$…$` darin galt als Formel, und überlange Reste erzeugten Über-Limit-Chunks. Wie in GFM läuft ein ungeschlossener Fence jetzt bis Dokumentende (`_atomic_ranges`, `iter_math_spans(skip_code_fences=True)`); `_split_guarded_unit` teilt solche Reste in eigenständige, sauber geschlossene Blöcke mit erhaltener Sprache (gemeinsamer Kern `_split_fence_block`).
+- **`sender.send_message` mit eigenem `api_base`:** Die URL enthielt das Token-Segment `/bot<token>/` nur für die offizielle API — mit gesetztem `api_base` (lokaler Bot-API-Server, Tests) fehlte es und der Aufruf lief ins Leere. Jetzt konsistent mit `botkit.telegram_api`.
+- **BK005 entging `LOGGER`:** Die Regel „keine Inhalte im Log“ prüfte Logger-Namen case-sensitiv — `LOGGER.info(f"…{message}")` (die übliche Konvention) wurde nicht erkannt. Root-Vergleich ist jetzt case-insensitiv.
+- **`SessionManager.get()` ließ abgelaufene Sessions ungeöffnet zurück:** Der Eintrag wurde entfernt, `close()` aber nie aufgerufen — Token-Referenz lebte in der verwaisten Session weiter, ohne `session.closed`-Event. Abgelaufene Sessions werden jetzt geschlossen.
+- **Rohe Exceptions aus fremden Eingaben:** Nicht-numerische getMe-`id` (`ValueError`), fehlende Review-Datei (`FileNotFoundError`), korrupter `audit/reviews.json` (`JSONDecodeError`/`KeyError`), Nicht-Objekt-Antworten der Telegram-API (`AttributeError`) und unlesbare CLI-Eingaben (`OSError`/`UnicodeDecodeError`) melden sich jetzt als typisierte Domänenfehler (`RegistrationError`, `ReviewGateError`, `ReviewError`, `TelegramAPIError`) bzw. saubere CLI-Fehler (Exit 1/2) statt als Traceback.
+- **`botctl send --bot-source X --local-trust` widersprach sich:** Die Kombination verlangt und entfernt das Review-Gate zugleich und scheiterte kryptisch beim Session-Öffnen. Sie wird jetzt explizit abgewiesen (Exit 2); unlesbare `--file`-Eingaben werden *vor* dem Session-Öffnen geprüft (keine verwaiste Session mehr).
+
+### Changed
+- `_rebalance_markdown_chunks` trägt wie der HTML-Pfad nur begrenzte Tiefe nach (`_RICH_MAX_CARRY = 4`): Bei pathologisch tief verschachteltem `<u>` entfallen äußere Ebenen in Folge-Chunks, statt die 64-Zeichen-Reserve zu sprengen.
+- `app.py::_valid_chat_id` nutzt `botkit.registry.validate_chat_id` statt eigener Pattern-Anwendung — eine Chat-ID-Regel an einem Ort (keine redundante Doppelprüfung mehr).
+- `chunk_text` führt das Absatz-Saldo inkrementell (der `len("\n\n".join(buf))`-Ausdruck je Absatz war O(n²)).
+- `botctl main` fängt bekannte Domänenfehler (`ReviewError`, `RegistrationError`, `SessionError`, `TokenError`) als Sicherheitsnetz ab (saubere Meldung, Exit 1).
+- `static/js/app.js`: Fallback-Endpunkte absolut (`/api/convert`, `/api/send`), konsistent mit `byob.js`.
+- Version `2.11.0` → `2.11.1`.
+
+### Tests
+- 24 neue Tests (496 passed, 1 jsdom-Smoke aktiv): UTF-16-Chunkgrenzen (Regular/Rich), `_hard_split`-Vertrag, ungeschlossene Fences (Atomic + Split), Carry-Cap, Custom-`api_base`-URL, BK005-Case, ReviewGate-/Ledger-Fehler, getMe-ID-Validierung, Session-Close-via-`get()`, `botctl`-Flag-Widerspruch/Fehlerpfade, neue `tests/test_cli.py` (CLI war ungetestet) und `tests/test_telegram_api.py` (direkte Netzwerkschicht-Tests).
+
+### Notes
+- Keine Breaking-API: Reine ASCII-/BMP-Texte erzeugen byte-identische Chunks wie 2.11.0; nur Emoji-reiche, Fence-defekte oder tief verschachtelte Eingaben teilen sich jetzt anders (korrekt) auf.
+- `render.yaml` unverändert.
+
 ## [2.11.0] - 2026-09-16
 
 ### Added

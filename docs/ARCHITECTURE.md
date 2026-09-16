@@ -86,7 +86,8 @@ Parameter ein. `utils.py` importiert weder `flask` noch `requests` noch
    - **Eingaben bis 64000** werden in beiden Pfaden in mehrere Telegram-Chunks
      aufgeteilt; Codeblöcke werden als eigenständige ```-Blöcke je Chunk neu
      geöffnet (Sprache bleibt), Formatierungen (**/~~/<u>) werden balanciert
-     (seit v2.11.0).
+     (seit v2.11.0); Limit-Messung in UTF-16-Units, ungeschlossene Fences
+     bis EOF und gedeckelter Markdown-Carry (seit v2.11.1).
    - Auf **beiden** Pfaden werden vorher die Links normalisiert
      (`_normalize_links`, v2.7.0): bekannte Redirect-URLs
      (`google.com/url?q=…`, `youtube.com/redirect?q=…`, …) werden über
@@ -135,7 +136,8 @@ Entwicklung: `pytest` (siehe `requirements-dev.txt`).
 
 - **Telegram Bot API** — `POST /bot<TOKEN>/sendMessage` und
   `/sendRichMessage`. Limits: 4096 Zeichen (sendMessage) bzw. 32768 Zeichen
-  und 500 Blöcke (sendRichMessage). Für BYOB zusätzlich `getMe`
+  und 500 Blöcke (sendRichMessage), jeweils in UTF-16-Code-Units gezählt
+  (der Splitter misst mit `utils._telegram_len`, seit v2.11.1). Für BYOB zusätzlich `getMe`
   (Verifikation beim Session-Start) und `getUpdates` (Chat-ID-Erkennung,
   reiner Blick ohne `offset`).
 - **Eigene HTTP-API** — `POST /api/convert` (Payloads), `POST /api/send`
@@ -160,18 +162,32 @@ Entwicklung: `pytest` (siehe `requirements-dev.txt`).
   `\( x \)`, Umbruch-/Leerzeilen-Fälle, Preis-Negativfälle) und der
   Scanner-Vertrag (`TestMathSpans`), Tabellen, Splitting (4096/32768,
   Absatz-/Wort-/Hard-Splits).
+- `tests/test_split_64000.py` — 64000-Zeichen-Support (seit v2.11.0):
+  E2E-Splits beider Pfade, Codeblock-Sprach-Erhalt, Leerzeilen, Atomic-Schutz,
+  Format-Balance; seit v2.11.1 zusätzlich UTF-16-Chunkgrenzen, ungeschlossene
+  Fences und Carry-Cap.
 - `tests/test_sender.py` — Versand mit gemocktem `requests` (Methodenwahl,
-  Fehlerpfade).
+  Fehlerpfade, Custom-api_base).
+- `tests/test_telegram_api.py` — BYOB-Netzwerkschicht direkt (seit v2.11.1):
+  Nicht-Objekt-Antworten, token-freie Fehlerklassifizierung.
 - `tests/test_app.py` — Flask-Routen über Testclient (geteilter Bot,
   Guards, Security-Header, Root-Shim).
 - `tests/test_byob_web.py` — BYOB-Websessions (`/api/byob/*`): Öffnen/
   Senden/Status/Schließen, Kappen & Rate-Limits, 410-Ablauf, Chat-Erkennung
   ohne Inhalts-Leak, Template-Verträge.
+- `tests/test_shared_channel.py`, `test_public_demo_chat.py` — Offenlegung
+  des geteilten Ziel-Kanals (View-Model, Normalisierung, Template-Fakten).
+- `tests/test_frontend.py`, `test_jsdom_smoke.py` (+
+  `tests/frontend/jsdom_spec.cjs`, braucht `npm install`) — DOM-Verträge,
+  Asset-Abdeckung und funktionale Browser-Smoke-Tests gegen echtes Template.
 - `tests/test_tokens.py`, `test_privacy.py`, `test_registry.py`,
   `test_review.py`, `test_session.py` — BYOB-Layer (Vault-TTL, Redaction,
   getMe-Gegenprobe, BK-Regeln + Vier-Augen-Gate, Session-Grenzen).
-- `tests/test_botctl.py` — CLI-Einstieg: Eingabe-Guard des Review-Tors
-  (Nicht-Code-Datei → sauberer Fehler, Exit 2, kein Ticket/Audit-Trail).
+- `tests/test_botctl.py` — BYOB-CLI: Review-Tor-Guards (Nicht-Code-Datei →
+  sauberer Fehler, Exit 2), Local-Trust-E2E, Ledger-Transaktion, seit v2.11.1
+  Flag-Widerspruch und Fehlerpfade ohne Traceback.
+- `tests/test_cli.py` — Konverter-CLI (seit v2.11.1): Dry-Run (Datei/STDIN),
+  Leer-Eingabe, Fehlerpfade (Exit 1/2).
 - `tests/fixtures/insecure_bot.py` — absichtliches Negativbeispiel; muss von
   BK001–BK012 erkannt werden (Regressionstest des Regelwerks).
 

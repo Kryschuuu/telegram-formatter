@@ -426,3 +426,23 @@ def test_manager_is_thread_safe_under_parallel_open_close():
         t.join()
     assert errors == []
     assert mgr.active_count == 0
+
+
+def test_get_closes_expired_session_and_drops_token():
+    """v2.11.1: get() auf abgelaufener Session schließt sie (Token fällt, closed=True)."""
+    clock = FakeClock()
+    registry = make_registry(clock)
+    registry.register(BotToken.parse(SECRET), owner_ref="alice")
+    manager = SessionManager(
+        registry=registry,
+        config=SessionConfig(require_review=False, ttl_seconds=10.0),
+        clock=clock,
+    )
+    session = manager.open(BotToken.parse(SECRET), CHAT_ID)
+    session_id = session.session_id
+    clock.advance(11.0)
+
+    assert manager.get(session_id) is None
+    assert session.closed is True
+    with pytest.raises(SessionError):
+        session.send("danach geht nichts mehr")

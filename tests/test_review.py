@@ -386,3 +386,39 @@ class TestAuditBypassRegressions:
         fresh = gate.submit(42, CLEAN_BOT)
         assert fresh.ticket_id != old.ticket_id
         assert fresh.decisions == []
+
+
+# --------------------------------------------------------------------------- #
+# v2.11.1: BK005-Case, lesbare ReviewGate-/Ledger-Fehler
+# --------------------------------------------------------------------------- #
+def test_log_content_rule_ignores_logger_name_case():
+    """BK005 greift auch für `LOGGER`/`Logger` — die übliche Konvention entging zuvor."""
+    upper = analyze_code(
+        'import logging\nLOGGER = logging.getLogger("x")\nLOGGER.info(f"got {message}")\n'
+    )
+    assert {f.rule_id for f in upper.findings} == {"BK005"}
+    mixed = analyze_code(
+        'import logging\nLogger = logging.getLogger("x")\nLogger.error(text)\n'
+    )
+    assert {f.rule_id for f in mixed.findings} == {"BK005"}
+
+
+def test_verify_missing_file_raises_gate_error(tmp_path):
+    """Fehlende Code-Datei meldet ReviewGateError statt rohem FileNotFoundError."""
+    gate = ReviewGate(ReviewLedger(), registry=None)
+    with pytest.raises(ReviewGateError, match="nicht lesbar"):
+        gate.verify(123, tmp_path / "fehlt.py", check_registry=False)
+
+
+def test_load_corrupt_ledger_raises_review_error(tmp_path):
+    """Korrupter Audit-Trail meldet ReviewError statt JSONDecodeError/KeyError."""
+    trail = tmp_path / "reviews.json"
+    trail.write_text("{kein valides json", encoding="utf-8")
+    with pytest.raises(ReviewError, match="beschädigt"):
+        ReviewLedger.load(trail)
+    trail.write_text('[{"ticket_id": "RV-1"}]', encoding="utf-8")
+    with pytest.raises(ReviewError, match="beschädigt"):
+        ReviewLedger.load(trail)
+    trail.write_text('{"keine": "liste"}', encoding="utf-8")
+    with pytest.raises(ReviewError, match="beschädigt"):
+        ReviewLedger.load(trail)

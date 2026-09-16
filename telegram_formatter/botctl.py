@@ -279,6 +279,14 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 def cmd_send(args: argparse.Namespace) -> int:
     """Öffnet eine ephemere Session und versendet den Inhalt über den eigenen Bot."""
+    if args.bot_source and args.local_trust:
+        # Widerspruch (seit v2.11.1 explizit): --bot-source verlangt das
+        # Review-Gate, --local-trust entfernt es — die Kombination scheiterte
+        # zuvor kryptisch beim Session-Öffnen („kein ReviewGate konfiguriert“).
+        print("✖ --bot-source und --local-trust schließen sich aus: entweder reviewter")
+        print("  Bot-Code (--bot-source <datei>) oder ausdrücklicher Lokalvertrauen")
+        print("  (--local-trust, nur für eigene, private Bots).")
+        return 2
     try:
         token = BotToken.from_environment(args.token_env)
     except TokenError as exc:
@@ -321,12 +329,20 @@ def cmd_send(args: argparse.Namespace) -> int:
     # "approved", den im Selbstbetrieb niemand setzt, und jede Session
     # scheitert ("Bot ist nicht freigegeben"). Ohne Gate gilt: verifizierter
     # Bot + ausdrücklicher Lokalvertrauen des Nutzers genügen.
+    # Eingabe *vor* dem Session-Öffnen lesen (seit v2.11.1): Eine unlesbare
+    # Datei meldet sich sauber (Exit 2) und hinterlässt keine geöffnete,
+    # nie geschlossene Session — zuvor lief hier ein roher Traceback hoch.
+    try:
+        text = _read_input(args.file)
+    except (OSError, ValueError) as exc:  # UnicodeDecodeError ⊂ ValueError
+        print(f"✖ Eingabe nicht lesbar ({exc.__class__.__name__}).")
+        return 2
+
     manager = SessionManager(
         registry=registry,
         review_gate=None if args.local_trust else gate,
         config=config,
     )
-    text = _read_input(args.file)
 
     try:
         session = manager.open(token, args.chat_id, source_path=args.bot_source)
@@ -443,6 +459,13 @@ def main(argv: list[str] | None = None) -> int:
         return int(args.func(args))
     except TelegramAPIError as exc:
         print(f"✖ Telegram-API: {exc}")
+        return 1
+    except (ReviewError, RegistrationError, SessionError, TokenError) as exc:
+        # Sicherheitsnetz (seit v2.11.1): bekannte Domänenfehler — z. B.
+        # korrupter Audit-Trail oder fehlende Freigabe — melden sich sauber
+        # statt als Traceback. Alle Meldungen sind per Konstruktion
+        # token- und inhaltsfrei.
+        print(f"✖ {exc}")
         return 1
 
 

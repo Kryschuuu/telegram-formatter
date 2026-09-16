@@ -215,3 +215,19 @@ Rich 32768). Neu gegenüber 2.10.0:
 kurze Texte; lange Texte, die zuvor 400er erzielten, liefern jetzt
 mehrere wohlgeformte Chunks. `render.yaml` bleibt unverändert (Single-Worker
 + 8 Threads für BYOB-RAM-Sessions).
+
+
+## 11. Nachzug: v2.11.1 — UTF-16-Maß, robuste Fehlerpfade (kein Handlungsbedarf)
+
+Reines Patch-Release aus dem Code-Review v2.11.1: keine Signatur- oder
+ENV-Änderung, keine Migration nötig. Verhaltenskorrekturen gegenüber 2.11.0:
+
+| Bereich | Alt (2.11.0) | Neu (2.11.1) |
+|---|---|---|
+| Limit-Messung | `len()` in Codepoints — Emoji-reiche Chunks konnten Telegram-Limits sprengen (400 vom API) | `utils._telegram_len()` in UTF-16-Units; harte Schnitte via `utils._hard_split()` |
+| Ungeschlossene Code-Fences | Rest fiel aus dem Atomic-Schutz, `$…$` darin galt als Formel | Fence läuft bis Dokumentende und wird geschlossen geteilt |
+| Tief verschachteltes `<u>` (Rich) | unbegrenzter Carry in Folge-Chunks | gedeckelt auf Tiefe 4 (`_RICH_MAX_CARRY`) |
+| Rohe Exceptions aus fremden Eingaben | `ValueError`/`FileNotFoundError`/`JSONDecodeError`/`AttributeError` als Traceback | typisierte Domänenfehler (`RegistrationError`, `ReviewGateError`, `ReviewError`, `TelegramAPIError`), CLI-Exit 1/2 |
+| `sender` mit `api_base` | Token-Segment fehlte in der URL | konsistent `/bot<token>/` wie im BYOB-Pfad |
+
+ASCII-/BMP-Texte erzeugen byte-identische Chunks wie 2.11.0.

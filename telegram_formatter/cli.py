@@ -66,12 +66,17 @@ def main(argv: list[str] | None = None) -> int:
     # botctl mit BotToken.from_getpass().
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
-    # Eingabe lesen (Datei oder STDIN), immer explizit UTF-8.
-    if args.input:
-        with open(args.input, encoding="utf-8") as fh:
-            text = fh.read()
-    else:
-        text = sys.stdin.read()
+    # Eingabe lesen (Datei oder STDIN), immer explizit UTF-8. Unlesbare
+    # Eingaben melden sich sauber (Exit 2), nicht als Traceback (v2.11.1).
+    try:
+        if args.input:
+            with open(args.input, encoding="utf-8") as fh:
+                text = fh.read()
+        else:
+            text = sys.stdin.read()
+    except (OSError, ValueError) as exc:  # UnicodeDecodeError ⊂ ValueError
+        print(f"FEHLER: Eingabe nicht lesbar ({exc.__class__.__name__}).")
+        return 2
 
     messages = build_messages(text, chat_id or 0)
 

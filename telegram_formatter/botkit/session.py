@@ -432,8 +432,13 @@ class SessionManager:
                 # Abgelaufene Session nicht nur melden, sondern sofort
                 # rausnehmen (Token- und Eintrag-Aufräumung, Audit-Befund).
                 del self._sessions[session_id]
-                return None
-            return session
+            else:
+                return session
+        # Außerhalb des Locks schließen (wie reap_expired): Das Token fällt
+        # sofort — vorher lebte es in der verwaisten Session weiter, ohne
+        # dass je ein session.closed-Event geloggt wurde (seit v2.11.1).
+        session.close()
+        return None
 
     def close(self, session_id: str) -> bool:
         """Schließt eine Session. ``True``, wenn sie existierte."""

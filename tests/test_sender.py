@@ -214,3 +214,15 @@ def test_telegram_api_also_rejects_insecure_base():
 
     with pytest.raises(TelegramAPIError):
         get_me("123:T", api_base="http://evil.example")
+
+
+def test_custom_api_base_keeps_bot_token_segment(fake_requests):
+    """v2.11.1: Auch mit api_base läuft die URL über /bot<token>/ (wie botkit.telegram_api)."""
+    from telegram_formatter.utils import TelegramMessage
+
+    fake, calls = fake_requests
+    from telegram_formatter.sender import send_message
+
+    msg = TelegramMessage("regular", {"chat_id": 1, "text": "hi", "parse_mode": "HTML"})
+    send_message(msg, "TOKEN", api_base="http://127.0.0.1:8081/")
+    assert calls[0]["url"] == "http://127.0.0.1:8081/botTOKEN/sendMessage"
