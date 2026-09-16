@@ -4,6 +4,88 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.10.0] - 2026-09-15
+
+**Formeln aus LLM-Antworten stehen nicht mehr wörtlich in der Nachricht.**
+DeepSeek und Gemini liefern Inline-Formeln fast immer mit Leerzeichen
+(`\( x \)`) oder über mehrere Zeilen verteilt. Die Konvertierung schrieb daraus
+`$ x $` — nach den GFM-/Pandoc-Randregeln, die Telegram für Rich Markdown
+übernimmt, ist das **keine** Formel: Kein Whitespace direkt hinter dem
+öffnenden bzw. vor dem schließenden `$`. Telegram zeigte deshalb den Quelltext
+wörtlich an (sichtbares `\cdot`, sichtbares `$`), während das randfreie
+`\(x\)` korrekt renderte — genau das gemeldete „einige Formeln gehen, andere
+nicht". Die Konvertierung normalisiert jetzt Inhalt und Delimiter; zusätzlich
+laufen die vier früher getrennten Formel-Scanner (Erkennung/Routing,
+Konvertierung, HTML-Schutz, Chunking) durch **eine** Regelbasis
+(Optimierungsbefund O-3 des Audits), damit diese Divergenz nicht wieder
+entstehen kann.
+
+### Behoben
+
+- **`\( x \)` wurde zu `$ x $` — Formel blieb als Text sichtbar:** Der Inhalt
+  wird bei der Übersetzung in die Telegram-Syntax normalisiert
+  (`utils.py::_normalize_inline_math`): Rand-Whitespace wird getrimmt,
+  Zeilenumbrüche innerhalb der Inline-Formel werden zu Leerzeichen
+  (`\( a \cdot\nb \)` → `$a \cdot b$`). Ein nachgestellter Leerzeilen-Umbruch
+  (`$$\n`/`\n$$`) ist davon nicht betroffen.
+- **Leerzeilen in Block-Formeln beendeten den Block:** `\[\n a\n\n b\n\]`
+  wurde zu `$$\n a\n\n b\n$$` — GFM liest die Leerzeile als Blockende, Telegram
+  zeigte wieder Quelltext. `_normalize_display_math` zieht sie zu einem
+  Umbruch zusammen (`$$\n a\n b\n$$`). Einzelne Zeilenumbrüche bleiben
+  unangetastet (Bestandsverhalten).
+- **Vier Formel-Scanner mit divergierenden Regeln (Audit O-3):**
+  `split_formulas`, `convert_deepseek_latex_syntax`, `_protect_math` und
+  `_atomic_ranges` hatten je eine eigene Zeichen-Schleife. Jetzt gibt es
+  `iter_math_spans()` (+ `MathSpan`) als einzige Quelle; die vier Aufrufer
+  sind dünne Wrapper. Damit gilt „ist Formel" überall gleich — auch für das
+  Aufteilen an Chunk-Grenzen.
+- **Leerzeilen-Erkennung war zu eng:** nur `\n\n` galt als Leerzeile; eine
+  Zeile mit Leerzeichen/Tab dazwischen (z. B. aus kopiertem Rich-Text)
+  passierte unbemerkt. `_has_blank_line()` prüft `\n[ \t]*\n` und wird von
+  allen Regeln (inline wie Block) genutzt.
+- **Leere Delimiter wurden zu kaputter Mathematik:** `\(\)` und `\[\]`
+  wurden zu `$$` bzw. `$$$$` zusammengezogen. Sie bleiben jetzt Text, wie
+  ``$$$$`` es schon war.
+
+### Geändert
+
+- **`$ … $` mit Rand-Whitespace und führendem LaTeX-Kommando gilt als Formel
+  (neu):** `$ \frac{a}{b} $` und `$ \sum_{i=1}^{n} i $` werden erkannt und zu
+  `$\frac{a}{b}$`/`$\sum_{i=1}^{n} i$` geglättet. Die B-4-Preisregel bleibt
+  scharf: Das Signal ist ein **führendes** Backslash-Kommando (zwischen zwei
+  Preisen steht nie eines), der Bereich ist auf 400 Zeichen begrenzt
+  (`_PADDED_MATH_MAX_CHARS`), und `$ 20 und $ 30`, `$100 und $200` sowie
+  `$20,000 und $30,000` bleiben unverändert Text. Bewusst **nicht** erkannt
+  werden `$ x \cdot y $` und `$ 5 (\circa) und $ 10` — beide sind von Prosa
+  nicht sicher zu unterscheiden; sie bleiben wie bisher stehen.
+- **Mehrzeilige `$`-Formeln werden repariert:** `$a \cdot\nb$` (Modell-
+  Umbrüche innerhalb der Delimiter) wird zu `$a \cdot b$` statt wörtlich
+  ausgeliefert.
+- `MathSpan`/`iter_math_spans` sind Teil der öffentlichen Modul-API von
+  `telegram_formatter.utils`; die Export-Liste der Fassade bleibt unverändert.
+
+### Hinzugefügt
+
+- Tests: `tests/test_utils.py::TestMathNormalization` (31 Fälle: gepolsterte
+  Inline-/Display-Formeln, Umbruch-Normalisierung, Preis-Negativfälle,
+  Leerzeilen-Grenze, DeepSeek-Antwort Ende-zu-Ende inkl. Tabelle,
+  Chunk-Grenzen, HTML-Pfad) und `TestMathSpans` (Scanner-Vertrag:
+  Delimiter/Art/Inhalt, Code-Fence-Option, Segmentaufteilung).
+- Doku: eigener Abschnitt „LaTeX-Normalisierung" in
+  [docs/FORMATTING.md](docs/FORMATTING.md) (Regeln, Beispiele, Grenzen),
+  aktualisierter DeepSeek-Abschnitt in [README.md](README.md) und
+  Scanner-Beschreibung in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- Peer-Review-Bericht
+  [`peer-review/2026-09_LATEX-NORMALIZATION.md`](peer-review/2026-09_LATEX-NORMALIZATION.md).
+
+### Housekeeping
+
+- Version `2.9.0` → `2.10.0` (`telegram_formatter/__init__.py`, README-Badge,
+  README-Versionsabschnitt, `tests/test_public_demo_chat.py`).
+- Gegenprobe: 5000 randomisierte Dokumente (Stil-/Whitespace-Varianten ×
+  Markdown-Kontexte) ergeben keinen Fall mehr, in dem eine Formel im
+  Rich-Ergebnis die eigenen Randregeln verletzt (vorher 1969 Treffer).
+
 ## [2.9.0] - 2026-09-14
 
 **Der Ziel-Kanal wird offen benannt — `t.me/mdtotxt_bot_web` steht an sieben
