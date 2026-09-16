@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.11.0-blue)
+![Version](https://img.shields.io/badge/version-2.11.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -37,9 +37,11 @@ Nachrichten.
   übersetzt (GFM).
 - **Automatisches Splitting** — Nachrichten bis **64000 Zeichen** werden
   an Absatz-, Zeilen- und Wortgrenzen aufgeteilt (4096 Zeichen für
-  klassische, 32768 für Rich Messages), ohne Formatierungen, Tabellen oder
-  Codeblöcke zu zerreißen — ein zu langer ```-Block wird in mehrere
-  eigenständige Blöcke mit erhaltener Sprache zerlegt (seit v2.11.0).
+  klassische, 32768 für Rich Messages — in UTF-16-Units gemessen, wie
+  Telegram zählt, daher auch Emoji-sicher; seit v2.11.1), ohne
+  Formatierungen, Tabellen oder Codeblöcke zu zerreißen — ein zu langer
+  ```-Block wird in mehrere eigenständige Blöcke mit erhaltener Sprache
+  zerlegt (seit v2.11.0, inkl. ungeschlossener Fences seit v2.11.1).
 - **Zwei Versandwege, frei wählbar (seit v2.6.0)** — der Bestätigungsdialog
   stellt den Weg aus, der tatsächlich offen ist: **geteilter Bot**
   `@mdtotxt_bot` in den öffentlichen Demo-Kanal
@@ -383,7 +385,7 @@ Review-Checkliste: `python -m telegram_formatter.botctl checklist`
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                  # 420+ Tests
+pytest -q                                  # 490+ Tests (+ jsdom-Frontend-Smoke via npm install)
 ruff check .                               # Stil & offensichtliche Fehler
 bandit -c pyproject.toml -r telegram_formatter -ll   # Sicherheits-Scan
 ```
@@ -481,6 +483,6 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.11.0** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.11.1** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).
