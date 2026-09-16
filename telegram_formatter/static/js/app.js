@@ -58,8 +58,8 @@
     var sendStatus = document.getElementById("sendStatus");
     var charCount = document.getElementById("charCount");
     var sendPathNote = document.getElementById("sendPathNote");
-    var convertUrl = document.body.dataset.convertUrl || "api/convert";
-    var sendUrl = document.body.dataset.sendUrl || "api/send";
+    var convertUrl = document.body.dataset.convertUrl || "/api/convert";
+    var sendUrl = document.body.dataset.sendUrl || "/api/send";
 
     // Sende-Bestätigung (Modal): welcher Weg, welcher Bot, welches Ziel.
     var sendConfirm = document.getElementById("sendConfirm");

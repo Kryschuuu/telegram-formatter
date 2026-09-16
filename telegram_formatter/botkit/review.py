@@ -491,8 +491,10 @@ class _SecurityVisitor(ast.NodeVisitor):
         if short in HTTP_CALL_NAMES and root in HTTP_MODULE_ROOTS:
             self._check_http_target(node, name)
 
-        # Logging / Ausgaben mit Inhalten
-        if short in LOG_METHODS and root in {"logging", "logger", "log", "self", ""}:
+        # Logging / Ausgaben mit Inhalten (Root case-insensitiv, seit v2.11.1:
+        # `LOGGER = logging.getLogger(...)` ist die übliche Konvention und
+        # entging der Regel zuvor vollständig).
+        if short in LOG_METHODS and root.lower() in {"logging", "logger", "log", "self", ""}:
             self._check_log_args(node, name)
         if short == "print" and _names_in(node) & SENSITIVE_LOG_NAMES:
             self._add("BK011", node, "print() gibt potenziell Inhalte aus.")
@@ -798,39 +800,63 @@ class ReviewLedger:
         Inhalte oder Tokens zu berühren.
         """
         target = Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            json.dumps(self.audit_trail(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(self.audit_trail(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+        except OSError as exc:
+            raise ReviewError(
+                f"Audit-Trail '{path}' ist nicht schreibbar ({exc.__class__.__name__})."
+            ) from None
         audit(LOGGER, logging.INFO, "review.saved", file=str(target), tickets=len(self._tickets))
 
     @classmethod
     def load(cls, path: str | Path, *, clock: Callable[[], float] = time.time) -> ReviewLedger:
-        """Liest einen Audit-Trail wieder ein (z. B. im CI nach dem Checkout)."""
+        """Liest einen Audit-Trail wieder ein (z. B. im CI nach dem Checkout).
+
+        Ein korrupter Trail meldet sich als :class:`ReviewError` — nicht als
+        roher ``JSONDecodeError``/``KeyError``-Traceback (seit v2.11.1).
+        """
         ledger = cls(clock=clock)
         source = Path(path)
         if not source.exists():
             return ledger
-        for entry in json.loads(source.read_text(encoding="utf-8")):
-            ticket = ReviewTicket(
-                ticket_id=str(entry["ticket_id"]),
-                bot_id=int(entry["bot_id"]),
-                source_sha256=str(entry["source_sha256"]),
-                submitted_at=float(entry["submitted_at"]),
-                file=str(entry.get("file", "")),
-                static_findings=tuple(entry.get("static_findings", ())),
-            )
-            ticket.decisions = [
-                ReviewDecision(
-                    reviewer=Reviewer(str(d["reviewer"]), ReviewRole(str(d["role"]))),
-                    approved=bool(d["approved"]),
-                    checks=tuple(d.get("checks", ())),
-                    note=str(d.get("note", "")),
-                    decided_at=float(d["decided_at"]),
+        try:
+            entries = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:  # JSONDecodeError ⊂ ValueError
+            raise ReviewError(
+                f"Audit-Trail '{path}' ist beschädigt ({exc.__class__.__name__})."
+            ) from None
+        if not isinstance(entries, list):
+            raise ReviewError(f"Audit-Trail '{path}' ist beschädigt (keine Ticket-Liste).")
+        for entry in entries:
+            try:
+                ticket = ReviewTicket(
+                    ticket_id=str(entry["ticket_id"]),
+                    bot_id=int(entry["bot_id"]),
                     source_sha256=str(entry["source_sha256"]),
+                    submitted_at=float(entry["submitted_at"]),
+                    file=str(entry.get("file", "")),
+                    static_findings=tuple(entry.get("static_findings", ())),
                 )
-                for d in entry.get("decisions", [])
-            ]
+                ticket.decisions = [
+                    ReviewDecision(
+                        reviewer=Reviewer(str(d["reviewer"]), ReviewRole(str(d["role"]))),
+                        approved=bool(d["approved"]),
+                        checks=tuple(d.get("checks", ())),
+                        note=str(d.get("note", "")),
+                        decided_at=float(d["decided_at"]),
+                        source_sha256=str(entry["source_sha256"]),
+                    )
+                    for d in entry.get("decisions", [])
+                ]
+            except ReviewError:
+                raise
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ReviewError(
+                    f"Audit-Trail '{path}' ist beschädigt ({exc.__class__.__name__})."
+                ) from None
             ledger._tickets[ticket.ticket_id] = ticket
         return ledger
 
@@ -962,9 +988,15 @@ class ReviewGate:
         Prüft unmittelbar vor dem Session-Start, ob Bot *und* Code freigegeben sind.
 
         :raises ReviewGateError: bei fehlendem Ticket, fehlenden Freigaben,
-            abweichender Prüfsumme oder nicht freigegebener Registry.
+            abweichender Prüfsumme, nicht freigegebener Registry oder
+            nicht lesbarer Code-Datei (statt rohem ``OSError``).
         """
-        sha = source_sha256(path)
+        try:
+            sha = source_sha256(path)
+        except OSError as exc:
+            raise ReviewGateError(
+                f"Bot-Code '{path}' ist nicht lesbar ({exc.__class__.__name__})."
+            ) from None
         ticket = self._ledger.ticket_for(int(bot_id), sha)
         if ticket is None:
             raise ReviewGateError(

@@ -63,6 +63,11 @@ def _post(secret: str, method: str, payload: Mapping[str, Any], *, timeout: floa
     except ValueError as exc:  # pragma: no cover - defensiv
         raise TelegramAPIError(f"Ungültige JSON-Antwort bei {method}") from exc
 
+    if not isinstance(body, dict):
+        # Fremde Netzantwort (z. B. Proxy-Fehlerseite als Liste) — kein
+        # roher AttributeError auf body.get (seit v2.11.1).
+        raise TelegramAPIError(f"Ungültige JSON-Antwort bei {method}")
+
     if not body.get("ok"):
         # Telegram liefert 'description' — kann Inhalte enthalten, daher kürzen.
         description = str(body.get("description", "unbekannter Fehler"))[:200]

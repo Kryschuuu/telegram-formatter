@@ -133,6 +133,10 @@ def send_message(
     - ``kind == "rich"``   -> Methode ``sendRichMessage``
     - ``kind == "regular"``-> Methode ``sendMessage``
 
+    :param api_base: Alternative API-Basis (Tests, privater Bot-API-Server).
+        Das Token wird immer als ``/bot<token>/``-Segment eingebaut — auch
+        bei gesetztem ``api_base`` (seit v2.11.1; vorher fehlte es dort und
+        lokale Bot-API-Server wiesen den Aufruf ab).
     :raises ApiBaseError: bei unzulässiger ``api_base`` (kein HTTPS).
     :raises SendError: bei fehlender ``requests``-Bibliothek, Netzwerkfehlern,
         HTTP-Fehlerstatus oder einer API-Ablehnung (``ok: false``). Die Meldung
@@ -147,7 +151,7 @@ def send_message(
             "Das Paket 'requests' wird für den Versand benötigt (pip install requests)."
         ) from exc
 
-    base = (api_base or f"https://api.telegram.org/bot{bot_token}").rstrip("/")
+    base = f"{(api_base or 'https://api.telegram.org').rstrip('/')}/bot{bot_token}"
     method = "sendRichMessage" if message.kind == "rich" else "sendMessage"
     session = _get_session()
     post = session.post if session is not None else requests.post

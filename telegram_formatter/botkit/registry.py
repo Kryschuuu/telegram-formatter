@@ -196,13 +196,18 @@ class BotRegistry:
             raise RegistrationError("Unerwartete getMe-Antwort: 'result' fehlt.")
         if not result.get("is_bot"):
             raise RegistrationError("Das Token gehört nicht zu einem Bot.")
-        if int(result.get("id", -1)) != token.bot_id:
+        try:
+            reported_id = int(result.get("id", -1))
+        except (TypeError, ValueError):
+            # Fremde Netzantwort, fremdes Format — kein roher ValueError (v2.11.1).
+            raise RegistrationError("Unerwartete getMe-Antwort: 'id' ist keine Zahl.") from None
+        if reported_id != token.bot_id:
             # Schutz vor Verwechslung: Antwort und Token müssen denselben Bot meinen.
             raise RegistrationError("getMe-ID stimmt nicht mit dem Token überein.")
 
         now = self._clock()
         identity = BotIdentity(
-            bot_id=int(result["id"]),
+            bot_id=reported_id,
             username=str(result.get("username", "")),
             display_name=str(result.get("first_name", "")),
             verified_at=now,

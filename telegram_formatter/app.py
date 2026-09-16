@@ -126,9 +126,9 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from telegram_formatter import __version__
 from telegram_formatter.botkit.registry import (
-    CHAT_ID_PATTERN,
     BotRegistry,
     RegistrationError,
+    validate_chat_id,
 )
 from telegram_formatter.botkit.session import (
     RateLimitExceeded,
@@ -445,15 +445,17 @@ except Exception:  # noqa: BLE001 - Sicherheitsnetz, nie Grund für App-Absturz
 # Eingaben validieren
 # --------------------------------------------------------------------------- #
 def _valid_chat_id(raw: object) -> str | None:
-    """Numerische Chat-ID akzeptieren (Pattern aus ``botkit.registry``), sonst ``None``."""
-    if raw is None:
+    """Numerische Chat-ID akzeptieren (:func:`botkit.registry.validate_chat_id`), sonst ``None``.
+
+    Seit v2.11.1 keine eigene Pattern-Anwendung mehr: Die Webschicht nutzt
+    dieselbe Validierung wie Registry und Sessions — eine Regel, ein Ort.
+    """
+    if raw is None or not isinstance(raw, (str, int)):
         return None
-    if not isinstance(raw, (str, int)):
+    try:
+        return validate_chat_id(raw)
+    except RegistrationError:
         return None
-    candidate = str(raw).strip()
-    if CHAT_ID_PATTERN.match(candidate):
-        return candidate
-    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -611,7 +613,7 @@ class _ByobRuntime:
         )
         session = self._manager.open(token, chat_id)
         session_secret = secrets.token_urlsafe(32)
-        secret_digest = hashlib.sha256(session_secret.encode("ascii")).digest()
+        secret_digest = hashlib.sha256(session_secret.encode("utf-8")).digest()
         with self._lock:
             self._meta[session.session_id] = {
                 "ip": ip,

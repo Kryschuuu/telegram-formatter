@@ -53,6 +53,12 @@ Wichtige Telegram-Fakten (Bot API 10.1+, Stand 2026):
   nativ LaTeX ($...$ / $$...$$) sowie GFM-Tabellen. Das Feld im
   ``rich_message``-Objekt heißt **``markdown``** (alternativ ``html`` oder
   ``blocks``) -- es gibt KEIN Feld ``format``/``text``.
+- „Zeichen“ zählt Telegram in **UTF-16-Code-Units** (wie bei den
+  Entity-Offsets): Zeichen jenseits der Basic Multilingual Plane (Emoji,
+  manche Symbole) belegen **zwei** Einheiten. Alle Längenprüfungen dieses
+  Moduls messen deshalb mit :func:`_telegram_len` statt ``len()`` — sonst
+  würden Emoji-reiche Nachrichten fälschlich als passend gechunkt und von
+  Telegram mit 400 abgewiesen (seit v2.11.1).
 """
 
 from __future__ import annotations
@@ -288,9 +294,11 @@ def iter_math_spans(text: str, *, skip_code_fences: bool = False) -> Iterator[Ma
     while i < n:
         if skip_code_fences and text.startswith("```", i):
             close = text.find("```", i + 3)
-            if close != -1:
-                i = close + 3
-                continue
+            # GFM: ein ungeschlossener Fence läuft bis Dokumentende — der Rest
+            # ist Code, keine Formel (seit v2.11.1; vorher fiel der Scanner in
+            # den offenen Block zurück und fand dort „Formeln“).
+            i = close + 3 if close != -1 else n
+            continue
         if text.startswith("\\\\", i):
             i += 2  # Doppelter Backslash (Zeilenumbruch/Escape), kein Delimiter
             continue
@@ -1033,7 +1041,46 @@ _HTML_BALANCE_RESERVE = 224
 _RICH_BALANCE_RESERVE = 64
 #: Max. Tiefe, die über Chunk-Grenzen hinweg nachgetragen (reopened) wird.
 _HTML_MAX_CARRY = 4
+#: Dasselbe für den Rich-Pfad (seit v2.11.1): Tief verschachtelte ``<u>``
+#: würden sonst Carry + Closing unbegrenzt wachsen lassen und die
+#: 64-Zeichen-Reserve sprengen — der HTML-Pfad kappt schon immer.
+_RICH_MAX_CARRY = 4
 _TAG_SCAN_RE = re.compile(r"<(/?)(b|i|u|s|code|pre|blockquote|a)(\s[^<>]*)?>", re.I)
+
+
+def _telegram_len(text: str) -> int:
+    """Länge in UTF-16-Code-Units — so zählt Telegram (seit v2.11.1).
+
+    Die Bot-API misst Textlimits (4096/32768) und Entity-Offsets in
+    UTF-16-Einheiten: Astral-Zeichen (Emoji, ``ord > 0xFFFF``) kosten zwei.
+    ``len()`` zählt dagegen Codepoints und unterschätzt Emoji-reiche Texte —
+    Chunks, die danach „passen“, weist Telegram mit 400 ab. Alle
+    Limit-Prüfungen dieses Moduls nutzen deshalb diese Funktion.
+    """
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _hard_split(text: str, max_chars: int) -> list[str]:
+    """Teilt harten Text in Stücke von höchstens ``max_chars`` UTF-16-Units.
+
+    Ein Durchlauf (O(n)): Schnittstellen entstehen, bevor ein Zeichen das
+    Budget sprengen würde — ein Codepoint wird dabei nie zerrissen (Python
+    slicet Codepoints, keine Surrogate-Hälften). Nur für pathologisch lange
+    Einzelwörter/-zeilen ohne jede bevorzugte Trennstelle.
+    """
+    parts: list[str] = []
+    start = 0
+    used = 0
+    for idx, ch in enumerate(text):
+        width = 2 if ord(ch) > 0xFFFF else 1
+        if used + width > max_chars and idx > start:
+            parts.append(text[start:idx])
+            start = idx
+            used = 0
+        used += width
+    if start < len(text):
+        parts.append(text[start:])
+    return parts or [""]
 #: Tags, die beim nächsten Chunk wieder geöffnet werden (Links ausgenommen:
 #: deren href-Länge wäre nicht kalkulierbar — sie werden nur sauber geschlossen).
 _CARRYABLE_TAGS = frozenset({"b", "i", "u", "s", "code", "pre", "blockquote"})
@@ -1121,27 +1168,34 @@ def _rebalance_markdown_chunks(chunks: list[str]) -> list[str]:
     geht. Codeblöcke (```), Inline-Code (`...`) und Formeln sind atomar und
     werden hier nicht als Formatierung behandelt — sie sind über
     :func:`_atomic_ranges` geschützt.
+
+    Wie im HTML-Pfad wird nur eine begrenzte Tiefe nachgetragen
+    (:data:`_RICH_MAX_CARRY`, seit v2.11.1): Bei pathologisch tief
+    verschachteltem ``<u>`` gehen äußere Ebenen in Folge-Chunks verloren
+    (sichtbar bleibt gültiges Markdown), statt die 64-Zeichen-Reserve zu
+    sprengen und einen Über-Limit-Chunk zu erzeugen.
     """
     _CLOSING = {"**": "**", "~~": "~~", "<u>": "</u>"}
     result: list[str] = []
     stack: list[tuple[str, str]] = []
-    for idx, raw in enumerate(chunks):
+
+    def _is_protected(pos: int, ranges: list[tuple[int, int]]) -> tuple[bool, int]:
+        for a, b in ranges:
+            if a <= pos < b:
+                return True, b
+            if pos < a:
+                break
+        return False, pos
+
+    for raw in chunks:
         carry_open = "".join(op for _, op in stack)
         protected = _atomic_ranges(raw)
-
-        def _is_protected(pos: int) -> tuple[bool, int]:
-            for a, b in protected:
-                if a <= pos < b:
-                    return True, b
-                if pos < a:
-                    break
-            return False, pos
 
         cur: list[tuple[str, str]] = list(stack)
         i = 0
         n = len(raw)
         while i < n:
-            is_prot, nxt = _is_protected(i)
+            is_prot, nxt = _is_protected(i, protected)
             if is_prot:
                 i = nxt
                 continue
@@ -1177,7 +1231,10 @@ def _rebalance_markdown_chunks(chunks: list[str]) -> list[str]:
         closing = "".join(_CLOSING[typ] for typ, _ in reversed(cur))
         balanced = carry_open + raw + closing
         result.append(balanced)
-        stack = cur
+        # Nur die innersten Ebenen nachtragen (s. Docstring) — der Scan des
+        # Folge-Chunks startet mit genau dem Stack, der ihm vorangestellt
+        # wurde, sonst liefen Öffner und Schließer auseinander.
+        stack = cur[-_RICH_MAX_CARRY:]
     return result
 
 
@@ -1191,17 +1248,19 @@ def _atomic_ranges(text: str) -> list[tuple[int, int]]:
     die Teilung Code oder Formeln. Der Formel-Teil kommt aus dem gemeinsamen
     Scanner (:func:`iter_math_spans`, Audit O-3), Inline-Code (`` `...` ``) ist
     seit v2.11.0 ebenfalls atomar, damit ``*``/``**`` darin nicht als
-    Formatierung fehlinterpretiert wird.
+    Formatierung fehlinterpretiert wird. Ein *ungeschlossener* Fence läuft —
+    wie in GFM — bis Dokumentende (seit v2.11.1); überlange Reste teilt
+    :func:`_split_guarded_unit` in geschlossene Blöcke.
     """
     ranges: list[tuple[int, int]] = []
     i, n = 0, len(text)
     while i < n:
         if text.startswith("```", i):
             close = text.find("```", i + 3)
-            if close != -1:
-                ranges.append((i, close + 3))
-                i = close + 3
-                continue
+            end = close + 3 if close != -1 else n
+            ranges.append((i, end))
+            i = end
+            continue
         if text.startswith("\\\\", i):
             i += 2  # Doppelter Backslash: kein Delimiter-Beginn
             continue
@@ -1222,6 +1281,31 @@ def _atomic_ranges(text: str) -> list[tuple[int, int]]:
     return ranges
 
 
+def _split_fence_block(head: str, inner: str, max_chars: int) -> list[str]:
+    """Teilt Fence-Inhalt in eigenständige, geschlossene ```-Blöcke.
+
+    Gemeinsamer Kern für geschlossene *und* ungeschlossene Fences (seit
+    v2.11.1): ``head`` ist die Kopfzeile inkl. ``\\n`` (z. B.
+    ``\"python\\n\"``, leer für generisches ```), ``inner`` der Rest.
+    """
+    # Sprache für alle Fragmente bewahren; leere head bedeutet generisches ```
+    budget = max(max_chars - 2 * len("```") - _telegram_len(head) - 2, 16)
+    # Leerzeilen bewahren: splitlines(keepends=True) behält \n,
+    # leere Zeilen werden als "\n" repräsentiert.
+    raw_lines = inner.splitlines(keepends=True)
+    # Falls inner mit \n endet, ist das letzte Element bereits mit \n;
+    # falls nicht, bleibt letztes ohne \n — _group kommt damit zurecht.
+    # Leere Eingabe (nur head) ergibt eine Zeile.
+    if not raw_lines:
+        raw_lines = [""]
+    parts = _group(raw_lines, budget, "") or [""]
+    fragments: list[str] = []
+    for part in parts:
+        body = part if part.endswith("\n") else part + "\n"
+        fragments.append(f"```{head}{body}```")
+    return [f for f in fragments if f]
+
+
 def _split_guarded_unit(unit: str, max_chars: int) -> list[str]:
     """Zerlegt eine das Limit überschreitende Atom-Einheit in wohlgeformte Teile.
 
@@ -1233,7 +1317,9 @@ def _split_guarded_unit(unit: str, max_chars: int) -> list[str]:
     **jedem** Fragment erhalten und Leerzeilen im Code gehen nicht verloren —
     ein 64000-Zeichen-Block wird so in mehrere eigenständige, korrekt
     gefence'te Blöcke zerlegt, jeweils mit gleicher Sprache und korrekter
-    Einrückung.
+    Einrückung. Seit v2.11.1 gilt das auch für *ungeschlossene* Fences (GFM:
+    laufen bis Dokumentende) — jedes Fragment wird dabei sauber geschlossen,
+    statt einen Über-Limit-Chunk zu erzeugen.
     """
     for delim in ("$$", "```", "$"):
         if len(unit) > 2 * len(delim) and unit.startswith(delim) and unit.endswith(delim):
@@ -1243,23 +1329,8 @@ def _split_guarded_unit(unit: str, max_chars: int) -> list[str]:
                 nl = inner.find("\n")
                 if 0 < nl <= 64:
                     head, inner = inner[: nl + 1], inner[nl + 1 :]
-                # Sprache für alle Fragmente bewahren; leere head bedeutet generisches ```
-                budget = max(max_chars - 2 * len(delim) - len(head) - 2, 16)
-                # Leerzeilen bewahren: splitlines(keepends=True) behält \n,
-                # leere Zeilen werden als "\n" repräsentiert.
-                raw_lines = inner.splitlines(keepends=True)
-                # Falls inner mit \n endet, ist das letzte Element bereits mit \n;
-                # falls nicht, bleibt letztes ohne \n — _group kommt damit zurecht.
-                # Leere Eingabe (nur head) ergibt eine Zeile.
-                if not raw_lines:
-                    raw_lines = [""]
-                parts = _group(raw_lines, budget, "") or [""]
-                fragments: list[str] = []
-                for part in parts:
-                    body = part if part.endswith("\n") else part + "\n"
-                    fragments.append(f"```{head}{body}```")
-                return [f for f in fragments if f]
-            budget = max(max_chars - 2 * len(delim) - len(head) - 2, 16)
+                return _split_fence_block(head, inner, max_chars)
+            budget = max(max_chars - 2 * len(delim) - 2, 16)
             lines = inner.split("\n")
             parts = _group([ln + "\n" for ln in lines if ln != ""], budget, "") or [""]
             fragments: list[str] = []
@@ -1269,6 +1340,15 @@ def _split_guarded_unit(unit: str, max_chars: int) -> list[str]:
                 else:
                     fragments.append(f"${part.strip()}$")
             return [f for f in fragments if f]
+    # Ungeschlossener Fence (atomar bis EOF, s. _atomic_ranges): Inhalt ab der
+    # Kopfzeile teilen und jedes Fragment sauber schließen.
+    if unit.startswith("```") and len(unit) > len("```"):
+        inner = unit[len("```") :]
+        head = ""
+        nl = inner.find("\n")
+        if 0 < nl <= 64:
+            head, inner = inner[: nl + 1], inner[nl + 1 :]
+        return _split_fence_block(head, inner, max_chars)
     return [unit]
 
 
@@ -1281,11 +1361,13 @@ def _safe_chunk(text: str, max_chars: int) -> list[str]:
       selbst-ständige Blöcke zerlegt (jedes Chunk bleibt syntaktisch gültig).
     - Lückentext wird an Zeilengrenzen gruppiert; ein harter Schnitt ist nur
       bei pathologisch langen Einzelzeilen möglich.
+    - Alle Längen laufen in UTF-16-Units (:func:`_telegram_len`), so wie
+      Telegram zählt — Emoji-reiche Texte erzeugen sonst Über-Limit-Chunks.
     """
     text = text.strip()
     if not text:
         return []
-    if len(text) <= max_chars:
+    if _telegram_len(text) <= max_chars:
         return [text]
 
     chunks: list[str] = []
@@ -1305,22 +1387,23 @@ def _safe_chunk(text: str, max_chars: int) -> list[str]:
         nonlocal size
         if not unit:
             return
-        if len(unit) > max_chars:
+        unit_len = _telegram_len(unit)
+        if unit_len > max_chars:
             flush()
             for frag in _split_guarded_unit(unit, max_chars):
                 frag = frag.strip()
                 if frag:
                     chunks.append(frag)
             return
-        if size + len(unit) > max_chars and buf:
+        if size + unit_len > max_chars and buf:
             flush()
         buf.append(unit)
-        size += len(unit)
+        size += unit_len
 
     def emit_gap(seg: str) -> None:
         if not seg:
             return
-        if len(seg) <= max_chars:
+        if _telegram_len(seg) <= max_chars:
             emit_unit(seg)
         else:
             for piece in _split_oversized_paragraph(seg, max_chars):
@@ -1385,27 +1468,28 @@ def build_messages(raw_text: str, chat_id: int | str) -> list[TelegramMessage]:
 def _group(items: list[str], max_chars: int, joiner: str) -> list[str]:
     """
     Gruppiert ``items`` zu Strings (verbunden mit ``joiner``), die jeweils
-    ``max_chars`` nicht überschreiten. Überlange Einzel-Items werden hart
-    geteilt.
+    ``max_chars`` (in UTF-16-Units, :func:`_telegram_len`) nicht überschreiten.
+    Überlange Einzel-Items werden hart geteilt.
     """
     # Längensaldo wird inkrementell geführt: join().len() je Item wäre
     # O(n^2) (Audit O-2); die Grenze bleibt exakt dieselbe.
     chunks: list[str] = []
     buf: list[str] = []
     size = 0
-    sep = len(joiner)
+    sep = _telegram_len(joiner)
     for item in items:
-        if len(item) > max_chars:
+        item_len = _telegram_len(item)
+        if item_len > max_chars:
             if buf:
                 chunks.append(joiner.join(buf))
                 buf, size = [], 0
-            chunks.extend(item[i : i + max_chars] for i in range(0, len(item), max_chars))
+            chunks.extend(_hard_split(item, max_chars))
             continue
-        add = len(item) + (sep if buf else 0)
+        add = item_len + (sep if buf else 0)
         if buf and size + add > max_chars:
             chunks.append(joiner.join(buf))
             buf, size = [], 0
-            add = len(item)
+            add = item_len
         buf.append(item)
         size += add
     if buf:
@@ -1421,12 +1505,13 @@ def _split_oversized_paragraph(paragraph: str, max_chars: int) -> list[str]:
     words = paragraph.split(" ")
     if len(words) > 1:
         return _group(words, max_chars, " ")
-    return [paragraph[i : i + max_chars] for i in range(0, len(paragraph), max_chars)]
+    return _hard_split(paragraph, max_chars)
 
 
 def chunk_text(text: str, max_chars: int) -> list[str]:
     """
-    Teilt ``text`` in Stücke von höchstens ``max_chars`` Zeichen auf.
+    Teilt ``text`` in Stücke von höchstens ``max_chars`` Zeichen auf
+    (in UTF-16-Units gemessen, :func:`_telegram_len` — so zählt Telegram).
 
     Reihenfolge der bevorzugten Trennstellen:
     1. Absatzgrenzen (Leerzeilen) -- Tabellen/Formeln liegen innerhalb eines
@@ -1438,24 +1523,31 @@ def chunk_text(text: str, max_chars: int) -> list[str]:
     text = text.strip()
     if not text:
         return []
-    if len(text) <= max_chars:
+    if _telegram_len(text) <= max_chars:
         return [text]
 
     paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
     chunks: list[str] = []
     buf: list[str] = []
+    size = 0
 
     for p in paragraphs:
-        if len(p) <= max_chars:
-            if buf and len("\n\n".join(buf)) + 2 + len(p) > max_chars:
+        plen = _telegram_len(p)
+        if plen <= max_chars:
+            # Inkrementelles Saldo (wie _group): der frühere
+            # len("\\n\\n".join(buf))-Ausdruck je Absatz war O(n^2).
+            add = plen + (2 if buf else 0)
+            if buf and size + add > max_chars:
                 chunks.append("\n\n".join(buf))
-                buf = []
+                buf, size = [], 0
+                add = plen
             buf.append(p)
+            size += add
         else:
             # Absatz allein zu lang -> vorherigen Puffer abschließen.
             if buf:
                 chunks.append("\n\n".join(buf))
-                buf = []
+                buf, size = [], 0
             chunks.extend(_split_oversized_paragraph(p, max_chars))
 
     if buf:
