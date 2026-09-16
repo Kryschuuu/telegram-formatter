@@ -11,12 +11,11 @@ Deckt ab:
 
 from __future__ import annotations
 
-import re
 import pathlib
 
-from telegram_formatter import utils as u
-from telegram_formatter import app as app_module
 from telegram_formatter import __version__
+from telegram_formatter import app as app_module
+from telegram_formatter import utils as u
 
 
 # ------------------------------------------------------------------ Helpers
@@ -188,7 +187,7 @@ def test_regular_bold_balanced_over_chunks():
 
 
 def test_rich_bold_strike_underline_balanced():
-    for delim, wrapper in [("**", "**"), ("~~", "~~"), ("<u>", "__")]:
+    for wrapper in ("**", "~~", "__"):
         # Rich: __ wird zu <u>
         if wrapper == "__":
             txt = "__" + ("wort " * 8000) + "__"
@@ -254,9 +253,77 @@ def test_backend_error_message_names_64000(client=None):
 
 def test_build_messages_rejects_over_64000_via_shared_limit(monkeypatch=None):
     # build_messages selbst hat kein 64000-Limit, app.py schon — hier smoke
-    assert __version__ == "2.11.0"
+    assert __version__ == "2.11.1"
 
 
 def test_faq_mentions_64000():
     html = (pathlib.Path(app_module.__file__).parent / "templates" / "index.html").read_text(encoding="utf-8")
     assert "64000" in html
+
+
+# ------------------------------------------------------------------ v2.11.1: UTF-16-Maß, Fences, Carry-Cap
+def _utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def test_regular_emoji_chunks_respect_utf16_limit():
+    # Telegram zählt in UTF-16-Units: 4000 Emoji = 8000 Units → mind. 2 Chunks.
+    txt = "🚀" * 4000
+    msgs = _regular_payloads(txt)
+    assert len(msgs) >= 2
+    for m in msgs:
+        assert _utf16_len(_html_of(m)) <= u.REGULAR_MESSAGE_MAX_CHARS
+    assert "".join(_html_of(m) for m in msgs) == txt
+
+
+def test_rich_emoji_chunks_respect_utf16_limit():
+    txt = "$x$ " + "🎉" * 20000
+    msgs = _rich_payloads(txt)
+    assert len(msgs) >= 2
+    for m in msgs:
+        assert _utf16_len(_markdown_of(m)) <= u.RICH_MESSAGE_MAX_CHARS
+
+
+def test_hard_split_respects_utf16_budget_and_is_lossless():
+    txt = "🚀" * 3000 + "x" * 100
+    parts = u._hard_split(txt, 4096)
+    assert "".join(parts) == txt
+    assert all(_utf16_len(p) <= 4096 for p in parts)
+    assert all("�" not in p for p in parts)  # kein zerrissener Codepoint
+    assert u._hard_split("", 10) == [""]
+
+
+def test_unclosed_fence_is_atomic_to_eof():
+    txt = "Intro $x$ und Code:\n```python\na = $x$ + 1\nrest ohne ende"
+    ranges = u._atomic_ranges(txt)
+    assert (txt.index("```"), len(txt)) in ranges
+    # Kein Formel-Span im offenen Code:
+    assert [s.content for s in u.iter_math_spans(txt, skip_code_fences=True)] == ["x"]
+
+
+def test_unclosed_oversized_fence_splits_into_closed_blocks():
+    inner = "\n".join(f"line {i} " + "x" * 60 for i in range(800))
+    txt = "$m$\n\n```python\n" + inner  # absichtlich ohne Closing-Fence
+    msgs = _rich_payloads(txt)
+    assert len(msgs) >= 2
+    for m in msgs:
+        md = _markdown_of(m)
+        if "```" in md:
+            assert md.count("```") % 2 == 0
+        assert _utf16_len(md) <= u.RICH_MESSAGE_MAX_CHARS
+    code_chunks = [m for m in msgs if "line " in _markdown_of(m)]
+    assert code_chunks
+    for m in code_chunks:
+        assert "```python" in _markdown_of(m)
+
+
+def test_rich_carry_depth_is_capped_and_chunks_stay_valid():
+    depth = 12
+    txt = "$x$ " + "<u>" * depth + ("wort " * 8000) + "</u>" * depth
+    msgs = _rich_payloads(txt)
+    assert len(msgs) >= 2
+    for m in msgs:
+        md = _markdown_of(m)
+        assert _utf16_len(md) <= u.RICH_MESSAGE_MAX_CHARS
+        # Nie ungeschlossen (äußere Ebenen dürfen in Folge-Chunks entfallen):
+        assert md.count("<u>") <= md.count("</u>")

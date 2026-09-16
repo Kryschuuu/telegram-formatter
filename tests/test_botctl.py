@@ -196,3 +196,51 @@ def test_send_owner_fallback_for_invalid_user(tmp_path, monkeypatch, capsys):
                   "--local-trust", "--send", "--file", str(payload),
                   "--ledger", str(tmp_path / "r.json")])
     assert rc == 0, capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# v2.11.1: widersprüchliche Flags, unlesbare Eingabe, korrupter Trail
+# --------------------------------------------------------------------------- #
+def test_send_rejects_bot_source_with_local_trust(tmp_path, capsys):
+    """--bot-source (Gate an) + --local-trust (Gate aus) schließen sich aus (Exit 2)."""
+    from telegram_formatter.botctl import main
+
+    rc = main(["send", "--chat-id", "-1", "--bot-source", "bot.py", "--local-trust",
+               "--ledger", str(tmp_path / "r.json")])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "schließen sich aus" in out
+    assert "Traceback" not in out
+
+
+def test_send_missing_file_is_clean_input_error(tmp_path, monkeypatch, capsys):
+    """Fehlende --file meldet Exit 2 ohne Traceback — und ohne Session zu öffnen."""
+    import telegram_formatter.botctl as bc
+
+    monkeypatch.setattr(
+        bc, "get_me",
+        lambda secret, **kw: {"ok": True, "result": {
+            "id": 123456789, "is_bot": True, "username": "b", "first_name": "B"}},
+    )
+    monkeypatch.setenv("BOTCTL_TEST_TOKEN", "123456789:" + "A" * 35)
+
+    rc = bc.main(["send", "--chat-id", "-1", "--token-env", "BOTCTL_TEST_TOKEN",
+                  "--local-trust", "--file", str(tmp_path / "fehlt.md"),
+                  "--ledger", str(tmp_path / "r.json")])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "nicht lesbar" in out
+    assert "Traceback" not in out
+
+
+def test_corrupt_ledger_is_clean_error(tmp_path, capsys):
+    """Korrupter Audit-Trail meldet sich sauber (Exit 1) statt als Traceback."""
+    from telegram_formatter.botctl import main
+
+    trail = tmp_path / "reviews.json"
+    trail.write_text("{korrupt", encoding="utf-8")
+    rc = main(["verify", str(CLEAN_BOT), "--bot-id", "1", "--ledger", str(trail)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "beschädigt" in out
+    assert "Traceback" not in out

@@ -167,3 +167,16 @@ def test_status_changes_require_a_known_bot():
         registry.mark_approved(1, "a" * 64)
     with pytest.raises(RegistrationError):
         registry.mark_rejected(1, "grund")
+
+
+def test_register_rejects_non_numeric_getme_id():
+    """v2.11.1: Fremde getMe-Antwort ohne numerische ID meldet RegistrationError (kein ValueError)."""
+    registry = BotRegistry(
+        verify=lambda _secret: {
+            "ok": True,
+            "result": {"is_bot": True, "id": "keine-zahl", "username": "x", "first_name": "y"},
+        },
+        clock=FakeClock(),
+    )
+    with pytest.raises(RegistrationError, match="keine Zahl"):
+        registry.register(BotToken.parse(SECRET), owner_ref="alice")
