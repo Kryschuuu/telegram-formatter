@@ -113,6 +113,8 @@
     var convertTimer = null;
     var PLACEHOLDER = "Vorschau erscheint hier…";
     var REGULAR_LIMIT = 4096;
+    var RICH_LIMIT = 32768;
+    var INPUT_LIMIT = 64000;
     var lastFocused = null;
     // Zuletzt im Dialog gewählter Weg. Bewusst nur RAM (kein localStorage):
     // die Wahl ist eine Sitzungs-Präferenz, kein Persistenzversprechen.
@@ -191,10 +193,16 @@
         }
         var n = input.value.length;
         charCount.textContent = n.toLocaleString("de-DE") + " Zeichen";
-        charCount.classList.toggle("is-over", n > REGULAR_LIMIT);
-        charCount.title = n > REGULAR_LIMIT
-            ? "Länger als 4096 Zeichen — wird automatisch in mehrere Nachrichten aufgeteilt (bzw. als Rich Message bis 32768 gesendet)."
-            : "Telegram-Limit: 4096 Zeichen pro klassischer Nachricht, 32768 pro Rich Message.";
+        charCount.classList.toggle("is-over", n > INPUT_LIMIT);
+        if (n > INPUT_LIMIT) {
+            charCount.title = "Eingabe zu lang — maximal 64000 Zeichen (wird beim Senden abgewiesen). Aktuell " +
+                n.toLocaleString("de-DE") + " Zeichen.";
+        } else if (n > REGULAR_LIMIT) {
+            charCount.title = "Länger als 4096 Zeichen — wird automatisch in mehrere Nachrichten aufgeteilt " +
+                "(Rich bis 32768, insgesamt bis 64000 — Codeblöcke bleiben je Nachricht wohlgeformt)." ;
+        } else {
+            charCount.title = "Telegram-Limit: 4096 Zeichen klassisch / 32768 Rich — Eingaben bis 64000 werden sinnvoll aufgeteilt." ;
+        }
     }
 
     function setSendStatus(text, kind) {

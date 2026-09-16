@@ -1,6 +1,6 @@
 # Formatierung: Telegram × LLMs × Implementierungsstand
 
-> Stand: v2.7.0 (2026-09-14). Dieses Dokument stellt drei Seiten gegenüber:
+> Stand: v2.11.0 (2026-09-16). Dieses Dokument stellt drei Seiten gegenüber:
 > **was Telegram an Formatierung anbietet**, **womit gängige LLMs arbeiten**
 > (Ausgabeformate) und **was dieses Projekt bereits wie gut umsetzt**.
 > Quellen für die Telegram-Fähigkeiten: die offizielle Bot-API-Dokumentation
@@ -74,7 +74,7 @@ Legende: ✅ umgesetzt · 🟡 teilweise/Fallback · ❌ nicht umgesetzt
 | **Inline-Mentions** | `<a href="tg://user?id=…">` | keine LLM-Syntax | ❌ | braucht User-IDs; `@usernames` erkennt Telegram selbst |
 | Verschachtelte Formatierung | erlaubt (außer code/pre) | `**a *b* c**` | 🟡 | einfache Verschachtelungen funktionieren (Reihenfolge der Regex-Ersetzungen); beliebig tiefe/reihenfolge-sensitive Fälle sind durch Regex begrenzt |
 | Escaping/Sicherheit | `< > & "` müssen entitisiert werden | beliebige Nutzereingabe | ✅ | volles Escaping + Attribut-Allowlist (Audit M-1); NUL-Filter |
-| Syntaxbewusstes Splitting | 4096/32768-Limits | lange Antworten | ✅ | keine zerrissenen Tags/Formeln/Fences an Chunk-Grenzen (Audit B-1) |
+| Syntaxbewusstes Splitting | 4096/32768-Limits (Eingaben bis 64000 sinnvoll verteilt) | lange Antworten | ✅ | keine zerrissenen Tags/Formeln/Fences an Chunk-Grenzen; ```-Blöcke behalten Sprache je Chunk, **/~~/<u> werden balanciert; Leerzeilen bleiben erhalten (v2.11.0, Audit B-1) |
 
 ## 4. Redirect-URLs (v2.7.0)
 

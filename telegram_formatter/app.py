@@ -242,9 +242,12 @@ SHARED_WEB_SENDS_PER_MINUTE_TOTAL = _env_int(
     "TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE_TOTAL", 30
 )
 #: Längenkappe für anonyme Browser-Sendungen (authentizierte Aufrufe behalten
-#: ``MAX_INPUT_CHARS``). Ein geteilter Chat soll keine 100k-Zeichen-Wände
-#: bekommen — lange Texte gehören in den privaten BYOB-Weg.
-SHARED_WEB_MAX_INPUT_CHARS = _env_int("TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS", 8000,
+#: ``MAX_INPUT_CHARS``). Seit v2.11.0 auf **64000** erhöht — bis dahin wurden
+#: Nachrichten >8000 Zeichen abgewiesen (Fehler „Eingabe zu lang“). Lange
+#: Eingaben werden über :mod:`telegram_formatter.utils` sinnvoll aufgeteilt
+#: (4096/32768 pro Telegram-Chunk, Formatierung bleibt über Chunk-Grenzen
+#: erhalten — Codeblöcke werden als eigenständige Blöcke neu geöffnet).
+SHARED_WEB_MAX_INPUT_CHARS = _env_int("TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS", 64_000,
                                       minimum=1)
 #: Fehlerantwort, wenn kein Shared-Zugang offen ist (weder API noch Browser).
 SHARED_SEND_DISABLED = (
