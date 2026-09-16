@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.10.0-blue)
+![Version](https://img.shields.io/badge/version-2.11.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -35,9 +35,11 @@ Nachrichten.
   `[text]([url](url))` werden geglättet.
 - **Tabellen** — Pipe-Tabellen werden in native Rich-Markdown-Tabellen
   übersetzt (GFM).
-- **Automatisches Splitting** — Nachrichten werden an Absatz-, Zeilen- und
-  Wortgrenzen aufgeteilt (4096 Zeichen für klassische, 32768 für Rich
-  Messages), ohne Formatierungen oder Tabellen zu zerreißen.
+- **Automatisches Splitting** — Nachrichten bis **64000 Zeichen** werden
+  an Absatz-, Zeilen- und Wortgrenzen aufgeteilt (4096 Zeichen für
+  klassische, 32768 für Rich Messages), ohne Formatierungen, Tabellen oder
+  Codeblöcke zu zerreißen — ein zu langer ```-Block wird in mehrere
+  eigenständige Blöcke mit erhaltener Sprache zerlegt (seit v2.11.0).
 - **Zwei Versandwege, frei wählbar (seit v2.6.0)** — der Bestätigungsdialog
   stellt den Weg aus, der tatsächlich offen ist: **geteilter Bot**
   `@mdtotxt_bot` in den öffentlichen Demo-Kanal
@@ -158,7 +160,7 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 | `TELEGRAM_FORMATTER_SHARED_WEB_SEND` | Geteilter Bot im Browser nutzbar (Standard `1`). Wirkt nur zusammen mit gepinntem `TELEGRAM_CHAT_ID`; `0` = API-only wie in 2.5.0, der Browser sendet dann ausschließlich über BYOB |
 | `TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE` | Anonyme Browser-Sendungen pro IP (Standard 4) |
 | `TELEGRAM_FORMATTER_SHARED_WEB_SENDS_PER_MINUTE_TOTAL` | Anonyme Browser-Sendungen pro Minute **instanzweit** (Standard 30) |
-| `TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS` | Längenkappe für anonyme Browser-Sendungen (Standard 8000; authentifizierte Aufrufe nutzen `TELEGRAM_FORMATTER_MAX_INPUT_CHARS`) |
+| `TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS` | Längenkappe für anonyme Browser-Sendungen (Standard **64000**; authentifizierte Aufrufe nutzen `TELEGRAM_FORMATTER_MAX_INPUT_CHARS` — Eingaben bis 64000 werden sinnvoll aufgeteilt, Codeblöcke bleiben je Chunk wohlgeformt) |
 
 Hintergrund der Härtungen: [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
 
@@ -479,6 +481,6 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.10.0** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.11.0** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).

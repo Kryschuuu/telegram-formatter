@@ -18,11 +18,20 @@ Eingabe (Markdown mit LaTeX ``$...$``/``$$...$$`` und Pipe-Tabellen)
        |        `-> convert_deepseek_latex_syntax()  \(..\)->$..$, \[..\]->$$..$$
        |            (Inhalt normalisiert: $ x $ -> $x$, Leerzeilen im Block raus)
        |     -> _safe_chunk(..., 32768)       Aufteilung an Formel-/Blockgrenzen
+       |        -> _rebalance_markdown_chunks (seit v2.11.0: **, ~~, <u> bleiben über Grenzen erhalten)
        |     -> payload "sendRichMessage"
        `-- Regular-Pfad (reiner Text mit Formatierung)
              -> markdown_to_html()            Telegram-HTML (fett/kursiv/...)
              -> chunk_text(..., 4096)         Aufteilung am 4096-Limit
+             -> _rebalance_html_chunks        Tags über Grenzen nachtragen
              -> payload "sendMessage"
+
+Eingaben bis **64000** Zeichen werden komplett angenommen und sinnvoll
+aufgeteilt — Codeblöcke (```...```) und Formatierungen (**fett**, *kursiv*,
+~~durchgestrichen~~, <u>unterstrichen</u>) bleiben dabei in *jedem* Chunk
+wohlgeformt: Ein zu langer Codeblock wird in mehrere eigenständige
+```-Blöcke mit erhaltener Sprache zerlegt, offene Formatierungen werden am
+Chunk-Ende geschlossen und im nächsten Chunk wieder geöffnet (seit v2.11.0).
 
 `iter_math_spans()` ist der gemeinsame Formel-Scanner für alle vier Pfade
 (Erkennung/Routing, Konvertierung, Schutz im HTML-Pfad, Chunk-Sicherheit) —
@@ -1019,14 +1028,15 @@ def needs_rich_message(text: str) -> bool:
 #: Reserve pro Chunk für nachgetragene Öffner + angehängte Schließer, damit
 #: die harte 4096-Grenze nie gerissen wird (4 Tags × ~28 Zeichen, gerundet).
 _HTML_BALANCE_RESERVE = 224
+#: Reserve für den Rich-Pfad: Markdown-Marker (** / ~~ / <u>) werden nach
+#: dem Chunking balanciert; 64 Zeichen decken 4 offene Marker locker ab.
+_RICH_BALANCE_RESERVE = 64
 #: Max. Tiefe, die über Chunk-Grenzen hinweg nachgetragen (reopened) wird.
 _HTML_MAX_CARRY = 4
 _TAG_SCAN_RE = re.compile(r"<(/?)(b|i|u|s|code|pre|blockquote|a)(\s[^<>]*)?>", re.I)
 #: Tags, die beim nächsten Chunk wieder geöffnet werden (Links ausgenommen:
 #: deren href-Länge wäre nicht kalkulierbar — sie werden nur sauber geschlossen).
 _CARRYABLE_TAGS = frozenset({"b", "i", "u", "s", "code", "pre", "blockquote"})
-
-
 def _dangling_tail(chunk: str) -> str:
     """Fragment am Chunk-Ende, das einen unvollständigen Tag/Entity anzeigt.
 
@@ -1102,15 +1112,86 @@ def _rebalance_html_chunks(chunks: list[str]) -> list[str]:
     return result
 
 
+def _rebalance_markdown_chunks(chunks: list[str]) -> list[str]:
+    """Balanciert Markdown-Formatierungen über Chunk-Grenzen (Rich-Pfad, v2.11.0).
+
+    Offene Marker (**fett**, ~~durchgestrichen~~, <u>unterstrichen</u>) werden
+    am Chunk-Ende geschlossen und im nächsten Chunk wieder geöffnet, damit
+    die Formatierung in *jedem* Chunk wohlgeformt bleibt und nicht verloren
+    geht. Codeblöcke (```), Inline-Code (`...`) und Formeln sind atomar und
+    werden hier nicht als Formatierung behandelt — sie sind über
+    :func:`_atomic_ranges` geschützt.
+    """
+    _CLOSING = {"**": "**", "~~": "~~", "<u>": "</u>"}
+    result: list[str] = []
+    stack: list[tuple[str, str]] = []
+    for idx, raw in enumerate(chunks):
+        carry_open = "".join(op for _, op in stack)
+        protected = _atomic_ranges(raw)
+
+        def _is_protected(pos: int) -> tuple[bool, int]:
+            for a, b in protected:
+                if a <= pos < b:
+                    return True, b
+                if pos < a:
+                    break
+            return False, pos
+
+        cur: list[tuple[str, str]] = list(stack)
+        i = 0
+        n = len(raw)
+        while i < n:
+            is_prot, nxt = _is_protected(i)
+            if is_prot:
+                i = nxt
+                continue
+            low3 = raw[i : i + 3].lower()
+            low4 = raw[i : i + 4].lower()
+            if low3 == "<u>":
+                cur.append(("<u>", "<u>"))
+                i += 3
+                continue
+            if low4 == "</u>":
+                for k in range(len(cur) - 1, -1, -1):
+                    if cur[k][0] == "<u>":
+                        del cur[k]
+                        break
+                i += 4
+                continue
+            if raw.startswith("**", i):
+                if cur and cur[-1][0] == "**":
+                    cur.pop()
+                else:
+                    cur.append(("**", "**"))
+                i += 2
+                continue
+            if raw.startswith("~~", i):
+                if cur and cur[-1][0] == "~~":
+                    cur.pop()
+                else:
+                    cur.append(("~~", "~~"))
+                i += 2
+                continue
+            i += 1
+
+        closing = "".join(_CLOSING[typ] for typ, _ in reversed(cur))
+        balanced = carry_open + raw + closing
+        result.append(balanced)
+        stack = cur
+    return result
+
+
+
 def _atomic_ranges(text: str) -> list[tuple[int, int]]:
-    """Indivisible Bereiche des Rich-Textes: Fenced Code und Formeln
+    """Indivisible Bereiche des Rich-Textes: Fenced Code, Inline-Code und Formeln
     (``$$\u2026$$``, ``$\u2026$`` — und defensiv die Backslash-Delimiter).
 
     Liefert sortierte, nicht überlappende ``(start, end)``-Paare. Ein Chunk-
-    schnitt darf nie *in* einem dieser Bereiche landen (B-1). Der Formel-Teil
-    kommt aus dem gemeinsamen Scanner (:func:`iter_math_spans`, Audit O-3),
-    damit „ist Formel“ überall dieselbe Bedeutung hat — inklusive der
-    Normalisierung, die :func:`convert_deepseek_latex_syntax` davor anwendet.
+    schnitt darf nie *in* einem dieser Bereiche landen (B-1) — sonst zerreißt
+    die Teilung Code oder Formeln. Der Formel-Teil kommt aus dem gemeinsamen
+    Scanner (:func:`iter_math_spans`, Audit O-3), Inline-Code (`` `...` ``) ist
+    seit v2.11.0 ebenfalls atomar, damit ``*``/``**`` darin nicht als
+    Formatierung fehlinterpretiert wird.
     """
     ranges: list[tuple[int, int]] = []
     i, n = 0, len(text)
@@ -1124,6 +1205,14 @@ def _atomic_ranges(text: str) -> list[tuple[int, int]]:
         if text.startswith("\\\\", i):
             i += 2  # Doppelter Backslash: kein Delimiter-Beginn
             continue
+        # Inline-Code `...` (einzeilig, nicht leer) — atomar, schützt vor
+        # Fehlinterpretation von **/~~/etc innerhalb von Code.
+        if text[i] == "`":
+            close = text.find("`", i + 1)
+            if close != -1 and "\n" not in text[i + 1 : close] and close > i + 1:
+                ranges.append((i, close + 1))
+                i = close + 1
+                continue
         span = _match_math_span(text, i)
         if span is not None:
             ranges.append((span.start, span.end))
@@ -1139,6 +1228,12 @@ def _split_guarded_unit(unit: str, max_chars: int) -> list[str]:
     Die ``$$…$$``/``` ```…``` ``/``$…$``-Delimiters werden je Fragment neu
     gesetzt, damit jedes Stück für Telegram eine vollständige Formel bzw. ein
     vollständiger Code-Block bleibt (nur die *Inhalte* teilen sich auf).
+
+    Codeblöcke: Seit v2.11.0 bleibt die Sprachangabe (z. B. ``python``) in
+    **jedem** Fragment erhalten und Leerzeilen im Code gehen nicht verloren —
+    ein 64000-Zeichen-Block wird so in mehrere eigenständige, korrekt
+    gefence'te Blöcke zerlegt, jeweils mit gleicher Sprache und korrekter
+    Einrückung.
     """
     for delim in ("$$", "```", "$"):
         if len(unit) > 2 * len(delim) and unit.startswith(delim) and unit.endswith(delim):
@@ -1148,15 +1243,28 @@ def _split_guarded_unit(unit: str, max_chars: int) -> list[str]:
                 nl = inner.find("\n")
                 if 0 < nl <= 64:
                     head, inner = inner[: nl + 1], inner[nl + 1 :]
+                # Sprache für alle Fragmente bewahren; leere head bedeutet generisches ```
+                budget = max(max_chars - 2 * len(delim) - len(head) - 2, 16)
+                # Leerzeilen bewahren: splitlines(keepends=True) behält \n,
+                # leere Zeilen werden als "\n" repräsentiert.
+                raw_lines = inner.splitlines(keepends=True)
+                # Falls inner mit \n endet, ist das letzte Element bereits mit \n;
+                # falls nicht, bleibt letztes ohne \n — _group kommt damit zurecht.
+                # Leere Eingabe (nur head) ergibt eine Zeile.
+                if not raw_lines:
+                    raw_lines = [""]
+                parts = _group(raw_lines, budget, "") or [""]
+                fragments: list[str] = []
+                for part in parts:
+                    body = part if part.endswith("\n") else part + "\n"
+                    fragments.append(f"```{head}{body}```")
+                return [f for f in fragments if f]
             budget = max(max_chars - 2 * len(delim) - len(head) - 2, 16)
             lines = inner.split("\n")
             parts = _group([ln + "\n" for ln in lines if ln != ""], budget, "") or [""]
             fragments: list[str] = []
-            for index, part in enumerate(parts):
-                if delim == "```":
-                    body = part if part.endswith("\n") else part + "\n"
-                    fragments.append(f"```{head}{body}```" if index == 0 else f"```\n{body}```")
-                elif delim == "$$":
+            for part in parts:
+                if delim == "$$":
                     fragments.append(f"$${part.strip()}$$")
                 else:
                     fragments.append(f"${part.strip()}$")
@@ -1252,7 +1360,8 @@ def build_messages(raw_text: str, chat_id: int | str) -> list[TelegramMessage]:
 
     if needs_rich_message(text):
         rich_text = markdown_to_rich_markdown(text)
-        chunks = _safe_chunk(rich_text, RICH_MESSAGE_MAX_CHARS)
+        chunks = _safe_chunk(rich_text, RICH_MESSAGE_MAX_CHARS - _RICH_BALANCE_RESERVE)
+        chunks = _rebalance_markdown_chunks(chunks)
         return [
             TelegramMessage(
                 kind="rich",

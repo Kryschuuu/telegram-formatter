@@ -112,4 +112,4 @@ def test_render_yaml_documents_public_supergroup_setup():
 
 
 def test_version_bumped_to_2_9_0():
-    assert __version__ == "2.10.0"
+    assert __version__ == "2.11.0"

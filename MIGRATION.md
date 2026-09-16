@@ -175,7 +175,7 @@ Verträge — alle abwärtskompatibel für den **authentifizierten** API-Weg:
 | Alt (≤ 2.5.0) | Neu (≥ 2.6.0) | Auswirkung |
 |---|---|---|
 | `<body data-configured="1\|0">` (= „Shared-Versand aus dem Browser möglich“) | `<body data-shared-send>` + `<body data-shared-configured>` (+ `data-byob-enabled`) | Getrennte Aussagen: „Bot existiert“ vs. „Bot ist im Browser nutzbar“. Eigenes Template-Overlay muss die Attribute umbenennen |
-| `POST /api/send` ohne `X-Auth-Token` ⇒ immer 503 | offen, wenn `TELEGRAM_FORMATTER_SHARED_WEB_SEND=1` (Standard) **und** `TELEGRAM_CHAT_ID` gepinnt | Anonyme Aufrufe brauchen `"confirm_public": true` und unterliegen `…_MAX_INPUT_CHARS` (8000) statt 100 000 |
+| `POST /api/send` ohne `X-Auth-Token` ⇒ immer 503 | offen, wenn `TELEGRAM_FORMATTER_SHARED_WEB_SEND=1` (Standard) **und** `TELEGRAM_CHAT_ID` gepinnt | Anonyme Aufrufe brauchen `"confirm_public": true` und unterliegen `…_MAX_INPUT_CHARS` (**64000** seit v2.11.0, zuvor 8000) statt 100 000 |
 | `window.tfSendLabel` (von `byob.js` gesetzt, von `app.js` gelesen) | entfällt — `app.js` leitet die Beschriftung aus `tfByob.isActive()` ab; `byob.js` dispatcht `tf:botsessionchange` am `document` | Eigene Skripte, die das Label überschrieben haben, stattdessen `window.tfByob.describeTarget()` benutzen |
 | `telegram_formatter.app._extract_request()` | `_valid_text(data, max_chars=None)`, `_resolve_target_chat(data, require_chat=…)`, `_public_consent(data)` | Nur internal (Unterstrich-Präfix), aber Referenzen in Forks bitte anpassen |
 
@@ -195,3 +195,23 @@ BYOB-Endpunkten (`/api/byob/*` verlangen weiterhin Session-Handle +
       setzen (verhält sich dann wieder wie 2.5.0)
 - [ ] Bestehende Render-Dienste: neue Variable einmalig im Dashboard pflegen
       (Blueprint-Wirksamkeit siehe Abschnitt 3, „Deployment-Fallback“)
+
+
+## 10. Nachzug: v2.11.0 — 64000 Zeichen & format-erhaltendes Splitting
+
+Eingaben bis **64000 Zeichen** werden jetzt im Web-Editor wie im
+API-Weg akzeptiert und sinnvoll auf Telegram-Limits verteilt (Regular 4096 /
+Rich 32768). Neu gegenüber 2.10.0:
+
+| Bereich | Alt (≤ 2.10.0) | Neu (≥ 2.11.0) |
+|---|---|---|
+| `TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS` | Standard `8000`, Fehler `Eingabe zu lang (max. 8000 Zeichen)` | Standard `64000` (`MAX_BODY_BYTES` 512 KiB bleibt ausreichende Budget-Grenze) |
+| Codeblock-Split |  ```-Block wurde am Längenlimit mitten im Fences getrennt — Folgechunk ohne ``` | `utils._split_guarded_unit`: jede Chunk-Kopie behält den ursprünglichen Fences-Kopf (` ```python` etc.), Leerzeilen bleiben via `splitlines(keepends=True)` erhalten, maximale Blockgröße respektiert `delim + head`-Budget |
+| Inline-Code | grenzübergreifende ```/`` ` ``-Bereiche konnten als Formatierung fehlinterpretiert werden | `utils._atomic_ranges`: einzeilige ` ` ` ` ` nicht leer, nicht in ```, korrekt als atomar geschützt |
+| Regular-Split Nachsorge | keine Balancierung — `**`/`~~`/`<u>` konnten ungerade über Grenzen laufen | `utils._rebalance_html_chunks`: öffnende/schließende Tags gleichen sich je Chunk aus, atomare Bereiche geschützt |
+| Rich-Split Nachsorge | keine Balancierung — `**`/`~~`/`__` → `<u>` konnten ungerade über Grenzen laufen | `utils._rebalance_markdown_chunks`: spiegelt HTML-Logik für Rich-Markdown, Reserve 64 Zeichen pro Chunk lässt Platz für Balancing-Tags |
+
+**Keine** Breaking-API: bestehende Aufrufe liefern gleiche Chunks für
+kurze Texte; lange Texte, die zuvor 400er erzielten, liefern jetzt
+mehrere wohlgeformte Chunks. `render.yaml` bleibt unverändert (Single-Worker
++ 8 Threads für BYOB-RAM-Sessions).

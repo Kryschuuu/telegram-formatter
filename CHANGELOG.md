@@ -4,6 +4,28 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.11.0] - 2026-09-16
+
+### Added
+- Eingaben bis **64000 Zeichen** im Web-Editor wie in `/api/*` (§ `MAX_INPUT_CHARS` bleibt 100 000, `SHARED_WEB_MAX_INPUT_CHARS` jetzt 64000): überlange Texte werden statt 400er sinnvoll in Telegram-Chunks verteilt (Regular ≤ 4096, Rich ≤ 32768), selbst wenn die Quelle nur einen einzigen riesigen Absatz enthält.
+- Codeblock-Split mit Sprach-Erhalt: ein zu langer ```-Block wird in mehrere eigenständige Blöcke zerlegt, jeder mit identischem Fence-Kopf (z. B. ```python) und korrektem Closing; dadurch bleiben sowohl Classic- als auch Rich-Pfad-Rendering intakt.
+- Leerzeilen-Erhalt beim Split: Blank-Lines zwischen Absätzen/Formeln gehen nicht verloren (`splitlines(keepends=True)` statt `split('\n')`).
+
+### Fixed
+- **Codeblock-Split-Bug** (Peer-Review B-1/Nachzug): langer ```-Block riss mitten im Fences getrennt — Folgechunk ohne ```.
+- **Formatierungs-Balance über Chunk-Grenzen:** `**`/`~~`/`__` → `<u>` konnten ungerade über Grenzen laufen und ergaben ungeschlossenes HTML/Markdown. Neue Nachsorge `_rebalance_html_chunks` / `_rebalance_markdown_chunks` (mit Reserve 64 Zeichen) schließt pro Chunk korrekt.
+- **Atomic-Guard für Inline-Code:** ` ` ` Bereiche (einzeilig, nicht leer) werden als atomar geschützt, damit `**`/`~~` darin nicht als Formatierung fehlinterpretiert werden; fenced Bereiche bleiben ohnehin atomar und `\\`-escaped Zeichen werden sauber übersprungen.
+
+### Changed
+- `telegram_formatter/app.py`: `SHARED_WEB_MAX_INPUT_CHARS` Default 8000 → 64000 (env `TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS` überschreibt weiter), Fehlermeldung spiegelt neue Kappe.
+- `telegram_formatter/utils.py`: Header-Docstring auf 64000-Flow erweitert; `_FENCE_RE`, `_atomic_ranges`, `_split_guarded_unit`, neue `_rebalance_*` + 64-Zeichen-Reserve, Rich-Pfad nutzt `RICH - RESERVE` + Rebalancing; redundante Regex-Konstanten entfernt.
+- `README` / `docs/DEPLOYMENT` / `docs/ARCHITECTURE` / `docs/FORMATTING` / `MIGRATION §10` dokumentieren 64000 und den erhaltenen Split.
+- Version `2.10.0` → `2.11.0`.
+
+### Notes
+- Keine Breaking-API: kurze Texte erzeugen identische Chunks; lange Texte (> 8000) liefern jetzt statt 400 mehrere wohlgeformte Chunks.
+- `render.yaml` unverändert (Single-Worker + 8 Threads für BYOB-RAM-Sessions).
+
 ## [2.10.0] - 2026-09-15
 
 **Formeln aus LLM-Antworten stehen nicht mehr wörtlich in der Nachricht.**

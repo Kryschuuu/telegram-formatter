@@ -79,10 +79,14 @@ Parameter ein. `utils.py` importiert weder `flask` noch `requests` noch
      (Rand-Whitespace raus, Zeilenumbrüche in Inline-Formeln zu Leerzeichen,
      Leerzeilen im Block zu einem Umbruch) — ohne das rendert Telegram die
      Formel nicht und zeigt den Quelltext (v2.10.0) → `_safe_chunk(…, 32768)`
-     → Payload `rich_message.markdown`.
+     → `_rebalance_markdown_chunks` (**/~~/<u> bleiben über Grenzen erhalten) → Payload `rich_message.markdown`.
    - **Nein → Regular-Pfad:** `markdown_to_html` (Telegram-HTML, mit
      Platzhalter-Schutz für Code/Formeln und vollständigem Escaping) →
-     `chunk_text(…, 4096)` → Payload `text` + `parse_mode="HTML"`.
+     `chunk_text(…, 4096)` → `_rebalance_html_chunks` (Tags bleiben über Grenzen erhalten) → Payload `text` + `parse_mode="HTML"`.
+   - **Eingaben bis 64000** werden in beiden Pfaden in mehrere Telegram-Chunks
+     aufgeteilt; Codeblöcke werden als eigenständige ```-Blöcke je Chunk neu
+     geöffnet (Sprache bleibt), Formatierungen (**/~~/<u>) werden balanciert
+     (seit v2.11.0).
    - Auf **beiden** Pfaden werden vorher die Links normalisiert
      (`_normalize_links`, v2.7.0): bekannte Redirect-URLs
      (`google.com/url?q=…`, `youtube.com/redirect?q=…`, …) werden über

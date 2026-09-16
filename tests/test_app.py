@@ -446,7 +446,7 @@ def shared_web_client(client, monkeypatch):
     monkeypatch.setattr(app_module, "SHARED_WEB_SEND", True)
     monkeypatch.setattr(app_module, "SHARED_WEB_SENDS_PER_MINUTE", 0)
     monkeypatch.setattr(app_module, "SHARED_WEB_SENDS_PER_MINUTE_TOTAL", 0)
-    monkeypatch.setattr(app_module, "SHARED_WEB_MAX_INPUT_CHARS", 8000)
+    monkeypatch.setattr(app_module, "SHARED_WEB_MAX_INPUT_CHARS", 64000)
     monkeypatch.setattr(app_module, "send_message", lambda m, t, **kw: {"ok": True})
     return client
 
