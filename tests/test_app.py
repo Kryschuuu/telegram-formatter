@@ -280,6 +280,8 @@ def test_root_shim_exposes_the_identical_wsgi_object():
     }
     assert routes == {
         "/",
+        # Liveness-Probe für Container-Orchestrierung (v2.12.0).
+        "/healthz",
         "/api/convert",
         "/api/send",
         # BYOB-Websessions (v2.2.0): derselbe WSGI-App-Kern, daher auch über
@@ -635,3 +637,45 @@ def test_index_without_shared_bot(client):
     assert 'data-shared-send="0"' in page
     assert 'data-shared-configured="0"' in page
     assert "Kein Bot-Token gesetzt — nur Vorschau" in page
+
+
+# --------------------------------------------------------------------------- #
+# Liveness-Probe /healthz (Container-Orchestrierung, seit v2.12.0)
+# --------------------------------------------------------------------------- #
+def test_healthz_ok(client):
+    """200 + Liveness-JSON mit Paketversion — ohne jede Konfiguration."""
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    assert resp.is_json
+    assert resp.get_json() == {"status": "ok", "version": __version__}
+
+
+def test_healthz_needs_no_token_and_ignores_api_token(client, monkeypatch):
+    """GET bleibt offen, auch wenn POSTs ein Operator-Secret verlangen."""
+    monkeypatch.setattr(app_module, "API_TOKEN", "s3cret")
+    monkeypatch.setattr(app_module, "BOT_TOKEN", "")
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "ok"
+
+
+def test_healthz_is_not_rate_limited(client, monkeypatch):
+    """Probes dürfen nie 429 liefern — sonst killt der Orchestrator gesunde Container."""
+    monkeypatch.setattr(app_module, "SENDS_PER_MINUTE", 1)
+    monkeypatch.setattr(app_module, "CONVERTS_PER_MINUTE", 1)
+    for _ in range(10):
+        assert client.get("/healthz").status_code == 200
+    assert app_module._RATE_HITS == {}
+
+
+def test_healthz_has_security_headers(client):
+    resp = client.get("/healthz")
+    assert "Content-Security-Policy" in resp.headers
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_healthz_rejects_post_with_json_error(client):
+    """Nur GET — POST fällt auf den JSON-405-Handler (kein HTML)."""
+    resp = client.post("/healthz", json={})
+    assert resp.status_code == 405
+    assert resp.is_json

@@ -897,6 +897,21 @@ def _resolve_target_chat(data: dict, *, require_chat: bool) -> tuple[str | None,
 # --------------------------------------------------------------------------- #
 # Routen
 # --------------------------------------------------------------------------- #
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    """
+    Liveness-Probe für Container-Orchestrierung und Load-Balancer.
+
+    Absichtlich minimal und nebenwirkungsfrei: kein Template-Rendering (im
+    Gegensatz zu ``/``), kein Rate-Limit (Probes dürfen nie 429 liefern),
+    keine Authentifizierung (nur GET, ``_guard`` greift ausschließlich bei
+    schreibenden Methoden) und keine Konfigurationsdetails in der Antwort —
+    nur Liveness plus Paketversion für Deploy-Verifikation. Docker-Healthcheck
+    (``Dockerfile``) und ``render.yaml`` zeigen auf diesen Endpunkt.
+    """
+    return jsonify({"status": "ok", "version": __version__})
+
+
 @app.route("/", methods=["GET"])
 def index() -> str:
     """Rendert die Editor-Seite (Markdown/LaTeX -> Telegram-Vorschau)."""
