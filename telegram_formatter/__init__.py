@@ -29,7 +29,7 @@ from __future__ import annotations
 from telegram_formatter.sender import SendError, send_message
 from telegram_formatter.utils import TelegramMessage, build_messages
 
-__version__ = "2.11.1"
+__version__ = "2.12.0"
 
 __all__ = [
     "SendError",

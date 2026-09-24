@@ -4,6 +4,81 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.12.0] - 2026-09-24
+
+Minor-Release: produktionsreifes **Docker-Deployment mit Caddy** als
+TLS-Reverse-Proxy für lokale Netzwerke (Peer-Review-Bericht:
+`peer-review/2026-09_DOCKER-CADDY-DEPLOYMENT.md`). Abwärtskompatibel —
+keine API-Änderung, keine ENV-Umbenennung, keine Migration nötig.
+
+### Added
+- **Lokaler Produktions-Stack (Docker Compose + Caddy):**
+  - `Dockerfile` — schlankes Image auf `python:3.11-slim`: nur gepinnte
+    Laufzeit-Deps + Paket, unprivilegierter Nutzer (`appuser`), genau EIN
+    Gunicorn-Worker mit 8 Threads (BYOB-Sessions leben prozesslokal im RAM),
+    `HEALTHCHECK` auf `/healthz`, Logs nach stdout.
+  - `docker-compose.yml` — Dienste `app` + `caddy` auf isoliertem
+    Bridge-Netz: die App veröffentlicht **keine** Host-Ports (nur via Caddy
+    erreichbar), Caddy hört auf 80/443, startet erst bei gesunder App
+    (`service_healthy`) und persistiert Zertifikate in Named Volumes.
+    `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS=1` wird erzwungen (genau ein Hop),
+    Secrets kommen aus der git-ignorierten `.env`.
+  - `Caddyfile` — konkretes LAN-Beispiel für Server `192.168.0.10`:
+    `tls internal` (vollautomatisches Zertifikat-Management über Caddys
+    lokale CA — Ausstellung + Erneuerung ohne ACME/Certbot) und
+    Zugriffskontrolle per `remote_ip`: nur Client `192.168.0.20` (+ localhost
+    für lokale Checks) kommt durch, alle anderen Adressen erhalten `403`.
+    Admin-API deaktiviert (`admin off`).
+  - `.env.example` — Vorlage mit **allen** Variablen (Pflicht + Limits +
+    BYOB), Standard-Output-Kanal `https://t.me/mdtotxt_bot_web`,
+    Aufbewahrung 30 Tage; garantiert ohne tokenförmige Geheimnisse.
+  - `.dockerignore` — schlanker Build-Kontext, Secrets (`.env`) und Verlauf
+    (`.git`) landen nie im Image.
+- **`GET /healthz` (Liveness-Probe):** antwortet `{"status": "ok", "version"}`
+  ohne Template-Rendering, ohne Rate-Limit und ohne Authentifizierung (nur
+  GET; keine Konfigurationsdetails in der Antwort). Endpunkt für
+  Docker-`HEALTHCHECK` und `render.yaml`-Health-Check (dort `/` → `/healthz`).
+- **Dokumentation:** `docs/DOCKER.md` (Schritt-für-Schritt-Anleitung fürs
+  lokale Netz: Start, TLS-Vertrauen auf dem Client, ACL-Verifikation, Logs,
+  Update, Backup, Troubleshooting), `docs/API.md` (vollständige
+  Endpoint-Referenz inkl. `/healthz`, Auth, Limits, Fehlercodes),
+  `docs/DEPLOYMENT.md` verweist auf den Docker-Weg, `MIGRATION.md` §12,
+  README (Docker-Quickstart, Projektstruktur synchronisiert).
+
+### Changed
+- Version `2.11.1` → `2.12.0`.
+- `requirements-dev.txt`: `pyyaml` (nur für den Compose-Vertragstest;
+  Laufzeit bleibt bei Flask/gunicorn/requests).
+- `render.yaml`: `healthCheckPath` zeigt auf `/healthz` (billiger und
+  limit-frei; greift bei Blueprint-Diensten per Sync, Hand-Dienste
+  übernehmen es bei Bedarf im Dashboard).
+- README-Umgebungstabelle: `TELEGRAM_FORMATTER_CONVERTS_PER_MINUTE`
+  ergänzt (existierte im Code, fehlte in der Doku).
+
+### Tests
+- 26 neue Tests (**522 passed**, 1 jsdom-Smoke übersprungen wie bisher):
+  5× `/healthz` (Status/Version, Token-Unabhängigkeit, kein
+  Rate-Limit-Verbrauch, Security-Header, POST→405-JSON) und 21×
+  Deployment-Verträge (`tests/test_deployment.py`: Compose-Topologie,
+  Single-Worker-Garantie, Non-Root, Caddy-ACL/TLS, `.env`-Vollständigkeit,
+  Geheimnisfreiheit der Vorlage).
+- Produktions-Smoke-Test mit den exakten Dockerfile-Gunicorn-Flags
+  (`--workers 1 --threads 8`): `/healthz`, `/`, `/api/convert`, 404-JSON und
+  Security-Header verifiziert. Ruff + Bandit sauber.
+- Hinweis: `docker compose up` (E2E) wurde in dieser Umgebung nicht
+  ausgeführt — kein Container-Runtime verfügbar. Die Compose-Datei ist per
+  PyYAML geparst und per Vertragstest abgesichert; E2E-Schritte für den
+  Ziel-Host stehen in `docs/DOCKER.md` („Verifizieren").
+
+### Notes
+- Keine Breaking-API: `/healthz` ist rein additiv; bestehende Deployments
+  laufen unverändert weiter.
+- TLS im LAN braucht Client-Vertrauen: Browser auf `192.168.0.20` müssen
+  Caddys lokale CA einmalig importieren (Anleitung in `docs/DOCKER.md`) —
+  sonst HTTPS-Warnung trotz gültiger Konfiguration.
+- Follow-up (bewusst offengelassen): `read_only`-Container + `caddy validate`
+  im CI — dokumentiert im Peer-Review-Bericht.
+
 ## [2.11.1] - 2026-09-16
 
 Patch-Release aus dem Code-Review v2.11.1 (Peer-Review-Bericht:

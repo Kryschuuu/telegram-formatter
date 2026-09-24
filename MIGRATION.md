@@ -231,3 +231,22 @@ ENV-Änderung, keine Migration nötig. Verhaltenskorrekturen gegenüber 2.11.0:
 | `sender` mit `api_base` | Token-Segment fehlte in der URL | konsistent `/bot<token>/` wie im BYOB-Pfad |
 
 ASCII-/BMP-Texte erzeugen byte-identische Chunks wie 2.11.0.
+
+
+## 12. Nachzug: v2.12.0 — Docker/Caddy-Deployment + /healthz (kein Handlungsbedarf)
+
+Minor-Release ohne Breaking-Changes: neuer, optionaler Deployments-Weg
+(`Dockerfile`, `docker-compose.yml`, `Caddyfile`, `.env.example` — Anleitung:
+`docs/DOCKER.md`) plus additiver Liveness-Endpunkt `GET /healthz`.
+
+| Bereich | Alt (≤ 2.11.1) | Neu (≥ 2.12.0) |
+|---|---|---|
+| Lokales Produktions-Deployment | nur manuell (venv + Gunicorn + eigener Proxy) | `cp .env.example .env && docker compose up --build -d` (App intern, Caddy auf 80/443 mit TLS + ACL) |
+| Liveness-Probe | keine (Health-Checks mussten `/` rendern) | `GET /healthz` → `{"status":"ok","version"}` (limit-frei, ohne Secrets) |
+| `render.yaml`-Health-Check | `/` | `/healthz` (gilt per Blueprint-Sync; Hand-Dienste übernehmen es bei Bedarf im Dashboard) |
+| Dev-Abhängigkeiten | `pytest` | zusätzlich `pyyaml` (nur für den Compose-Vertragstest) |
+
+Bestehende Deployments (Render wie Selbstbetrieb) laufen unverändert weiter;
+keine ENV-Umbenennung, keine API-Änderung. Wer den Docker-Stack nutzt,
+beachtet die Einmaligkeit auf dem Client: Caddys interne CA importieren
+(sonst HTTPS-Warnung) — siehe `docs/DOCKER.md`, Abschnitt 5.

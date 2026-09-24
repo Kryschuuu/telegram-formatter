@@ -112,4 +112,4 @@ def test_render_yaml_documents_public_supergroup_setup():
 
 
 def test_version_matches_release():
-    assert __version__ == "2.11.1"
+    assert __version__ == "2.12.0"
