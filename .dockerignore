@@ -1,0 +1,39 @@
+# .dockerignore — klein halten: Build-Kontext ohne Ballast und ohne Secrets.
+# Das Dockerfile kopiert ohnehin nur requirements.txt + telegram_formatter/,
+# aber ein schlanker Kontext beschleunigt den Build und verhindert, dass
+# versehentlich Secrets (.env) oder Verlauf (.git) im Kontext landen.
+
+.git/
+.github/
+.vscode/
+.venv/
+venv/
+
+# Secrets gehören NIE ins Image — sie kommen zur Laufzeit via env_file (.env).
+.env
+.env.*
+
+# Kein Laufzeitcode: Tests, Doku, Reviews, Beispiele, Audit-Trail.
+tests/
+docs/
+peer-review/
+audit/
+security/
+bots/
+examples/
+*.md
+node_modules/
+package*.json
+
+# Caches & Artefakte
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.DS_Store

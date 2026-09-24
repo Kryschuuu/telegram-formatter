@@ -1,0 +1,48 @@
+# telegram-formatter — Caddy als TLS-Reverse-Proxy mit Zugriffskontrolle
+# =========================================================================
+# Konkretes Beispiel für ein lokales Netzwerk (Server 192.168.0.10):
+#   Aufruf:  https://192.168.0.10   (HTTP auf Port 80 wird auf HTTPS umgeleitet)
+#   Erlaubt: nur der freigegebene Client 192.168.0.20 (+ localhost für Checks
+#            direkt auf dem Server) — alle anderen Adressen erhalten 403.
+#
+# TLS: Für private IP-Adressen kann es keine öffentlichen ACME-Zertifikate
+# geben — `tls internal` betreibt deshalb Caddys eingebaute, lokale CA:
+# Zertifikate werden automatisch ausgestellt UND ERNEUERT (vollautomatisches
+# Zertifikat-Management, kein Certbot, kein Ablauf-Risiko). Der Client muss
+# das CA-Wurzelzertifikat EINMALIG als vertrauenswürdig importieren, sonst
+# warnt der Browser (Anleitung: docs/DOCKER.md, Abschnitt „TLS-Vertrauen").
+# CA-Export bei Bedarf: docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+#
+# Anpassen an eigenes Netz: IP unten ersetzen (Site-Adresse + remote_ip) und
+# `docker compose up -d caddy` neu starten. Mehrere Clients: Adressen durch
+# Leerzeichen getrennt oder als CIDR (z. B. 192.168.0.0/24) anhängen.
+
+{
+	# Keine Admin-API auf Port 2019 — auf einem Edge-Proxy gehört sie aus.
+	admin off
+}
+
+https://192.168.0.10 {
+	tls internal
+	encode gzip
+
+	# --- Zugriffskontrolle (ACL): Standard ist VERWEIGERN. ---
+	# @denied matcht alles AUSSER den gelisteten Adressen. Caddy sieht als
+	# Edge-Proxy die echte Client-IP (kein weiterer Proxy davor), daher ist
+	# remote_ip hier verlässlich — die Rate-Limits der App dahinter erhalten
+	# dieselbe Adresse via X-Forwarded-For (genau 1 Hop, siehe Compose).
+	@denied not remote_ip 192.168.0.20 127.0.0.1 ::1
+	handle @denied {
+		respond "Forbidden" 403
+	}
+
+	# --- Erlaubte Anfragen an die App (internes Docker-Netz). ---
+	handle {
+		reverse_proxy app:5000
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

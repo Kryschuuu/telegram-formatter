@@ -1,2 +1,5 @@
+# Entwicklungs-Abhängigkeiten (Tests & Tooling — NICHT im Produktions-Image).
 -r requirements.txt
 pytest==9.1.1
+# Nur für tests/test_deployment.py (parst docker-compose.yml im Vertragstest).
+pyyaml==6.0.3

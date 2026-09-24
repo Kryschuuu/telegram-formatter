@@ -1,0 +1,87 @@
+# telegram-formatter — lokales Produktions-Deployment (App + Caddy)
+# ======================================================================
+# Beispiel für ein lokales Netzwerk (konkrete Adressen, direkt einsetzbar):
+#   Server (Docker-Host):  192.168.0.10  — hier läuft dieses Compose-Projekt
+#   Client (darf zugreifen): 192.168.0.20 — einziger freigegebener Browser/Client
+#   Zugriff:               https://192.168.0.10  (TLS via Caddy, interne CA)
+#
+# Start:
+#   cp .env.example .env        # einmalig, dann echte Werte eintragen
+#   docker compose up --build -d
+#   docker compose logs -f      # Start verfolgen (Strg+C zum Verlassen)
+#
+# Architektur:
+#   Browser (192.168.0.20) --HTTPS--> Caddy (:443, ACL + TLS) --HTTP--> app (:5000)
+#   Die App veröffentlicht KEINE Host-Ports — sie ist nur über Caddy über das
+#   interne Docker-Netzwerk erreichbar. Caddy ist der einzige Edge und genau
+#   EIN Proxy-Hop (TRUSTED_PROXY_HOPS=1, unten erzwungen).
+#
+# Updates ohne Downtime-Gefahr (Single-Node, kurz Unterbrechung möglich):
+#   git pull && docker compose up --build -d
+name: telegram-formatter
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: telegram-formatter:2.12.0
+    restart: unless-stopped
+    # Geheimnisse + Betriebskonfiguration aus der (git-ignorierten) .env-Datei.
+    # Vorlage mit allen Variablen: .env.example
+    env_file:
+      - .env
+    environment:
+      # Hinter Caddy steht IMMER genau ein vertrauenswürdiger Proxy-Hop —
+      # Compose setzt das explizit (gilt vor einem evtl. abweichenden
+      # .env-Wert), damit die IP-Rate-Limits die echte Client-Adresse sehen.
+      TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS: "1"
+    networks:
+      - appnet
+    # Bewusst KEIN ports-Abschnitt: direkter Host-Zugriff auf die App würde
+    # die Caddy-ACL (Caddyfile) umgehen. Debug-Zugriff bei Bedarf temporär:
+    #   docker compose run --rm -p 127.0.0.1:5000:5000 app
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    # Gepinnte Minor-Linie (alpine = kleines Image). Patch-Updates via:
+    #   docker compose pull caddy && docker compose up -d caddy
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80" # HTTP — Caddy leitet automatisch auf HTTPS weiter
+      - "443:443" # HTTPS — einziger produktiver Einstiegspunkt
+    volumes:
+      # Konfiguration (ACL + TLS, schreibgeschützt) und persistente
+      # Zertifikat-/Konfigurationsspeicher (interne CA + ausgestellte
+      # Zertifikate überleben Container-Neustarts und Rebuilds).
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - appnet
+    # Erst starten, wenn die App gesund ist (Dockerfile-HEALTHCHECK /healthz).
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  # Isoliertes Bridge-Netz nur für diese beiden Dienste: Caddy erreicht die
+  # App als http://app:5000, nichts sonst im LAN sieht den App-Port.
+  appnet:
+    driver: bridge
+
+volumes:
+  caddy_data:
+    name: telegram-formatter-caddy-data
+  caddy_config:
+    name: telegram-formatter-caddy-config
