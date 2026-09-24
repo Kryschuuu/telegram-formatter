@@ -29,7 +29,9 @@ services:
     # prozesslokal im RAM — mehrere Worker würden Sessions "verlieren"
     # (Details: docs/DEPLOYMENT.md, Hinweis zum Start Command).
     startCommand: 'gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT --threads 8'
-    healthCheckPath: /
+    # Liveness-Probe (seit v2.12.0): billiger als "/" (kein Template-Rendering),
+    # nie ratenlimitiert und ohne Konfigurationsdetails in der Antwort.
+    healthCheckPath: /healthz
     envVars:
       # Python-Version der Build-Umgebung (muss zu requires-python >= 3.10 passen).
       - key: PYTHON_VERSION

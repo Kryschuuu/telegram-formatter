@@ -4,6 +4,13 @@ Diese Anleitung führt Schritt für Schritt von null zu einer laufenden
 Deployment-Instanz auf [Render.com](https://render.com) — ohne tiefes
 DevOps-Vorwissen.
 
+> **Lokal deployen?** Für Docker Compose + Caddy im eigenen Netzwerk (mit
+> TLS, automatischem Zertifikat-Management und IP-Zugriffskontrolle) gibt es
+> die eigene Anleitung [DOCKER.md](DOCKER.md) — inkl. konkretem LAN-Beispiel
+> (Server `192.168.0.10`, Client `192.168.0.20`). Die Umgebungsvariablen unten
+> gelten für beide Wege gleich; die `.env`-Vorlage des Docker-Stacks
+> ([.env.example](../.env.example)) dokumentiert sie mit LAN-Standardwerten.
+
 ## Voraussetzungen
 
 1. Ein kostenloses [Render.com](https://render.com)-Konto (Anmeldung z. B.

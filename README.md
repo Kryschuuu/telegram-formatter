@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.11.1-blue)
+![Version](https://img.shields.io/badge/version-2.12.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -147,9 +147,10 @@ Für den Web-Betrieb zusätzlich möglich (seit v2.1.0):
 |---|---|
 | `TELEGRAM_CHAT_ID` | **pinnt** den Zielchat von `/api/send`; ein abweichender Request-Wert wird abgewiesen. Für die öffentliche Demo empfiehlt sich eine **public Supergroup** oder ein **Channel** mit dem Bot als Mitglied (Recht *Nachrichten senden*) — so ist die Warnung auf der Seite wörtlich korrekt und jede Nachricht für neue Leser im Verlauf einsehbar |
 | `TELEGRAM_FORMATTER_API_TOKEN` | Operator-Secret für den **authentifizierten** Shared-Versand. Bei gesetztem Wert verlangen alle POST-Endpunkte den Header `X-Auth-Token` — nur `POST /api/send` bleibt offen, wenn zusätzlich `TELEGRAM_FORMATTER_SHARED_WEB_SEND=1` gilt (sonst wäre der Browser-Weg widersprüchlich: er darf das Secret nie erhalten). Ohne dieses Secret ist `/api/send` deaktiviert (503) |
-| `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` | Anzahl vertrauenswürdiger Proxy-Hops für Client-IP-Erkennung; Standard `0` (sicherer Direktbetrieb), Render-Blueprint setzt `1` |
+| `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` | Anzahl vertrauenswürdiger Proxy-Hops für Client-IP-Erkennung; Standard `0` (sicherer Direktbetrieb), Render-Blueprint und Docker-Compose (Caddy) setzen `1` |
 | `TELEGRAM_FORMATTER_MAX_INPUT_CHARS` | Eingabelimit (Standard 100000) |
 | `TELEGRAM_FORMATTER_SENDS_PER_MINUTE` | Rate-Limit pro IP für `/api/send` (Standard 6) |
+| `TELEGRAM_FORMATTER_CONVERTS_PER_MINUTE` | Rate-Limit pro IP für `/api/convert` (Standard 60) |
 | `TELEGRAM_FORMATTER_BYOB_ENABLED` | BYOB-Websessions aktiv (Standard `1`; `0` blendet UI + API aus) |
 | `TELEGRAM_FORMATTER_BYOB_SESSIONS_PER_MINUTE` | Session-Öffnungen pro IP (Standard 3) |
 | `TELEGRAM_FORMATTER_BYOB_DISCOVER_PER_MINUTE` | Chat-ID-Erkennungen pro IP (Standard 3) |
@@ -427,7 +428,11 @@ telegram-formatter/
 ├── docs/                       # aktuelle Projekt-Dokumentation
 │   ├── ARCHITECTURE.md                     # Architektur & Datenflüsse
 │   ├── DECENTRAL_BOT_ARCHITECTURE.md       # BYOB-Architektur & Review-Prozess
-│   └── DEPLOYMENT.md                       # Render.com-Anleitung
+│   ├── DEPLOYMENT.md                       # Render.com-Anleitung
+│   ├── DOCKER.md                           # lokales Docker/Caddy-Deployment (LAN)
+│   ├── API.md                              # Endpoint-Referenz (seit v2.12.0)
+│   ├── DESIGN.md                           # Design-System & Themes
+│   └── FORMATTING.md                       # Telegram-Features vs. LLM-Ausgabe
 ├── peer-review/                # Review-Berichte & deren Verlauf
 │   ├── README.md                           # Konventionen
 │   ├── TEMPLATE.md                         # Berichtsvorlage
@@ -438,8 +443,12 @@ telegram-formatter/
 ├── .github/                    # CODEOWNERS, PR-Template, SECURITY.md, CI-Workflow
 ├── pyproject.toml              # Paketierung + Ruff/pytest/Bandit-Konfiguration
 ├── render.yaml                 # Render-Blueprint: kanonischer Start, Health-Check, Env-Vars
+├── Dockerfile                  # Produktions-Image (Non-Root, 1 Worker, /healthz)
+├── docker-compose.yml          # lokaler Stack: App (intern) + Caddy (TLS + ACL)
+├── Caddyfile                   # Reverse-Proxy: tls internal, remote_ip-ACL (LAN)
+├── .env.example                # Umgebungsvorlage (→ .env kopieren, nie committen)
 ├── requirements.txt            # Laufzeit-Deps (gepinnt; pyproject liest sie dynamisch)
-├── requirements-dev.txt        # Dev-Deps (pytest)
+├── requirements-dev.txt        # Dev-Deps (pytest, pyyaml)
 ├── CHANGELOG.md                # Versionierung (Keep a Changelog)
 ├── CONTRIBUTING.md             # Setup, Schichtregeln, PR-Prozess
 ├── MIGRATION.md                # Struktur-Migration 1.3.0 → 2.0.0 (alt → neu)
@@ -453,7 +462,23 @@ erzwingt der Code?“ → `security/README.md`.
 
 ## Deployment
 
-Schritt-für-Schritt-Anleitung für [Render.com](https://render.com) in
+Zwei produktionsreife Wege — beide mit TLS und denselben Sicherheitsgrenzen:
+
+**Lokal mit Docker Compose + Caddy** (seit v2.12.0, Beispielnetz
+`192.168.0.10` + Client `192.168.0.20`, Kanal `t.me/mdtotxt_bot_web`):
+
+```bash
+cp .env.example .env   # Pflichtwerte eintragen (Token, Chat-ID)
+docker compose up --build -d
+curl -k https://192.168.0.10/healthz   # {"status":"ok","version":"2.12.0"}
+```
+
+Caddy terminiert TLS automatisch (interne CA, kein Certbot nötig) und lässt
+per Zugriffskontrolle nur den freigegebenen Client durch (alle anderen: 403).
+Vollständige Anleitung (Start, TLS-Vertrauen, ACL-Check, Betrieb,
+Troubleshooting): [docs/DOCKER.md](docs/DOCKER.md).
+
+**Auf [Render.com](https://render.com):** Schritt-für-Schritt-Anleitung in
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Der kanonische Startbefehl ist
 zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 übernimmt dort die Konfiguration neu aus dem Blueprint angelegter Dienste.
@@ -471,6 +496,9 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 - [Dezentrale Bot-Architektur](docs/DECENTRAL_BOT_ARCHITECTURE.md) — eigene
   Bots registrieren, reviewen und in Sessions nutzen; Peer-Review-Prozess.
 - [Deployment](docs/DEPLOYMENT.md) — Schritt-für-Schritt für Render.com.
+- [Docker-Deployment](docs/DOCKER.md) — lokaler Stack (Compose + Caddy,
+  TLS, ACL) mit konkretem LAN-Beispiel.
+- [API-Referenz](docs/API.md) — alle Endpunkte, Auth, Limits, Fehlercodes.
 - [Code-Peer-Review](peer-review/CODE_REVIEW.md) — gefundene Probleme und
   Fixes; Vorlage & Konventionen: [peer-review/](peer-review/README.md).
 - [Security-Konzept](security/README.md) — Schutzziele & Durchsetzung;
@@ -483,6 +511,7 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.11.1** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.12.0** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).
+ON.md](MIGRATION.md).
