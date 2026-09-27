@@ -67,7 +67,7 @@
 
 | Modul | Verantwortung | Speichert |
 |---|---|---|
-| `telegram_formatter/botkit/tokens.py` | `BotToken`-Umschlag, Formatvalidierung, RAM-Vaults mit TTL | Token (RAM, TTL) — oder nichts (`PassthroughTokenVault`) |
+| `telegram_formatter/botkit/tokens.py` | `BotToken`-Umschlag, Formatvalidierung, RAM-Vaults mit TTL | Token (RAM, TTL) — oder nichts (`PassthroughTokenVault`). **Nicht verschlüsselt** — die Zusage lautet „kein dauerhaftes Medium", nicht „verschlüsselt" (S1a in [../security/README.md](../security/README.md)) |
 | `telegram_formatter/botkit/privacy.py` | Redaction aller Logzeilen, `audit()` (nur Metadaten), Fingerprints, Environment-Scrubbing | nichts |
 | `telegram_formatter/botkit/registry.py` | `getMe`-Verifikation, Identität + Status, Chat-ID-Validierung | Identität, Pseudonym-Fingerprint, Freigabe-Prüfsumme (RAM) |
 | `telegram_formatter/botkit/review.py` | AST-Regeln BK001–BK012, Checkliste C1–C9, Ledger, Vier-Augen-Gate | Metadaten (Prüfsummen, Entscheidungen) |
@@ -119,6 +119,14 @@ Nutzer                     botkit                          Telegram
 Modus B ist der einzige, in dem fremde Infrastruktur das Token sieht. Deshalb
 gilt dort: Token wird pro Session nur im RAM gehalten, keine Persistenz, und
 `--api-base` erlaubt den Betrieb gegen einen privaten Bot-API-Server.
+
+**Was das genau bedeutet (v2.13.0 präzisiert):** „nur im RAM" heißt, dass das
+Token auf **kein dauerhaftes Medium** geschrieben wird — es wird nicht
+verschlüsselt, weil es gar nichts zu verschlüsseln gibt: repo-weit existiert
+kein Cipher. Der Schutz gegen Mitlesen ist der Transportweg
+(`tls internal` + ggf. Client-IP-ACL im Caddy) und die Tatsache, dass der Wert
+beim Prozessende verschwindet. Details und der verankernde Negativtest:
+[../security/README.md](../security/README.md) S1/S1a.
 
 ### 1.5.1 Modus B im Detail — die BYOB-Websessions (v2.2.0)
 
