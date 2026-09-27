@@ -250,3 +250,38 @@ Bestehende Deployments (Render wie Selbstbetrieb) laufen unverändert weiter;
 keine ENV-Umbenennung, keine API-Änderung. Wer den Docker-Stack nutzt,
 beachtet die Einmaligkeit auf dem Client: Caddys interne CA importieren
 (sonst HTTPS-Warnung) — siehe `docs/DOCKER.md`, Abschnitt 5.
+
+## 13. Nachzug: v2.13.0 — Code-Review (kein Handlungsbedarf für Betreiber)
+
+Reines Review-Release: **keine** API-Änderung, **keine** ENV-Umbenennung,
+**keine** Datenmigration. Wer nur den Container startet, muss nichts tun.
+Bestehende Deployments laufen unverändert weiter.
+
+Die Änderungen, die man *kennen* sollte, weil sie das beobachtbare Verhalten
+betreffen:
+
+| Bereich | Alt (≤ 2.12.0) | Neu (≥ 2.13.0) |
+|---|---|---|
+| Rich-Split, tiefe Verschachtelung | `"$x$ " + "<u>"*10900` ergab einen Chunk von 76 304 Zeichen → Telegram 400 `MESSAGE_TOO_LONG`, es wurde **nichts zugestellt** | 32 720 Zeichen → wird zugestellt. Äußere, offen bleibende `**`/`~~`/`<u>` rendern im Rich-Markdown als Literal |
+| Leerzeilen/Einrückung beim Split | Leerzeilen gingen verloren (`"a\n\n\n\nb"` → `"a\n\nb"`), Einrückung in `$$…$$` ebenfalls | erhalten; Splitting ist verlustfrei (Roundtrip getestet) |
+| `POST /api/send`, viele Teile | ungedeckelt; 64 000 Zeichen → 17 sequentielle API-Aufrufe à 15 s in **einem** von 8 Gunicorn-Threads | `TELEGRAM_FORMATTER_MAX_CHUNKS_PER_REQUEST` (Default 25) — über der Kappung 400, **vor** dem ersten API-Aufruf. Der Default verkleinert keine dokumentierte Eingabe |
+| `POST /api/send`, Telegram-429 | Abbruch, `retry_after` wurde durchgereicht und nie beachtet; ein Abbruch verbrauchte das Budget des **ganzen** Stapels | Retry mit Backoff (max. 3 Versuche, max. 5 s Wartezeit); nicht gesendete Teile geben ihr Budget zurück |
+| `POST /api/byob/session` | nur JSON | zusätzlich `application/x-www-form-urlencoded` (Nicht-JS-Fallback des HTML-Formulars). JSON hat Vorrang |
+| `X-Auth-Token` mit Nicht-ASCII-Byte | **500** (nicht 401) — `hmac.compare_digest` wirft für Nicht-ASCII-`str`; WSGI dekodiert Header als latin-1 | **401**, Vergleich über Bytes |
+| `Origin: null` | passierte die CSRF-Prüfung (kein `netloc` → Prüfung übersprungen) | **403** |
+| `"text": "\ud800"` | **500** (bzw. undurchsichtiger 500 nach halb zugestelltem Versand auf den Sendewegen) | **400** mit klarer Meldung |
+| BYOB-Session-Eröffnung | Kapazitäts-Lock über den `getMe`-Round-Trip (bis 8 × 15 s = 2 min Blockade bei 8 gleichzeitigen Anfragen) | Verifikation außerhalb, Kapazitätsprüfung unter der Sperre |
+| `botctl send` bei Telegram-Fehler | roher Traceback (`SendError` war kein Geschwister von `SessionError`) | „✖ Versand abgebrochen" + `retry_after`-Hinweis, Exit 1 |
+| `botctl review` bei CRLF-Checkout | Freigabe **dauerhaft unmöglich** (Ticket band an den Text-Hash, `verify` prüfte den Byte-Hash) | Freigabe funktioniert; bindet an die Bytes |
+| `botctl` Audit-Trail | wurde in place gekürzt — ein Absturz machte **alle** Freigaben unwiederbringlich verloren | atomar (Temp-Datei + `os.replace`) |
+| `botctl review` (Nutzer-Bot) | `seen = set()` war ein **BLOCKER**; `open(p, "r+")` fiel durch; BK004 über `http.client`/`urllib3` umgehbar | `set()` ist kein Blocker mehr; `r+` wird erkannt; BK004 prüft Verbindungskonstruktoren am String-Argument |
+
+**Für Betreiber mit eigenem Caddy** (mehrere Dienste hinter einem Proxy) ist
+eine Sache neu und wichtig: die Upstream-Regel. Ein Dienst mit `expose:` (ohne
+`ports:`) veröffentlicht **keinen** Host-Port — `reverse_proxy
+host.docker.internal:5000` zeigt ins Leere und ergibt 502. Richtig ist der
+Compose-Dienstname: `reverse_proxy telegram-formatter:5000`. Und: die Caddyfile
+als **Verzeichnis** mounten (`./caddy:/etc/caddy:ro`), nicht als einzelne Datei —
+sonst sieht der Container eine veraltete Fassung und liefert
+`ERR_SSL_PROTOCOL_ERROR`. Beides ausführlich in `docs/DOCKER.md` §8a und
+`docs/RUNBOOK.md`.
