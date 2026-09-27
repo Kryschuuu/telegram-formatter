@@ -16,6 +16,8 @@ Die Tests härten die Sicherheitsversprechen ab:
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from telegram_formatter import app as app_module
@@ -551,3 +553,91 @@ def test_index_hides_byob_when_disabled(byob_client, monkeypatch):
     page = byob_client.get("/").data.decode("utf-8")
     assert 'id="byobForm"' not in page
     assert "BYOB ist auf dieser Instanz deaktiviert" in page
+
+
+# ---------------------------------------------------------------------------
+# Regression v2.13.0 — Bot-Token darf nie in die URL gelangen
+# ---------------------------------------------------------------------------
+class TestByobFormDoesNotLeakTokenViaQueryString:
+    """`<form>` ohne `method` hat per HTML-Default GET.
+
+    `byob.js` ruft `event.preventDefault()`, aber nur wenn das Skript lädt. Ohne
+    JavaScript (die Seite liefert ein `<noscript>` mit demselben Versprechen),
+    bei einem 404 oder bei einem Fehler *vor* dem Listener-Anlegen navigierte
+    ein Klick auf "Eigene Bot-Session starten" zu
+
+        GET /?token=123456789:AAE…&chat_id=4711
+
+    Diese URL landet in der Adressleiste, in der Browser-Historie und im
+    Caddy-Access-Log (console-Format, `%r` enthält den Query-String) — ein
+    Klartext-Token-Leak, der die eigene Zusage der Seite ("nie gespeichert,
+    nie geloggt") und die Privacy-Redaction im Modul ungültig macht.
+    """
+
+    def test_form_has_explicit_post_method(self, byob_client):
+        html = byob_client.get("/").get_data(as_text=True)
+        tag = re.search(r'<form id="byobForm"[^>]*>', html)
+        assert tag, "byobForm nicht gefunden"
+        assert 'method="post"' in tag.group(0), (
+            "byobForm ohne method= — ein Klick ohne JS legt den Token in die URL"
+        )
+
+    def test_form_has_no_get_fallback(self, byob_client):
+        """Kein verstecktes `method="get"` und keine GET-Action."""
+        html = byob_client.get("/").get_data(as_text=True)
+        tag = re.search(r'<form id="byobForm"[^>]*>', html).group(0)
+        assert 'method="get"' not in tag.lower()
+        # Die Action zeigt auf den JSON-Endpunkt, nicht auf die Seite selbst
+        # (eine GET-Action auf "/" würde den Token in den Query-String hängen).
+        assert "/api/byob/session" in tag
+
+    def test_form_action_is_escaped_endpoint(self, byob_client):
+        """`url_for` wird benutzt — die Action ist der echte Endpunktpfad."""
+        html = byob_client.get("/").get_data(as_text=True)
+        tag = re.search(r'<form id="byobForm"[^>]*>', html).group(0)
+        action = re.search(r'action="([^"]+)"', tag).group(1)
+        assert action.startswith("/api/byob/session")
+
+    def test_form_submission_works_without_javascript(self, byob_client):
+        """Der Nicht-JS-Fallback funktioniert wirklich (POST + Formular-Body).
+
+        Sonst wäre `method="post"` nur eine Fehlerbehebung gegen das Leck — der
+        Nutzer ohne JS könnte keine Session öffnen.
+        """
+        resp = byob_client.post(
+            "/api/byob/session",
+            data={"token": TOKEN, "chat_id": "-1001234567890", "consent": "on"},
+        )
+        assert resp.status_code == 201
+        assert resp.json["session_id"]
+        assert resp.json["bot"]["id"] == 123456789
+
+    def test_token_never_appears_in_any_url_field(self, byob_client):
+        """Kein Feld im Formular ist als GET-Parameter gedacht."""
+        html = byob_client.get("/").get_data(as_text=True)
+        block = re.search(
+            r'<form id="byobForm".*?</form>', html, re.DOTALL
+        ).group(0)
+        # Die Felder heißen weiterhin token/chat_id (nötig für den POST-Body),
+        # aber das Formular ist POST — es gibt also keinen GET-Weg hinein.
+        assert 'name="token"' in block
+        assert 'method="post"' in block
+
+
+def test_form_body_rejects_oversized_token(byob_client):
+    """Auch der Formular-Weg behält die Format- und Längenprüfung."""
+    resp = byob_client.post(
+        "/api/byob/session",
+        data={"token": "kein-token", "chat_id": "4711", "consent": "on"},
+    )
+    assert resp.status_code == 400
+    assert "token" in resp.get_json()["error"].lower()
+
+
+def test_json_still_wins_over_form(byob_client):
+    """JSON hat Vorrang — `byob.js` nutzt fetch() und darf nicht behindert werden."""
+    resp = byob_client.post(
+        "/api/byob/session",
+        json={"token": TOKEN, "chat_id": "-1001234567890", "consent": True},
+    )
+    assert resp.status_code == 201

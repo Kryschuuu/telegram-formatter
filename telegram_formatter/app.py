@@ -937,6 +937,47 @@ def _json_body() -> tuple[dict | None, tuple | None]:
     return data, None
 
 
+#: Werte, die ein angehaktes ``<input type="checkbox">`` im Formular-Body
+#: liefert. Ein **nicht** angehaktes Checkbox wird gar nicht mitgesendet (es
+#: fehlt dann im Dict), ein angehaktes kommt als String. „false"/„0"/„" sind
+#: ausdrücklich **keine** Zustimmung (v2.13.0).
+_FORM_CONSENT_VALUES = frozenset({"on", "true", "1", "yes", "ja"})
+
+
+def _consent_given(value: object) -> bool:
+    """``True``, wenn die Token-Einwilligung eindeutig erteilt wurde.
+
+    JSON-Pfad: nur der echte Boolean ``True`` (bzw. Python-seitig identisch).
+    Formular-Pfad: die von HTML gelieferten Strings einer angehakten Checkbox.
+    """
+    if value is True:
+        return True
+    return isinstance(value, str) and value.strip().lower() in _FORM_CONSENT_VALUES
+
+
+def _json_or_form_body() -> tuple[dict | None, tuple | None]:
+    """JSON **oder** ``application/x-www-form-urlencoded`` als Dict (v2.13.0).
+
+    Für Endpunkte, die das HTML-Formular im Nicht-JS-Fallback direkt absenden
+    können (``/api/byob/session``). Das Formular trägt bewusst
+    ``method="post"``: ohne diese Angabe hätte ein Browser per HTML-Default GET
+    verwendet und den Bot-Token als Query-String an die URL gehängt — in die
+    Adressleiste, in die Browser-Historie und in den Caddy-Access-Log. Siehe
+    Kommentar am ``<form id="byobForm">`` in ``templates/index.html``.
+
+    JSON hat Vorrang (der Normalfall: ``byob.js`` nutzt ``fetch``). Ein
+    Formular-Body enthält nur die deklarierten Felder — es wird **kein** Dict
+    aus beliebigen Schritten gebaut; ``to_dict(flat=True)`` liefert genau die
+    Formularfelder, und mehr ist nicht zu erreichen.
+    """
+    data = request.get_json(silent=True)
+    if isinstance(data, dict):
+        return data, None
+    if request.form:
+        return request.form.to_dict(flat=True), None
+    return None, (jsonify({"error": "JSON-Objekt als Body erwartet."}), 400)
+
+
 def _has_lone_surrogate(text: str) -> bool:
     """``True``, wenn der String einen ungepaarten UTF-16-Surrogate enthält.
 
@@ -1246,11 +1287,21 @@ def byob_session_open():
     if _rate_limited("byob-open", BYOB_SESSIONS_PER_MINUTE):
         return jsonify({"error": "Zu viele Anfragen — bitte kurz warten."}), 429
 
-    data, err = _json_body()
+    # v2.13.0: auch Formular-Bodies akzeptieren. Das `<form>` in index.html
+    # trägt `method="post"`, damit der Bot-Token bei deaktiviertem JavaScript
+    # nicht als Query-String in die URL wandert. Damit dieser Fall überhaupt
+    # funktioniert, muss der Endpunkt den Formular-Body lesen können.
+    data, err = _json_or_form_body()
     if err is not None:
         return err
 
-    if data.get("consent") is not True:
+    # v2.13.0: `consent` ist aus einem Nicht-JS-Formular **immer** ein String:
+    # eine angehakte Checkbox sendet `"on"`, nicht `true`. Der strenge Vergleich
+    # `is not True` lehnte den Nicht-JS-Fallback also ab — `method="post"` wäre
+    # dann nur eine Fehlerbehebung gegen das Token-Leck, aber der Nutzer ohne JS
+    # könnte gar keine Session öffnen. Es werden daher die von HTML gelieferten
+    # Truthy-Strings akzeptiert, sonst weiterhin nur `True`.
+    if not _consent_given(data.get("consent")):
         return jsonify(
             {"error": "Bitte bestätige den Hinweis zum Umgang mit dem Token (Checkbox)."}
         ), 400

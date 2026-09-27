@@ -537,7 +537,33 @@
             </ol>
 
             <!-- ===== BYOB-Formular ===== -->
-            <form id="byobForm" class="tf-form" autocomplete="off" novalidate>
+            <!--
+                method="post" ist **Pflicht**, nicht Kosmetik (v2.13.0):
+                ein <form> ohne method hat per HTML-Default GET, und die
+                Navigation geht dann an die aktuelle URL inkl. Query-String.
+                byob.js verhindert das per event.preventDefault() — aber nur,
+                wenn das Skript lädt. Ohne JS (die Seite liefert ein <noscript>
+                mit demselben Versprechen), bei einem 404 oder bei einem Fehler
+                *vor* dem Listener-Anlegen würde ein Klick auf "Eigene
+                Bot-Session starten" navigieren zu
+
+                    GET /?token=123456789:AAE…&chat_id=4711
+
+                Diese URL landet im Caddy-Access-Log (console-Format, %r
+                enthält den Query-String), in der Browser-Historie und in der
+                Adressleiste. Das ist ein Klartext-Token-Leak und macht die
+                eigene Zusage der Seite ("nie gespeichert, nie geloggt") sowie
+                die Privacy-Redaction im Modul ungültig.
+                Mit method="post" landet der Token im Request-Body statt in der
+                URL. byob.js nutzt weiterhin fetch() und preventDefault(); das
+                Attribut wirkt also nur für den Nicht-JS-Fallback.
+
+                Die name="token"/"chat_id"-Attribute bleiben erhalten: sie
+                ermöglichen einen echten No-JS-POST, und bei POST landen sie im
+                Body statt in der URL.
+            -->
+            <form id="byobForm" class="tf-form" method="post"
+                  action="{{ url_for('byob_session_open') }}" autocomplete="off" novalidate>
                 <div class="tf-field">
                     <label for="byobToken">Bot-Token (deines eigenen Bots)</label>
                     <input id="byobToken" name="token" type="password" inputmode="text"
