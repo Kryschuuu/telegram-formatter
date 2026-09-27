@@ -119,6 +119,9 @@ class BotSession:
         clock: Callable[[], float] = time.monotonic,
         sender_fn: SenderFn | None = None,
         session_id: str | None = None,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        max_backoff_attempts: int = 3,
+        max_backoff_seconds: float = 5.0,
     ) -> None:
         self._token: BotToken | None = token
         self._chat_id = _validated_chat_id(chat_id)
@@ -131,6 +134,18 @@ class BotSession:
         self._sent_timestamps: list[float] = []
         self.stats = SessionStats()
         self.closed = False
+        #: v2.13.0: Sperre fuer alle mutierenden Zugriffe. `SessionManager` hat
+        #: seit dem Audit M-7 eine (`self._lock = threading.RLock()`), `BotSession`
+        #: hatte **keine** — die Dikt-Mutationen in `_reserve_rate_budget` waren
+        #: unter dem vom Dockerfile vorgegebenen `--workers 1 --threads 8` nicht
+        #: atomar. RLock, weil `close()` intern `_require_token`/`_touch` nutzt.
+        self._lock = threading.RLock()
+        #: Injizierbare Wartefunktion (Tests: kein echtes Schlafen).
+        self._sleep_fn = sleep_fn
+        #: Obergrenzen des 429-Backoffs. `retry_after` darf nicht unbegrenzt
+        #: werden: 1 Worker / 8 Threads, ein Blockade-Sleep friert die Instanz.
+        self._max_backoff_attempts = max_backoff_attempts
+        self._max_backoff_seconds = max_backoff_seconds
         #: Wird von SessionManager gesetzt, damit close() den Registry-
         #: Eintrag entfernt (Audit: geschlossene Sessions akkumulierten
         #: bis zum nächsten open()).
@@ -225,22 +240,63 @@ class BotSession:
         *,
         source_chars: int = 0,
     ) -> list[dict]:
-        """Versendet vorbereitete Nachrichten (Rate-Limit- und Ablaufprüfung inklusive)."""
+        """Versendet vorbereitete Nachrichten (Rate-Limit- und Ablaufprüfung inklusive).
+
+        v2.13.0: bei einem Telegram-429 wartet der Versand die von Telegram
+        gelieferte Wartezeit (``SendError.retry_after``) und versucht den
+        **selben** Chunk erneut, statt den ganzen Stapel abzubrechen. Ohne das
+        brach ein 429 in Chunk 7 von 17 die Chunks 8–17 ab, während das Budget
+        für alle 17 verbraucht blieb — der Benutzer bekam eine halbe Nachricht
+        und ein erschöpftes Limit, und ein manueller Wiederholungsversand
+        duplizierte die bereits zugestellten Chunks.
+        """
         self._ensure_active()
-        self._reserve_rate_budget(len(messages))
+        total = len(messages)
+        self._reserve_rate_budget(total)
 
         responses: list[dict] = []
-        for message in messages:
-            try:
-                responses.append(
-                    self._sender(
-                        message,
-                        self._require_token().reveal(),
-                        timeout=self._config.timeout,
-                        api_base=self._config.api_base,
-                    )
-                )
+        sent = 0
+        try:
+            for message in messages:
+                responses.append(self._send_with_backoff(message))  # mit 429-Backoff
+                sent += 1
                 self.stats.chunks_sent += 1
+                # `_touch` nach jedem Chunk, nicht erst am Stapelende: ein
+                # langer Stapel (bis zu 25 Chunks × 15 s) refreshte den
+                # Leerlauf-Timer sonst nicht, und ein paralleles `reap_expired`
+                # konnte die Session mitten im Versand schliessen.
+                self._touch()
+        except SendError as exc:
+            # Nur die **nicht** gesendeten Plätze freigeben — sonst verbrauchte
+            # ein Abbruch bei Chunk 7 von 17 das Budget für alle 17.
+            self._release_rate_budget(total - sent)
+            raise exc
+
+        self.stats.messages_sent += 1
+        self._touch()
+        audit(
+            LOGGER,
+            logging.INFO,
+            "session.sent",
+            session=self._id[:8],
+            bot=self.bot_id,
+            chat_fp=fingerprint(self._chat_id),
+            chunks=total,
+            chars=source_chars,
+        )
+        return responses
+
+    def _send_with_backoff(self, message: TelegramMessage) -> dict:
+        """Ein Versandversuch. Bei 429 mit kurzem ``retry_after``: warten + wiederholen."""
+        attempts = 0
+        while True:
+            try:
+                return self._sender(
+                    message,
+                    self._require_token().reveal(),
+                    timeout=self._config.timeout,
+                    api_base=self._config.api_base,
+                )
             except SendError as exc:
                 self.stats.errors += 1
                 audit(
@@ -252,21 +308,29 @@ class BotSession:
                     kind=message.kind,
                     error=exc.__class__.__name__,
                 )
-                raise
-
-        self.stats.messages_sent += 1
-        self._touch()
-        audit(
-            LOGGER,
-            logging.INFO,
-            "session.sent",
-            session=self._id[:8],
-            bot=self.bot_id,
-            chat_fp=fingerprint(self._chat_id),
-            chunks=len(messages),
-            chars=source_chars,
-        )
-        return responses
+                # Nur echte Rate-Limits werden wiederholt, und nur wenn Telegram
+                # eine **kurze** Wartezeit nennt. `retry_after` kann bei Telegram
+                # auch mal 60+ Sekunden betragen — das darf keinen Gunicorn-Thread
+                # für eine Minute blockieren (1 Worker, 8 Threads). Solche Fälle
+                # brechen ab und werden nach aussen als 429 mit `retry_after`
+                # gemeldet.
+                wait = exc.retry_after
+                if attempts >= self._max_backoff_attempts or not wait:
+                    raise
+                if wait > self._max_backoff_seconds:
+                    raise
+                attempts += 1
+                audit(
+                    LOGGER,
+                    logging.WARNING,
+                    "session.send_throttled",
+                    session=self._id[:8],
+                    bot=self.bot_id,
+                    kind=message.kind,
+                    wait_seconds=wait,
+                    attempt=attempts,
+                )
+                self._sleep_fn(wait)
 
     # ------------------------------------------------------------------ Ende
     def close(self) -> None:
@@ -277,14 +341,15 @@ class BotSession:
         das Token wird gelöscht, damit es keine Referenz mehr im Objektgraphen
         gibt (und damit auch nicht in Tracebacks oder Debug-Dumps).
         """
-        if self.closed:
-            return
-        bot_id = self.bot_id  # vor dem Verwerfen des Tokens festhalten
-        chunks = self.stats.chunks_sent
-        self.closed = True
-        self._token = None
-        self._sent_timestamps.clear()
-        on_close, self._on_close = self._on_close, None
+        with self._lock:
+            if self.closed:
+                return
+            bot_id = self.bot_id  # vor dem Verwerfen des Tokens festhalten
+            chunks = self.stats.chunks_sent
+            self.closed = True
+            self._token = None
+            self._sent_timestamps.clear()
+            on_close, self._on_close = self._on_close, None
         if on_close is not None:
             on_close(self._id)  # Manager entfernt den Eintrag (kein Akkumulieren)
         audit(LOGGER, logging.INFO, "session.closed", session=self._id[:8], bot=bot_id,
@@ -316,19 +381,44 @@ class BotSession:
             )
 
     def _touch(self) -> None:
-        self._last_activity = self._clock()
+        with self._lock:
+            self._last_activity = self._clock()
 
     def _reserve_rate_budget(self, count: int) -> None:
-        """Gleitendes Fenster (60 s) gegen Telegram-Rate-Limits (429)."""
-        now = self._clock()
-        window_start = now - 60.0
-        self._sent_timestamps = [ts for ts in self._sent_timestamps if ts >= window_start]
-        if len(self._sent_timestamps) + count > self._config.max_messages_per_minute:
-            raise RateLimitExceeded(
-                f"Rate-Limit: {self._config.max_messages_per_minute} Nachrichten/Minute "
-                "überschritten. Bitte kurz warten."
-            )
-        self._sent_timestamps.extend([now] * count)
+        """Gleitendes Fenster (60 s) gegen Telegram-Rate-Limits (429).
+
+        v2.13.0: Der Check **und** die Buchung laufen unter ``self._lock``.
+        Vorher war beides ein nicht-atomares Read-Modify-Write auf einem
+        Instanzattribut: unter dem vom Dockerfile vorgegebenen
+        ``--workers 1 --threads 8`` konnten zwei parallele
+        ``POST /api/byob/send`` (zwei Tabs, Doppelklick, Retry neben dem
+        Original) beide ``len(...) == 5`` lesen und beide die Prüfung für
+        5 + 12 > 20 passieren. Das 20-Nachrichten-pro-Minute-Limit — dessen
+        ausdrücklicher Zweck "Schutz vor Telegram-Sperren" ist — war damit
+        umgehbar. ``BotRegistry`` hatte dieselbe Lücke (siehe dort).
+        """
+        with self._lock:
+            now = self._clock()
+            window_start = now - 60.0
+            self._sent_timestamps = [ts for ts in self._sent_timestamps if ts >= window_start]
+            if len(self._sent_timestamps) + count > self._config.max_messages_per_minute:
+                raise RateLimitExceeded(
+                    f"Rate-Limit: {self._config.max_messages_per_minute} Nachrichten/Minute "
+                    "überschritten. Bitte kurz warten."
+                )
+            self._sent_timestamps.extend([now] * count)
+
+    def _release_rate_budget(self, count: int) -> None:
+        """Gibt ``count`` **nicht** versendete Budgetplätze zurück (v2.13.0).
+
+        Wird bei einem Abbruch mitten im Stapel aufgerufen. Ohne das verbrauchte
+        ein Fehlschlag bei Chunk 7 von 17 das Budget für alle 17 — der
+        Benutzer konnte den Rest nicht mehr senden, ohne zu warten.
+        """
+        if count <= 0:
+            return
+        with self._lock:
+            self._sent_timestamps = self._sent_timestamps[:-count]
 
 
 class SessionManager:

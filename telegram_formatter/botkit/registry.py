@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -159,6 +160,12 @@ class BotRegistry:
         self._clock = clock
         self._ttl = ttl_seconds
         self._records: dict[int, RegistrationRecord] = {}
+        #: v2.13.0: Sperre fuer `self._records`. `SessionManager` hatte seit dem
+        #: Audit M-7 eine, `BotRegistry` nicht — `get()` las und löschte,
+        #: `purge_expired()` iterierte währenddessen über dieselbe Dict. Unter
+        #: dem vom Dockerfile vorgegebenen `--workers 1 --threads 8` war das
+        #: ein echtes `RuntimeError: dictionary changed size during iteration`.
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------ Registrierung
     def register(self, token: BotToken, *, owner_ref: str) -> RegistrationRecord:
@@ -212,14 +219,32 @@ class BotRegistry:
             display_name=str(result.get("first_name", "")),
             verified_at=now,
         )
-        record = RegistrationRecord(
-            identity=identity,
-            owner_ref=owner,
-            owner_fingerprint=fingerprint(owner),
-            registered_at=now,
-            expires_at=now + self._ttl,
-        )
-        self._records[identity.bot_id] = record
+        # v2.13.0: vorhandenen Datensatz **in place** aktualisieren statt ihn
+        # zu ersetzen. Vorher baute `register()` einen neuen
+        # RegistrationRecord (status=PENDING, notes=[], approved_source_sha256=None)
+        # und überschrieb damit den alten. Damit wurde jede bestehende Freigabe
+        # bei der nächsten Registrierung stillschweigend zurückgesetzt — und
+        # Registrieren ist der Normalpfad beider Aufrufer (`botctl send` und
+        # `_ByobRuntime.open_session`). `mark_approved` war also nicht dauerhaft.
+        # Betroffen war der `status` samt `approved_source_sha256` und `notes`.
+        with self._lock:
+            existing = self._records.get(identity.bot_id)
+            if existing is not None and self._clock() < existing.expires_at:
+                existing.identity = identity
+                existing.owner_ref = owner
+                existing.owner_fingerprint = fingerprint(owner)
+                existing.registered_at = now
+                existing.expires_at = now + self._ttl
+                record = existing
+            else:
+                record = RegistrationRecord(
+                    identity=identity,
+                    owner_ref=owner,
+                    owner_fingerprint=fingerprint(owner),
+                    registered_at=now,
+                    expires_at=now + self._ttl,
+                )
+                self._records[identity.bot_id] = record
 
         audit(
             LOGGER,
@@ -235,14 +260,23 @@ class BotRegistry:
 
     # ------------------------------------------------------------------ Lesen
     def get(self, bot_id: int) -> RegistrationRecord | None:
-        """Liefert den Eintrag oder ``None`` (unbekannt/abgelaufen)."""
-        record = self._records.get(int(bot_id))
-        if record is None:
-            return None
-        if self._clock() >= record.expires_at:
-            del self._records[record.bot_id]
-            return None
-        return record
+        """Liefert den Eintrag oder ``None`` (unbekannt/abgelaufen).
+
+        v2.13.0: unter ``self._lock``. Vorher las `get()` den Record und
+        löschte danach per `del` — ein zwischenzeitliches `register()` für
+        dieselbe `bot_id` (es läuft inzwischen ebenfalls unter der Sperre und
+        mutiert in place) wäre dabei vernichtet worden. Das Löschen ist jetzt
+        **bedingt**: nur wenn unter der Sperre noch derselbe Record hängt.
+        """
+        with self._lock:
+            record = self._records.get(int(bot_id))
+            if record is None:
+                return None
+            if self._clock() >= record.expires_at:
+                if self._records.get(record.bot_id) is record:
+                    del self._records[record.bot_id]
+                return None
+            return record
 
     def is_approved(self, bot_id: int) -> bool:
         """``True`` nur bei Status APPROVED *und* nicht abgelaufener Registrierung."""
@@ -252,7 +286,8 @@ class BotRegistry:
     def active_bot_ids(self) -> list[int]:
         """Alle aktuell bekannten Bot-IDs (ohne abgelaufene)."""
         now = self._clock()
-        return [bid for bid, rec in self._records.items() if now < rec.expires_at]
+        with self._lock:
+            return [bid for bid, rec in list(self._records.items()) if now < rec.expires_at]
 
     # --------------------------------------------------------------- Status
     def mark_approved(self, bot_id: int, source_sha256: str) -> RegistrationRecord:
@@ -279,22 +314,37 @@ class BotRegistry:
         return record
 
     def revoke(self, bot_id: int) -> bool:
-        """Entzieht die Registrierung (Besitzer-Logout oder Maintainer-Entscheid)."""
-        record = self._records.get(int(bot_id))
-        if record is None:
-            return False
-        record.status = RegistrationStatus.REVOKED
-        record.approved_source_sha256 = None
-        del self._records[int(bot_id)]
+        """Entzieht die Registrierung (Besitzer-Logout oder Maintainer-Entscheid).
+
+        v2.13.0: der Record wird jetzt **behalten** und auf ``REVOKED``
+        gesetzt. Vorher setzte `revoke()` den Status und löschte den Eintrag in
+        der nächsten Zeile — der Status war damit nicht beobachtbar, und
+        `_require()` meldete danach "nicht (mehr) registriert" statt "widerrufen".
+        Der Unterschied ist der Audit-Unterschied zwischen „nie bekannt" und
+        „kannte das Team und hat es abgelehnt".
+        """
+        with self._lock:
+            record = self._records.get(int(bot_id))
+            if record is None:
+                return False
+            record.status = RegistrationStatus.REVOKED
+            record.approved_source_sha256 = None
         audit(LOGGER, logging.INFO, "registry.revoked", bot=bot_id)
         return True
 
     def purge_expired(self) -> int:
-        """Entfernt abgelaufene Einträge, liefert die Anzahl."""
-        now = self._clock()
-        expired = [bid for bid, rec in self._records.items() if now >= rec.expires_at]
-        for bot_id in expired:
-            del self._records[bot_id]
+        """Entfernt abgelaufene Einträge, liefert die Anzahl.
+
+        v2.13.0: unter ``self._lock``. Vorher iterierte die Methode über
+        ``self._records.items()``, während ein anderer Thread darin ``del``
+        ausführte — das ist ein ``RuntimeError: dictionary changed size during
+        iteration``. Die Liste wird jetzt unter der Sperre gebildet.
+        """
+        with self._lock:
+            now = self._clock()
+            expired = [bid for bid, rec in list(self._records.items()) if now >= rec.expires_at]
+            for bot_id in expired:
+                del self._records[bot_id]
         if expired:
             audit(LOGGER, logging.INFO, "registry.purged", count=len(expired))
         return len(expired)

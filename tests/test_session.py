@@ -24,6 +24,7 @@ from telegram_formatter.botkit.session import (
     SessionManager,
 )
 from telegram_formatter.botkit.tokens import BotToken
+from telegram_formatter.sender import SendError
 
 ROOT = Path(__file__).resolve().parents[1]
 CLEAN_BOT = ROOT / "examples" / "own_bot" / "minimal_bot.py"
@@ -446,3 +447,200 @@ def test_get_closes_expired_session_and_drops_token():
     assert session.closed is True
     with pytest.raises(SessionError):
         session.send("danach geht nichts mehr")
+
+
+# --------------------------------------------------------------------------- #
+# Regression v2.13.0 — Retry/Backoff, Budget, Threadsicherheit
+# --------------------------------------------------------------------------- #
+class ThrottledSender:
+    """Sender, der die ersten ``fail_times`` Aufrufe mit 429 beantwortet."""
+
+    def __init__(self, fail_times: int, *, retry_after: float | None = 2.0) -> None:
+        self.fail_times = fail_times
+        self.retry_after = retry_after
+        self.calls = 0
+
+    def __call__(self, message, secret, *, timeout=None, api_base=None) -> dict:
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise SendError(
+                "Telegram-API-Fehler 429: Too Many Requests", retry_after=self.retry_after
+            )
+        return {"ok": True, "result": {"message_id": self.calls}}
+
+
+def _session_with(sender, *, config=None, waits=None, **kwargs):
+    """Session mit injizierbarer Wartefunktion (Tests schlafen nie wirklich)."""
+    return BotSession(
+        BotToken.parse(SECRET),
+        CHAT_ID,
+        config=config or SessionConfig(max_messages_per_minute=20, require_review=False),
+        sender_fn=sender,
+        sleep_fn=(waits.append if waits is not None else (lambda _w: None)),
+        **kwargs,
+    )
+
+
+def test_429_backoff_retries_the_same_chunk():
+    """Regression v2.13.0: ein 429 brach den ganzen Stapel ab.
+
+    `retry_after` wurde bis v2.12.0 durch die gesamte Schicht gereicht und dann
+    nie beachtet: Telegram 429 und 5xx sind Routine, und ein Abbruch lieferte
+    eine halbe Nachricht bei verbrauchtem Budget.
+    """
+    waits: list[float] = []
+    sender = ThrottledSender(fail_times=1)
+    session = _session_with(sender, waits=waits)
+
+    responses = session.send("hallo")
+    assert len(responses) == 1
+    assert sender.calls == 2  # erster Versuch + ein Retry
+    assert waits == [2.0]  # genau Telegrams retry_after abgewartet
+
+
+def test_429_backoff_is_bounded():
+    """Der Backoff darf nicht unbegrenzt werden.
+
+    `retry_after` kann bei Telegram auch mal 60+ Sekunden betragen. Bei
+    1 Worker / 8 Threads würde ein Blockade-Sleep die ganze Instanz einfrieren
+    — deshalb Obergrenze für Versuche **und** Wartezeit.
+    """
+    # Zu lange Wartezeit -> sofort abbrechen, nicht 60 s schlafen.
+    waits: list[float] = []
+    sender = ThrottledSender(fail_times=99, retry_after=600.0)
+    session = _session_with(sender, waits=waits)
+    with pytest.raises(SendError):
+        session.send("hallo")
+    assert waits == []  # nicht gewartet
+    assert sender.calls == 1  # kein Retry
+
+    # Genug Versuche verbraucht -> abbrechen.
+    waits.clear()
+    sender = ThrottledSender(fail_times=99, retry_after=0.1)
+    session = _session_with(sender, waits=waits)
+    with pytest.raises(SendError):
+        session.send("hallo")
+    assert sender.calls == session._max_backoff_attempts + 1  # 1 Versuch + N Retries
+
+
+def test_non_429_error_is_never_retried():
+    """Nur echte Rate-Limits werden wiederholt — ein 400 ist terminal."""
+    calls = []
+
+    def failing(message, secret, *, timeout=None, api_base=None) -> dict:
+        calls.append(message)
+        raise SendError("Telegram-API: can't parse entities")
+
+    session = _session_with(failing)
+    with pytest.raises(SendError):
+        session.send("hallo")
+    assert len(calls) == 1
+
+
+def test_partial_send_releases_unused_rate_budget():
+    """Regression v2.13.0: ein Abbruch verbrauchte das Budget des ganzen Stapels.
+
+    `_reserve_rate_budget(len(messages))` buchte **vor** dem Versand alle
+    Plätze. Bricht der Stapel bei Chunk 7 von 17 ab, blieb das Budget für alle
+    17 verbraucht — der Benutzer konnte den Rest nicht senden, ohne zu warten.
+    """
+    calls = []
+
+    def fails_on_third(message, secret, *, timeout=None, api_base=None) -> dict:
+        calls.append(message)
+        if len(calls) == 3:
+            raise SendError("Telegram-API-Fehler 500", retry_after=None)
+        return {"ok": True}
+
+    session = _session_with(fails_on_third, config=SessionConfig(
+        max_messages_per_minute=100, require_review=False
+    ))
+    with pytest.raises(SendError):
+        session.send("x " * 44_000)  # 88 000 Zeichen -> 20+ Chunks, unter MAX_INPUT_CHARS
+    # Nur die zwei tatsächlich gesendeten Chunks bleiben gebucht.
+    assert len(session._sent_timestamps) == 2
+    assert session.stats.chunks_sent == 2
+
+
+def test_touch_happens_per_chunk_not_only_at_the_end():
+    """Regression v2.13.0: der Leerlauf-Timer wurde erst am Stapelende erneuert.
+
+    Bei bis zu 25 Chunks × 15 s Timeout konnte ein paralleles `reap_expired`
+    die Session mitten im Versand schliessen (`SessionError` im Lauf), und
+    `sent_before_error` war nicht berechenbar.
+    """
+    clock = FakeClock()
+    sender = ThrottledSender(fail_times=0)
+    session = _session_with(sender, clock=clock, config=SessionConfig(
+        max_messages_per_minute=100, require_review=False
+    ))
+    # Idle-Timeout bewusst kurz, TTL weit.
+    session._config = SessionConfig(
+        max_messages_per_minute=100, require_review=False,
+        ttl_seconds=3600, idle_timeout_seconds=0.001,
+    )
+    # `_touch` nach jedem Chunk: nach dem Senden darf die Session nicht als
+    # abgelaufen gelten.
+    session.send("hallo")
+    assert session.is_expired is False
+
+
+def test_concurrent_sends_cannot_overshoot_budget():
+    """Regression v2.13.0: `_reserve_rate_budget` war kein atomares Read-Modify-Write.
+
+    Der Modulkommentar zu Audit M-7 hält fest, dass Dikt-Mutationen unter
+    `--threads` ohne Lock problematisch sind, und `SessionManager` bekam daraufhin
+    eine Sperre — `BotSession` nicht. Zwei parallele `POST /api/byob/send`
+    konnten beide `len(...) == 5` lesen und beide die Prüfung für `5 + 12 > 20`
+    passieren. Das Limit existiert ausdrücklich "Schutz vor Telegram-Sperren".
+    """
+    import threading
+
+    limit = 20
+    session = BotSession.__new__(BotSession)
+    session._config = type("C", (), {"max_messages_per_minute": limit})()
+    session._sent_timestamps = []
+    session._clock = FakeClock()
+    session._lock = threading.RLock()
+
+    rejected: list[str] = []
+
+    def worker() -> None:
+        try:
+            session._reserve_rate_budget(4)
+        except RateLimitExceeded:
+            rejected.append("limit")
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    booked = len(session._sent_timestamps)
+    assert booked <= limit
+    assert booked % 4 == 0
+    assert len(rejected) == 20 - booked // 4
+
+
+def test_close_is_idempotent_under_concurrency():
+    """`close()` läuft unter der Sperre — zweimal parallel ist unschädlich."""
+    import threading
+
+    sender = RecordingSender()
+    session = _session_with(sender)
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            session.close()
+        except BaseException as exc:  # pragma: no cover
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert session.closed is True

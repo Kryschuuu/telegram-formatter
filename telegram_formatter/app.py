@@ -628,15 +628,40 @@ class _ByobRuntime:
         with self._lock:
             return sum(1 for meta in self._meta.values() if meta.get("ip") == ip)
 
-    def open_session(self, token: BotToken, chat_id: str, *, ip: str):
+    def verify_token(self, token: BotToken):
         """
-        Verifiziert + registriert den Bot und öffnet die ephemere Session.
+        Registriert den Bot bei Telegram **außerhalb** jeder Sperre.
+
+        Der Aufruf macht ein `getMe` gegen api.telegram.org — ein blockierender
+        HTTPS-Round-Trip von bis zu `BYOB_API_TIMEOUT` Sekunden (v2.13.0: siehe
+        Kommentar im aufrufenden Endpunkt). Das Ergebnis ist ein
+        `RegistrationRecord` mit der bestätigten Bot-Identität.
 
         :raises RegistrationError: Telegram lehnt das Token ab (ungültig,
-            widerrufen, kein Bot, ID-Mismatch).
+            widerrufen, kein Bot, ID-Mismatch) oder war nicht erreichbar.
+        """
+        return self._registry.register(token, owner_ref="web")
+
+    def open_session(
+        self,
+        token: BotToken,
+        chat_id: str,
+        *,
+        ip: str,
+        record=None,
+    ):
+        """
+        Registriert den Bot und öffnet die ephemere Session.
+
+        :param record: Optional ein bereits von :meth:`verify_token` ermittelter
+            `RegistrationRecord`. Damit kann die Netzwerk-Verifikation **vor**
+            dem Kapazitäts-Lock stattfinden (v2.13.0) — siehe Aufrufer. Fehlt
+            das Argument, wird hier wie bisher selbst verifiziert (dann aber
+            **unter** der Sperre, weil der Aufrufer sie hält).
         :raises SessionError: Chat-ID ungültig oder Session-Grenzen verletzt.
         """
-        record = self._registry.register(token, owner_ref="web")
+        if record is None:
+            record = self.verify_token(token)
         bot_info = _BotInfo(
             id=record.identity.bot_id,
             username=record.identity.username,
@@ -1208,9 +1233,28 @@ def byob_session_open():
 
     runtime = _byob()
     ip = request.remote_addr or "unknown"
-    # Keep the capacity check and creation together. Telegram verification is
-    # intentionally inside the lock: otherwise concurrent opens can all pass
-    # the cap before any of them is inserted into the manager.
+
+    # ── Phase 1: Telegram-Verifikation, OHNE Sperre (v2.13.0) ──────────────
+    #
+    # v2.12.0 hielt `runtime.capacity_lock` über den gesamten `open_session`
+    # und damit über den `getMe`-Round-Trip (bis BYOB_API_TIMEOUT = 15 s).
+    # Der Kommentar dort begründete das mit der Kapazitätsprüfung: mehrere
+    # gleichzeitige `open` könnten alle die Grenze passieren, bevor einer
+    # eingefügt ist.
+    #
+    # Das ist mit einer Nachprüfung genauso erreichbar und ohne den
+    # Serialisierungspunkt: bei 1 Worker × 8 Threads stellten sich 8
+    # gleichzeitige Session-Eröffnungen hintereinander bis zu 8 × 15 s = 2 min
+    # an, wenn Telegram langsam war — die ganze Instanz stand still,
+    # inklusive /, /healthz und aller anderen Threads.
+    try:
+        record = runtime.verify_token(token)
+    except RegistrationError as exc:
+        # Verifikation fehlgeschlagen (ungültig/widerrufen/Netzwerk) — die
+        # Meldung ist per Konstruktion token-frei.
+        return jsonify({"error": str(exc)}), 400
+
+    # ── Phase 2: Kapazität prüfen + Session anlegen, UNTER der Sperre ──────
     with runtime.capacity_lock:
         runtime.manager.reap_expired()
         runtime.prune()
@@ -1224,11 +1268,9 @@ def byob_session_open():
             ), 429
 
         try:
-            session, bot_info, session_secret = runtime.open_session(token, chat, ip=ip)
-        except RegistrationError as exc:
-            # Verifikation fehlgeschlagen (ungültig/widerrufen/Netzwerk) — die
-            # Meldung ist per Konstruktion token-frei.
-            return jsonify({"error": str(exc)}), 400
+            session, bot_info, session_secret = runtime.open_session(
+                token, chat, ip=ip, record=record
+            )
         except SessionError as exc:
             return jsonify({"error": str(exc)}), 400
 
