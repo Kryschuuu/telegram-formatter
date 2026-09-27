@@ -249,6 +249,30 @@ SHARED_WEB_SENDS_PER_MINUTE_TOTAL = _env_int(
 #: erhalten — Codeblöcke werden als eigenständige Blöcke neu geöffnet).
 SHARED_WEB_MAX_INPUT_CHARS = _env_int("TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS", 64_000,
                                       minimum=1)
+#: Obergrenze der Telegram-Chunks pro Sendung (v2.13.0).
+#:
+#: Begründung und Grenzen: Jeder Chunk ist ein eigener API-Aufruf mit
+#: ``timeout=15.0``, sequenziell im Request-Handler — also in **einem** von nur
+#: 8 Gunicorn-Threads (``--workers 1 --threads 8``, Dockerfile). Der Wert
+#: 25 entspricht genau der Chunkzahl, die das BYOB-Eingabelimit
+#: (``BYOB_MAX_INPUT_CHARS`` = 100 000) im regulaeren Pfad erzeugt, und liegt
+#: ueber den 17 Chunks des Shared-Pfads (64 000 Zeichen). Er **verkleinert
+#: damit keine dokumentierte Faehigkeit** — die eigentliche Grenze bleibt die
+#: Eingabelaenge, und die wird ohnehin vorher geprueft.
+#:
+#: Der Wert schuetzt den Thread-Pool nur gegen die Kombination aus maximaler
+#: Eingabe und maximaler Chunkszahl (z. B. wenn kuenftig das Limit angehoben
+#: wird, ohne dass jemand an diese Stelle denkt). Der realistische
+#: Worst-Case-Aufwand liegt deutlich niedriger: ein Aufruf, der in den Timeout
+#: laeuft, wirft sofort, und 25 erfolgreiche Aufrufe dauern je ~100 ms — die
+#: 25 x 15 s gelten nur, wenn **jeder** Aufruf in den Timeout laeuft, dann ist
+#: aber der erste Aufruf bereits gescheitert.
+#:
+#: Wer den Wert senken will (z. B. auf einer kleineren Instanz), muss auch
+#: ``TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS`` entsprechend senken, sonst
+#: lehnt die App gueltige Eingaben ab. Beide Variablen sind geprueft und in
+#: docs/API.md dokumentiert.
+MAX_CHUNKS_PER_REQUEST = _env_int("TELEGRAM_FORMATTER_MAX_CHUNKS_PER_REQUEST", 25, minimum=1)
 #: Fehlerantwort, wenn kein Shared-Zugang offen ist (weder API noch Browser).
 SHARED_SEND_DISABLED = (
     "Shared-Versand deaktiviert: nötig ist entweder der Operator-Token "
@@ -1135,6 +1159,20 @@ def send():
         return err
 
     messages = build_messages(text, chat_id)
+    # v2.13.0: Obergrenze fuer die Chunks pro Anfrage. `SHARED_WEB_MAX_INPUT_CHARS`
+    # (64 000) ergibt ~17-20 regulaere bzw. ~25 rich Chunks. Jeder davon ist ein
+    # eigener `send_message`-Aufruf mit `timeout=15.0`, **sequenziell im
+    # Request-Handler** — also in einem von nur 8 Gunicorn-Threads. Im
+    # schlechtesten Fall ~20 x 15 s = 300 s fuer eine einzige Anfrage.
+    # Zwei oder drei gleichzeitige anonyme Anfragen (4/min/IP, keine
+    # Authentifizierung) erschoepfen damit den gesamten Thread-Pool, und die
+    # Instanz verweigert auch `/` und `/healthz` den Dienst.
+    if len(messages) > MAX_CHUNKS_PER_REQUEST:
+        return jsonify({
+            "error": f"Zu viele Teile ({len(messages)}) — bitte kürzen "
+                     f"(max. {MAX_CHUNKS_PER_REQUEST} Teile pro Sendung).",
+        }), 400
+
     results = []
     for m in messages:
         try:

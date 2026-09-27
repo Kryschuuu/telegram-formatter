@@ -432,3 +432,39 @@ def test_dangling_tail_never_consumes_whole_chunk():
         assert u._dangling_tail(chunk) != chunk
     # Ein Fragment, das nicht der ganze Chunk ist, wandert weiterhin.
     assert u._dangling_tail('x <a href="y') == '<a href="y'
+
+
+def test_chunks_per_request_cap_does_not_shrink_documented_limit():
+    """Die Chunk-Kappung (v2.13.0) darf keine dokumentierte Faehigkeit verkleinern.
+
+    `SHARED_WEB_MAX_INPUT_CHARS` (64 000) erzeugt 17 Chunks, das BYOB-Limit
+    (100 000) erzeugt 23. Der Default der Kappung (25) liegt ueber beiden —
+    ein Absenken wuerde gueltige Eingaben ablehnen, ohne dass die Eingabegrenze
+    das erklaeren wuerde.
+    """
+    assert len(u.build_messages("x" * app_module.SHARED_WEB_MAX_INPUT_CHARS, "-100999")) <= (
+        app_module.MAX_CHUNKS_PER_REQUEST
+    )
+    assert app_module.MAX_CHUNKS_PER_REQUEST >= 17  # Shared-Pfad
+    assert app_module.MAX_CHUNKS_PER_REQUEST >= 23  # BYOB-Pfad
+
+
+def test_send_rejects_more_chunks_than_allowed(monkeypatch):
+    """Ueber der Kappung: 400 mit klarer Meldung, kein API-Aufruf."""
+    from unittest import mock
+
+    monkeypatch.setattr(app_module, "CHAT_ID", "-100999")
+    monkeypatch.setattr(app_module, "API_TOKEN", "")
+    monkeypatch.setattr(app_module, "SHARED_WEB_SEND", True)
+    monkeypatch.setattr(app_module, "SHARED_WEB_SENDS_PER_MINUTE", 0)
+    monkeypatch.setattr(app_module, "SHARED_WEB_SENDS_PER_MINUTE_TOTAL", 0)
+    monkeypatch.setattr(app_module, "MAX_CHUNKS_PER_REQUEST", 3)
+    app_module._RATE_HITS.clear()
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", 0.0)
+    with app_module.app.test_client() as c, mock.patch.object(
+        app_module, "send_message"
+    ) as sender:
+        resp = c.post("/api/send", json={"text": "x" * 64_000, "confirm_public": True})
+    assert resp.status_code == 400
+    assert "Zu viele Teile" in resp.get_json()["error"]
+    assert sender.call_count == 0  # kein einziger API-Aufruf

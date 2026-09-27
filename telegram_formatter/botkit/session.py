@@ -87,6 +87,13 @@ class SessionConfig:
     idle_timeout_seconds: float = 600.0  # 10 min ohne Aktivität -> zu
     max_messages_per_minute: int = 20  # Telegram: ~1 msg/s pro Chat
     max_input_chars: int = 100_000  # Input-Validierung vor der Konvertierung
+    #: Obergrenze der Telegram-Chunks pro Sendung (v2.13.0). 25 entspricht
+    #: genau der Chunkzahl, die `max_input_chars` im regulaeren Pfad erzeugt —
+    #: die Grenze **verkleinert also keine dokumentierte Faehigkeit**, sie
+    #: schuetzt den Gunicorn-Thread-Pool nur gegen die Kombination aus
+    #: maximaler Eingabe und maximaler Chunkszahl. Wer sie senkt, muss
+    #: `max_input_chars` mit senken.
+    max_chunks_per_send: int = 25
     timeout: float = 15.0  # HTTP-Timeout je API-Aufruf
     api_base: str | None = None  # None = offizielle API
     require_review: bool = True  # Fail-Closed: ohne Freigabe keine Session
@@ -252,6 +259,19 @@ class BotSession:
         """
         self._ensure_active()
         total = len(messages)
+        # v2.13.0: Kappung der Chunks pro Sendung. Ohne sie haette jede
+        # Anfrage so viele API-Aufrufe gemacht, wie die Eingabegroesse
+        # hergibt — sequenziell im Request-Handler, also in einem von nur 8
+        # Gunicorn-Threads. `_reserve_rate_budget` (20/min) deckte das nicht ab,
+        # denn **eine** Anfrage konnte das Budget fuer alle 20 auf einmal
+        # verbrauchen. Der Default (25) entspricht genau der Chunkzahl aus
+        # `max_input_chars`; die Grenze schuetzt also den Thread-Pool nur gegen
+        # die Kombination aus maximaler Eingabe und maximaler Chunkszahl.
+        if total > self._config.max_chunks_per_send:
+            raise SessionError(
+                f"Zu viele Teile ({total}) — bitte auf {self._config.max_chunks_per_send} "
+                f"oder weniger kürzen und den Rest separat senden."
+            )
         self._reserve_rate_budget(total)
 
         responses: list[dict] = []
