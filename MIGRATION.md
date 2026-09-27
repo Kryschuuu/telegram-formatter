@@ -285,3 +285,55 @@ als **Verzeichnis** mounten (`./caddy:/etc/caddy:ro`), nicht als einzelne Datei 
 sonst sieht der Container eine veraltete Fassung und liefert
 `ERR_SSL_PROTOCOL_ERROR`. Beides ausführlich in `docs/DOCKER.md` §8a und
 `docs/RUNBOOK.md`.
+
+## 14. Nachzug: v2.14.0 — Vorschau 1:1 zu Telegram
+
+Für **Nutzer** der Weboberfläche: die Live-Vorschau zeigt jetzt genau das, was
+Telegram bekommt. Für Skripte, die `/api/convert` aufrufen, kommt **ein Feld
+dazu** — bestehende Auswertungen bleiben gültig.
+
+| Bereich | Alt (≤ 2.13.0) | Neu (≥ 2.14.0) |
+|---|---|---|
+| Vorschau Überschrift | `<b>Titel</b>` | `<b>🚀 Titel</b>` (der Emoji steckt schon im Payload — die Vorschau rechnete ihn nur nicht nach) |
+| Vorschau Pipe-Tabelle | `\| Name \| Preis \|` Rohtext | echte `<table>` mit `<thead>`/`<tbody>` |
+| Vorschau LaTeX | LaTeX-Quelltext in Monospace | gesetzte Formel (KaTeX, selbst gehostet) |
+| Vorschau `\(…\)` | wörtlich `\(x^2\)` | `$x^2$` (der Konverter normalisiert schon) |
+| Vorschau Redirect-Link | unverändert | auf Ziel entpackt |
+| Vorschau Aufteilung | ein Block | **eine Sprechblase je Nachricht**, mit Nummer und Zeichen/Limit |
+| `POST /api/convert` | `count`, `messages` | zusätzlich `preview` (siehe unten) |
+| CSP | `style-src 'self'`, sonst streng | zusätzlich `style-src-attr 'unsafe-inline'` (KaTeX-Glyphen) — **eine** Ausnahme, `style-src` bleibt ohne `'unsafe-inline'` |
+| Assets | — | +596 KB (KaTeX) im Image und im Wheel |
+
+**Neues Feld `preview`** (additiv, rückwärtskompatibel):
+
+```json
+{
+  "count": 2,
+  "messages": [ /* unverändert */ ],
+  "preview": {
+    "path": "rich",
+    "count": 2,
+    "messages": [
+      {"index": 1, "kind": "rich", "html": "<h1 …>Titel</h1>", "utf16": 1820, "limit": 32768}
+    ]
+  }
+}
+```
+
+`html` ist **bereits sanitisiert** (Allowlist der von Telegram unterstützten
+Tags, keine Event-Handler, kein `style`, keine `javascript:`-URLs). LaTeX
+steht als `<span class="tf-math" data-tex="…">` und wird vom Client gesetzt.
+Wer die Vorschau in eine eigene Oberfläche einbaut, muss das HTML nur noch
+einsetzen. Vollständige Beschreibung: `docs/API.md`, Abschnitt „Feld
+`preview`".
+
+**Wer selbst eine Vorschau gebaut hat:** nicht `app.js` kopieren. Die
+einzige Wahrheit ist `POST /api/convert` — `telegram_formatter/preview.py`
+enthält beide Renderer (HTML- und Rich-Pfad) und ist rund 500 Zeilen rein.
+Details und die Begründung: `docs/DESIGN.md` §5a.
+
+**Anmerkung zum Datenschutzverhalten:** es ändert sich nichts. `app.js`
+schickte den Editorinhalt für die Payload-Ansicht schon immer bei jeder
+Tipppause (300 ms) an den Server und verwarf die Antwort für die Vorschau.
+Wer das bisher als „bleibt im Browser" gelesen hat, dem war das schon vorher
+so — nur eben unbemerkt.

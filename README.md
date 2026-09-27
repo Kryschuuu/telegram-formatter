@@ -65,7 +65,11 @@ Nachrichten.
   nutzen — ohne zentrale Datenspeicherung.
 - **Unicode-sicher** — NFC-Normalisierung für Diakritika wie `ì`.
 - **Komfortable Web-Oberfläche** (v1.1.0, Redesign 2026-09) — Live-Vorschau
-  und Payloads in Echtzeit, Zeichenzähler, Reset-Button („Zurücksetzen“),
+  **1:1 wie in Telegram** (seit v2.14.0: gesetzte LaTeX-Formeln, echte
+  Tabellen, Emoji-Überschriften und **eine Sprechblase je Nachricht** — die
+  Vorschau ist die Payload, keine zweite Rechnung; siehe
+  [`docs/DESIGN.md` §5a](docs/DESIGN.md)), Payloads in Echtzeit,
+  Zeichenzähler, Reset-Button („Zurücksetzen“),
   Sticky-Header, Schritt-für-Schritt-Howto, aufklappbares FAQ,
   Disclaimer-Hinweisbox und Buy-me-a-coffee-Link (Header & Footer).
   Vollständig selbst-gehostetes Design-System (keine CDNs) mit **vier Themes
@@ -409,12 +413,14 @@ telegram-formatter/
 │   ├── app.py                  #   Flask-Weboberfläche (WSGI-Einstieg)
 │   ├── cli.py                  #   Kommandozeilen-Einstieg
 │   ├── utils.py                #   Konvertierungs- & Splitting-Logik (pure)
+│   ├── preview.py              #   Anzeige-HTML für die Vorschau (pure, s. DESIGN §5a)
 │   ├── sender.py               #   HTTP-Versand an die Telegram-API
 │   ├── botctl.py               #   CLI für eigene Bots (register/review/approve/send)
 │   ├── templates/index.html    #   Editor-Seite (inkl. BYOB-Sektion)
 │   ├── static/                 #   selbst-gehostetes UI (keine CDNs, CSP 'self')
 │   │   ├── css/                #     tokens → base → layout → components
-│   │   └── js/                 #     theme.js · app.js · byob.js (BYOB-Session)
+│   │   ├── js/                 #     theme.js · app.js · byob.js (BYOB-Session)
+│   │   └── katex/              #     Formel-Renderer (v2.14.0, MIT, via scripts/vendor-katex.sh)
 │   └── botkit/                 #   Dezentrale Bots (BYOB), seit v1.3.0
 │       ├── tokens.py           #     BotToken, RAM-Vaults, Formatvalidierung
 │       ├── privacy.py          #     Redaction, Fingerprints, audit()
