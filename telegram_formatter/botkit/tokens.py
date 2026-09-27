@@ -222,8 +222,19 @@ class InMemoryTokenVault:
     * Handles sind 256-Bit-Zufallswerte (nicht erratbar, nicht ableitbar);
     * die TTL ist hart: :meth:`fetch` verlängert sie *nicht*, eine Session
       muss sich bei Bedarf neu registrieren (Fail-Closed statt Komfort);
-    * :meth:`purge_expired` wird vom Session-Manager regelmäßig aufgerufen;
-    * alle Operationen laufen unter einem Lock (Thread-safety, Audit M-7).
+    * :meth:`purge_expired` räumt abgelaufene Einträge — **der Aufrufer ist
+      dafür zuständig** (siehe „Kein automatischer Reaper" unten);
+    * alle Operationen laufen unter einem Lock (Thread-safety, Audit M-7);
+    * :attr:`max_entries` begrenzt die Größe (v2.13.0) — ohne diese Schranke
+      wüchse ``_entries`` unbegrenzt, weil ``store`` alte Einträge nicht
+      verdrängt.
+
+    **Kein automatischer Reaper.** v2.12.0 behauptete hier, ``purge_expired``
+    werde „vom Session-Manager regelmäßig aufgerufen". Das war falsch:
+    :class:`~telegram_formatter.botkit.session.SessionManager` hat gar keinen
+    Vault, und repo-weit ruft nur :mod:`tests.test_tokens` die Methode auf.
+    Wer den Vault verwendet, **muss** selbst für den Aufruf sorgen (z. B. aus
+    einem periodischen Task oder vor jedem ``store``).
 
     Hinweis (Audit N-5): Dieser Vault ist ein **Baustein** für
     Handle-basierte Integrationen. Der seit v2.2.0 implementierte gehostete
@@ -233,6 +244,14 @@ class InMemoryTokenVault:
     ein zusätzlicher Vault wäre Redundanz. Der Session-Handle wandert als
     opaker Zufallswert im Request-Body (kein Cookie) — Begründung:
     ``docs/DECENTRAL_BOT_ARCHITECTURE.md`` §1.5.1.
+
+    **Keine Verschlüsselung im Ruhezustand.** Es gibt repo-weit keine
+    Verschlüsselung, Schlüsselableitung oder Nonce — weder in diesem Modul noch
+    in ``botkit`` (grep nach ``Fernet|AES|ChaCha|nonce|pbkdf2|argon2|
+    encrypt|decrypt|cryptography``: null Treffer in ``telegram_formatter/``).
+    Die Zusage lautet „nur im Arbeitsspeicher, nie auf einem dauerhaften
+    Medium" — nicht „verschlüsselt". Wer den Unterschied in einer
+    Sicherheitsbewertung braucht, findet ihn in ``security/README.md``.
     """
 
     def __init__(
@@ -240,9 +259,15 @@ class InMemoryTokenVault:
         *,
         clock: Callable[[], float] = time.monotonic,
         default_ttl_seconds: float = 900.0,
+        max_entries: int = 1_000,
     ) -> None:
         self._clock = clock
         self._default_ttl = default_ttl_seconds
+        #: Obergrenze der Einträge (v2.13.0). `store` verdrängt keine alten
+        #: Einträge — wer den Vault tatsächlich verwendet und `purge_expired`
+        #: (siehe Docstring: kein automatischer Reaper) vergisst, wäre sonst bei
+        #: jedem `store` um ein Token reicher, unbegrenzt.
+        self._max_entries = max_entries
         self._entries: dict[str, tuple[VaultEntry, BotToken]] = {}
         self._lock = threading.RLock()
 
@@ -258,6 +283,13 @@ class InMemoryTokenVault:
             expires_at=now + ttl,
         )
         with self._lock:
+            # Platz schaffen, bevor der neue Eintrag dazukommt: der älteste
+            # (niedrigster `created_at`) wird verworfen. `purge_expired` zuerst —
+            # abgelaufene sind ohnehin wertlos und kosten nichts.
+            self._purge_expired_locked(now)
+            while len(self._entries) >= self._max_entries:
+                oldest = min(self._entries, key=lambda h: self._entries[h][0].created_at)
+                del self._entries[oldest]
             self._entries[handle] = (entry, token)
         return handle
 
@@ -277,12 +309,23 @@ class InMemoryTokenVault:
             return self._entries.pop(handle, None) is not None
 
     def purge_expired(self) -> int:
-        now = self._clock()
+        """Entfernt abgelaufene Einträge — **der Aufrufer ist zuständig**.
+
+        Es gibt keinen Hintergrund-Timer: v2.12.0 behauptete im Docstring, der
+        Session-Manager rufe diese Methode regelmäßig auf — er hat gar keinen
+        Vault. ``store`` ruft sie inzwischen selbst auf, das begrenzt das
+        Wachstum aber nur auf *einen* Aufrufer; wer den Vault direkt nutzt,
+        muss sie zusätzlich aufrufen (z. B. periodisch oder vor Leseoperationen).
+        """
         with self._lock:
-            expired = [h for h, (entry, _) in self._entries.items() if now >= entry.expires_at]
-            for handle in expired:
-                del self._entries[handle]
-            return len(expired)
+            return self._purge_expired_locked(self._clock())
+
+    def _purge_expired_locked(self, now: float) -> int:
+        """Abgelaufene entfernen — Aufrufer hält bereits ``self._lock``."""
+        expired = [h for h, (entry, _) in self._entries.items() if now >= entry.expires_at]
+        for handle in expired:
+            del self._entries[handle]
+        return len(expired)
 
     def __len__(self) -> int:
         with self._lock:

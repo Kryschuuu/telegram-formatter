@@ -172,3 +172,90 @@ def test_vault_parallel_store_fetch_is_thread_safe():
         t.join()
     assert errors == []
     assert len(vault) == 0
+
+
+# ---------------------------------------------------------------------------
+# Regression v2.13.0 — Vault-Grenzen und ehrliche Zusage
+# ---------------------------------------------------------------------------
+class TestVaultIsBounded:
+    """`store` verdrängte nichts — der Vault wuchs unbegrenzt.
+
+    `purge_expired` wird nur von den Tests aufgerufen (der Docstring behauptete
+    fälschlich, der Session-Manager rufe sie regelmäßig auf; er hat gar keinen
+    Vault). Jeder Aufrufer von `store` hätte also dauerhaft einen Token mehr im
+    Speicher.
+    """
+
+    def test_store_is_bounded(self):
+        vault = InMemoryTokenVault(max_entries=5)
+        for _ in range(50):
+            vault.store(BotToken.parse(SECRET))
+        assert len(vault) == 5
+
+    def test_expired_entries_are_purged_on_store(self):
+        clock = FakeClock()
+        vault = InMemoryTokenVault(clock=clock, default_ttl_seconds=10.0, max_entries=100)
+        for _ in range(5):
+            vault.store(BotToken.parse(SECRET))
+        assert len(vault) == 5
+        clock.advance(11.0)  # alles abgelaufen
+        vault.store(BotToken.parse(SECRET))
+        assert len(vault) == 1  # der Sweep lief beim Speichern mit
+
+    def test_oldest_is_evicted_first(self):
+        clock = FakeClock()
+        vault = InMemoryTokenVault(clock=clock, default_ttl_seconds=10_000.0, max_entries=3)
+        handles = []
+        for _ in range(5):
+            clock.advance(1.0)
+            handles.append(vault.store(BotToken.parse(SECRET)))
+        # Die zwei ältesten Handles sind verdrängt, die drei jüngsten leben.
+        assert vault.fetch(handles[0]) is None
+        assert vault.fetch(handles[1]) is None
+        for handle in handles[2:]:
+            assert vault.fetch(handle) is not None
+
+    def test_purge_expired_still_public(self):
+        clock = FakeClock()
+        vault = InMemoryTokenVault(clock=clock, default_ttl_seconds=5.0)
+        vault.store(BotToken.parse(SECRET))
+        clock.advance(6.0)
+        assert vault.purge_expired() == 1
+        assert len(vault) == 0
+
+
+def test_docstring_does_not_claim_automatic_reaping():
+    """Die Zusage „wird vom Session-Manager regelmäßig aufgerufen" war falsch.
+
+    Geprüft wird nicht das Vorkommen des Wortes, sondern die **Richtung** der
+    Aussage: „ruft sie regelmäßig auf" darf nur noch im verneinenden Satz
+    vorkommen („Der Session-Manager ruft sie regelmäßig auf — er hat gar keinen
+    Vault").
+    """
+    doc = InMemoryTokenVault.__doc__ or ""
+    assert "Kein automatischer Reaper" in doc
+    assert "**muss** selbst für den Aufruf sorgen" in doc
+    # Jede Erwähnung von „regelmäßig aufgerufen" muss die Behauptung
+    # ausdrücklich zurückweisen — nicht sie wiederholen.
+    for line in doc.splitlines():
+        if "regelmäßig aufgerufen" in line:
+            assert "Das war falsch" in line or "hat gar keinen" in line, line
+    # Und die Abwesenheit von Verschlüsselung wird klar benannt.
+    assert "Keine Verschlüsselung" in doc
+
+
+def test_no_encryption_anywhere_in_package():
+    """Die Zusage lautet „nur RAM", nicht „verschlüsselt" — das ist belegbar."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "telegram_formatter"
+    banned = ("fernet", "chacha", "pbkdf2", "argon2", "cryptography", "cipher")
+    hits = [
+        f"{p.relative_to(root)}:{i}"
+        for p in root.rglob("*.py")
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if any(b in line.lower() for b in banned)
+        and "grep nach" not in line
+        and "null Treffer" not in line
+    ]
+    assert hits == [], f"Unerwartete Verschlüsselungs-Referenzen: {hits}"
