@@ -9,8 +9,13 @@ verschwindet danach spurlos:
 
 * das Token liegt im Session-Objekt und wird bei :meth:`BotSession.close`
   fallengelassen (kein Vault, keine Datei, kein Log);
-* TTL und Leerlauf-Timeout beenden die Session automatisch
-  (:class:`SessionManager.reap_expired`);
+* TTL und Leerlauf-Timeout beenden die Session: :meth:`BotSession.is_expired`
+  meldet sie, und :class:`SessionManager.reap_expired` räumt sie weg. Es gibt
+  **keinen Hintergrund-Timer** — der Aufruf erfolgt bei jedem Zugriff
+  (``open``/``get``/``send``). Eine Session, die danach niemand mehr anfasst,
+  bleibt bis zum nächsten Zugriff im RAM liegen; im gehosteten Modus ruft
+  ``app.py`` ``reap_expired()`` vor jedem ``/api/byob/*``-Zugriff, die
+  Obergrenze ist :data:`BYOB_MAX_SESSIONS_TOTAL`;
 * gesendet wird über die bestehenden Projekt-Module ``utils.build_messages``
   und ``sender.send_message`` — die Konvertierung bleibt damit unberührt;
 * geloggt werden nur Metadaten (Bot-ID, Anzahl Chunks, Zeichenzahl,
@@ -447,8 +452,19 @@ class SessionManager:
 
     Aufgaben: Öffnen nur nach Registrierung (und optional Review),
     Wiederfinden per Session-ID, geordnetes Schließen und das Abernten
-    abgelaufener Sessions (``reap_expired``, z. B. aus einem Timer oder vor
-    jedem Öffnen).
+    abgelaufener Sessions (``reap_expired``).
+
+    .. important:: **Es gibt keinen Hintergrund-Timer** (v2.13.0). Das
+       Modul-Docstring behauptete, TTL und Leerlauf-Timeout beendeten die
+       Session „automatisch“ — automatisch nur in dem Sinne, dass
+       :meth:`open` und :meth:`get` vor jedem Zugriff aufräumen. Eine Session,
+       auf die danach niemand mehr zugreift, bleibt bis zum nächsten Zugriff
+       im Objektgraphen; ihr ``BotToken`` also im Heap. Das ist durch
+       :data:`BYOB_MAX_SESSIONS_TOTAL` (100) beschränkt, aber eine Session
+       kann ihre deklarierte 30-Minuten-TTL um beliebig viel überschreiten.
+       Wer eine Garantie braucht, ruft :meth:`reap_expired` aus einem eigenen
+       Thread auf (z. B. ``threading.Timer``) — ``app.py`` ruft es vor jedem
+       BYOB-Zugriff auf.
     """
 
     def __init__(
@@ -560,7 +576,12 @@ class SessionManager:
         return True
 
     def reap_expired(self) -> int:
-        """Schließt alle abgelaufenen Sessions, liefert die Anzahl."""
+        """Schließt alle abgelaufenen Sessions, liefert die Anzahl.
+
+        **Aufruf durch den Anwender** — es läuft kein Hintergrund-Timer mit
+        (v2.13.0). Aufrufer im Projekt: :meth:`open` (vor jedem Öffnen) und
+        ``app.py`` vor jedem ``/api/byob/*``-Zugriff.
+        """
         with self._lock:
             expired = [sid for sid, session in self._sessions.items() if session.is_expired]
             doomed = [self._sessions.pop(sid) for sid in expired if sid in self._sessions]
