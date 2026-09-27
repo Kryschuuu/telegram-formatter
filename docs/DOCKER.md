@@ -80,7 +80,7 @@ docker compose logs -f app     # Strg+C zum Verlassen
 > Abschnitt 5 ausführen oder die Ausnahme zum Testen einmal bestätigen.
 
 ```bash
-# 1) Liveness-Probe (muss {"status":"ok","version":"2.12.0"} liefern)
+# 1) Liveness-Probe (muss {"status":"ok","version":"2.13.0"} liefern)
 curl -k https://192.168.0.10/healthz
 
 # 2) Editor-Seite im Browser öffnen
@@ -180,6 +180,7 @@ wichtigsten Entscheidungen für den LAN-Betrieb:
 | `TELEGRAM_FORMATTER_API_TOKEN` | leer (Demo) | nur für authentifizierte API-Nutzung setzen |
 | `TELEGRAM_FORMATTER_TRUSTED_PROXY_HOPS` | `1` | wird von Compose erzwungen (genau ein Hop: Caddy) |
 | `TELEGRAM_FORMATTER_BYOB_ENABLED` | `1` | private Sessions mit eigenem Bot erlauben |
+| `TELEGRAM_FORMATTER_MAX_CHUNKS_PER_REQUEST` | `25` (Default) | Obergrenze Telegram-Chunks pro Sendung — **nur senken, wenn auch** `SHARED_WEB_MAX_INPUT_CHARS` gesenkt wird |
 
 ### Anpassen (eigenes Netz, mehrere Clients)
 
@@ -203,6 +204,115 @@ wichtigsten Entscheidungen für den LAN-Betrieb:
 | Endlosschleife / Login unmöglich | Hier nicht anwendbar — die App hat kein Login; BYOB-Sessions enden beim App-Neustart (RAM), danach einfach neu öffnen. |
 | Telegram antwortet 429/502 | Rate-Limit oder Bot nicht im Kanal: Antwort-`retry_after` abwarten, Bot-Mitgliedschaft + Recht *Nachrichten senden* prüfen. |
 | `docker compose config` meckert | `.env` fehlt oder YAML-Syntaxfehler: `cp .env.example .env` bzw. Einrückung (2 Leerzeichen) prüfen. |
+
+> **Für den Betrieb hinter einem bereits vorhandenen Caddy** (mehrere Dienste
+> hinter einem Proxy) gelten andere Regeln als in Abschnitt 3 dieses Dokuments
+> — insbesondere der Upstream. Siehe [RUNBOOK.md](RUNBOOK.md) §„Geteilter
+> Proxy".
+
+## 8a. Geteilter Proxy (mehrere Dienste hinter einem Caddy)
+
+Dieser Abschnitt ergänzt die Kapitel 1–8 um den Fall, der in der Praxis am
+häufigsten auftritt: **die App läuft nicht in ihrem eigenen Compose-Stack,
+sondern in einem größeren, der einen Caddy für alle Dienste teilt.**
+
+Die eigenständige Konfiguration aus Abschnitt 3 gilt weiterhin. Der
+Unterschied ist der **Upstream** — und genau hier ist der häufigste Fehler
+entstanden.
+
+| | eigenständiger Stack | geteilter Proxy |
+|---|---|---|
+| App-Dienstname | `app` | z. B. `telegram-formatter` |
+| Netz | `appnet` | das gemeinsame Netz (hier: `web`) |
+| Upstream im Caddyfile | `reverse_proxy app:5000` | `reverse_proxy telegram-formatter:5000` |
+| Caddyfile | eigene Datei im App-Verzeichnis | eine gemeinsame Datei für alle Dienste |
+
+### Die Regel: Upstream ist der Dienstname, niemals `host.docker.internal`
+
+**Warum:** Ein Compose-Dienst mit `expose:` (statt `ports:`) veröffentlicht
+**keinen** Host-Port. `host.docker.internal:5000` zeigt dann ins Leere — auf
+dem Host lauscht nichts, der Caddy-Proxy bekommt `502 Bad Gateway`. Das ist
+genau der Fehler, den die Doku vorher hergab: Sie kannte nur den
+eigenständigen Stack (`app:5000` auf `appnet`) und erwähnte den geteilten
+Fall gar nicht.
+
+```caddy
+# RICHTIG — Dienstname, beide im gemeinsamen Netz:
+telegram-formatter.local {
+	tls internal
+	reverse_proxy telegram-formatter:5000
+}
+
+# FALSCH — nichts lauscht dort, wenn kein `ports:` gesetzt ist:
+# reverse_proxy host.docker.internal:5000
+```
+
+`host.docker.internal` ist **nur** für Dienste zulässig, die einen echten
+Host-Port veröffentlicht haben (`ports: "3000:3000"` o. ä.) oder außerhalb
+Docker laufen.
+
+### Prüfen, welcher Upstream wirklich funktioniert
+
+Vom Caddy-Container aus testen — das ist der Ort, an dem die Verbindung
+tatsächlich entsteht:
+
+```bash
+# fish
+docker compose exec proxy sh -c 'nc -z -w3 telegram-formatter 5000; and echo OPEN; or echo CLOSED'
+docker compose exec proxy curl -s -o /dev/null -w "%{http_code}\n" http://telegram-formatter:5000/healthz
+```
+
+```bash
+# bash
+docker compose exec proxy sh -c 'nc -z -w3 telegram-formatter 5000 && echo OPEN || echo CLOSED'
+docker compose exec proxy curl -s -o /dev/null -w "%{http_code}\n" http://telegram-formatter:5000/healthz
+```
+
+Erwartet: `OPEN` und `200`. `CLOSED` heißt: der Dienstname stimmt nicht, das
+Netz ist nicht gemeinsam, oder der Dienst läuft gar nicht.
+
+### Der Caddyfile-Mount: Verzeichnis, nicht Datei
+
+```yaml
+# RICHTIG — Verzeichnis:
+- ./caddy:/etc/caddy:ro
+# FALSCH — einzelne Datei:
+- ./caddy/Caddyfile:/etc/caddy/Caddyfile
+```
+
+Ein Bind-Mount auf eine **einzelne Datei** friert deren Inode im Container ein.
+Wird die Datei auf dem Host atomar ersetzt — der Standard vieler Editoren
+(temp schreiben + `rename`) —, sieht der Container den **alten** Inhalt weiter.
+Caddy reloadet dann eine veraltete Konfiguration, stellt für neue Hostnamen
+**kein** Zertifikat aus und bricht den TLS-Handshake ab:
+
+```
+ERR_SSL_PROTOCOL_ERROR        (Browser)
+tlsv1 alert internal error    (curl)
+```
+
+Der Fehler sieht nach einem Netz- oder Zertifikatsproblem aus, ist aber
+ein Konfigurationsproblem. Ein Verzeichnis-Mount ist dagegen immun: der
+Verzeichnis-Inode bleibt stabil, die Datei darin wird immer neu gesehen.
+Nachweis:
+
+```bash
+# fish
+md5sum ./caddy/Caddyfile
+docker compose exec proxy md5sum /etc/caddy/Caddyfile
+```
+
+```bash
+# bash
+md5sum ./caddy/Caddyfile
+docker compose exec proxy md5sum /etc/caddy/Caddyfile
+```
+
+Gleiche Prüfsumme = ok. Verschiedene = veralteter Mount (Fix: Verzeichnis-Mount
+oder `docker compose up -d --force-recreate proxy`).
+
+Ausführliche Diagnose-Anleitung: [RUNBOOK.md](RUNBOOK.md), Kurzantworten:
+[FAQ.md](FAQ.md).
 
 ## 9. Sicherheits-Checkliste (vor dem produktiven Einsatz)
 

@@ -430,6 +430,8 @@ telegram-formatter/
 │   ├── DECENTRAL_BOT_ARCHITECTURE.md       # BYOB-Architektur & Review-Prozess
 │   ├── DEPLOYMENT.md                       # Render.com-Anleitung
 │   ├── DOCKER.md                           # lokales Docker/Caddy-Deployment (LAN)
+│   ├── RUNBOOK.md                          # Betrieb & Diagnose (fish + bash)
+│   ├── FAQ.md                              # Kurzantworten auf Einzelfragen
 │   ├── API.md                              # Endpoint-Referenz (seit v2.12.0)
 │   ├── DESIGN.md                           # Design-System & Themes
 │   └── FORMATTING.md                       # Telegram-Features vs. LLM-Ausgabe
@@ -497,10 +499,17 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
   Bots registrieren, reviewen und in Sessions nutzen; Peer-Review-Prozess.
 - [Deployment](docs/DEPLOYMENT.md) — Schritt-für-Schritt für Render.com.
 - [Docker-Deployment](docs/DOCKER.md) — lokaler Stack (Compose + Caddy,
-  TLS, ACL) mit konkretem LAN-Beispiel.
+  TLS, ACL) mit konkretem LAN-Beispiel; [§8a](docs/DOCKER.md#8a-geteilter-proxy-mehrere-dienste-hinter-einem-caddy)
+  für den Betrieb hinter einem bereits vorhandenen Caddy.
+- [Runbook](docs/RUNBOOK.md) — Betrieb, Diagnose, Notfall. Jeder Befehl in
+  **fish** und **bash**. Beginnt mit den drei Fragen, die 90 % aller Fälle
+  klären.
+- [FAQ](docs/FAQ.md) — Kurzantworten: warum `ERR_SSL_PROTOCOL_ERROR` kein
+  Zertifikatsproblem ist, warum `host.docker.internal:5000` immer 502 gibt.
 - [API-Referenz](docs/API.md) — alle Endpunkte, Auth, Limits, Fehlercodes.
 - [Code-Peer-Review](peer-review/CODE_REVIEW.md) — gefundene Probleme und
   Fixes; Vorlage & Konventionen: [peer-review/](peer-review/README.md).
+  Das Review zu v2.13.0: [2026-09_CODE-REVIEW-V2.13.0.md](peer-review/2026-09_CODE-REVIEW-V2.13.0.md).
 - [Security-Konzept](security/README.md) — Schutzziele & Durchsetzung;
   Meldeprozess: [.github/SECURITY.md](.github/SECURITY.md).
 - [Audit-Einstieg](audit/README.md) — Prüf-Matrix und Ablage des

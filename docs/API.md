@@ -10,7 +10,10 @@ Konventionen:
 * **Fehler sind immer JSON**: `{"error": "…", …}` — nie HTML, nie Tracebacks,
   nie Tokens/URLs/Inhalte in Meldungen.
 * Request-Bodys sind auf **512 KiB** begrenzt (darüber `413`).
-* POSTs mit fremdem `Origin`-Header werden mit `403` abgewiesen.
+* POSTs mit fremdem `Origin`-Header werden mit `403` abgewiesen. Auch
+  `Origin: null` (Sandboxed-iframe, `file://`, Redirect-Verläufe) zählt als
+  fremd — seit v2.13.0; vorher passierte der Fall durch, weil `urlparse("null")`
+  keinen `netloc` liefert.
 * Ist `TELEGRAM_FORMATTER_API_TOKEN` gesetzt, verlangen alle POSTs den Header
   `X-Auth-Token` (`401` ohne) — **außer** `POST /api/send` bei freigegebenem
   Browser-Versand (der Browser erhält das Secret nie).
@@ -50,7 +53,7 @@ Billig (kein Template), nie ratenlimitiert, ohne Konfigurationsdetails:
 
 ```bash
 curl -k https://192.168.0.10/healthz
-# {"status":"ok","version":"2.12.0"}
+# {"status":"ok","version":"2.13.0"}
 ```
 
 ## POST /api/convert
@@ -81,8 +84,23 @@ Eingaben kommen als **mehrere** Nachrichten zurück (Aufteilung an Absatz-,
 Zeilen- und Wortgrenzen, Formatierungen bleiben je Chunk wohlgeformt).
 
 Fehler: `400` (kein JSON-Objekt, `text` kein String, zu lang — max.
-`TELEGRAM_FORMATTER_MAX_INPUT_CHARS`, ungültige `chat_id`), `401` (s. o.),
-`429`, `413`.
+`TELEGRAM_FORMATTER_MAX_INPUT_CHARS`, ungültige `chat_id`, unvollständiges
+Unicode-Zeichen, s. u.), `401` (s. o.), `429`, `413`.
+
+**Unvollständiges Unicode (seit v2.13.0).** `{"text": "𝓀"}` ist syntaktisch
+gültiges JSON — der `json`-Decoder erzeugt daraus einen *ungepaarten*
+UTF-16-Surrogate, der in UTF-8 gar nicht darstellbar und also von keiner
+Validierung zu beanstanden ist. Er scheitert erst beim UTF-16-Encoding
+(`UnicodeEncodeError`). Statt eines undurchsichtigen `500` wird er hier
+abgelehnt:
+
+```json
+{"error": "'text' enthält ungültige Zeichen (unvollständiges Unicode)."}
+```
+
+Status `400`. Gilt für **alle** Endpunkte mit `text`-Feld, auch für die
+Sendewege — dort hätte derselbe String nicht nur einen 500, sondern einen
+halb zugestellten Versand ohne `sent_before_error` verursacht.
 
 ## POST /api/send — geteilter Bot (öffentlich!)
 
@@ -113,6 +131,28 @@ curl -k -X POST https://192.168.0.10/api/send \
   -H 'Content-Type: application/json' -H 'X-Auth-Token: <operator-secret>' \
   --data '{"text":"Hallo Kanal!"}'
 ```
+
+**Obergrenze pro Sendung (seit v2.13.0).** Jeder Telegram-Chunk ist ein
+eigener API-Aufruf mit `timeout=15.0`, sequenziell im Request-Handler — also
+in einem von nur 8 Gunicorn-Threads. Ohne Kappung bindet eine Anfrage bis zu
+23 × 15 s = 345 s einen Thread, und zwei bis drei gleichzeitige anonyme
+Anfragen erschöpfen den Pool (die Instanz antwortet dann auch auf `/` nicht
+mehr).
+
+`TELEGRAM_FORMATTER_MAX_CHUNKS_PER_REQUEST` (Default **25**) begrenzt die
+Chunkzahl. Der Default entspricht genau der Chunkzahl der dokumentierten
+Eingabelimits (17 für 64 000 Zeichen, 23 für 100 000) und verkleinert damit
+**keine** dokumentierte Fähigkeit. Wird er gesenkt, muss
+`TELEGRAM_FORMATTER_SHARED_WEB_MAX_INPUT_CHARS` mitgesenkt werden, sonst
+lehnt die App gültige Eingaben ab:
+
+```json
+{
+  "error": "Zu viele Teile (23) — bitte kürzen (max. 10 Teile pro Sendung)."
+}
+```
+
+Status `400`. Es wird **kein** einziger API-Aufruf abgesetzt.
 
 Erfolg:
 
@@ -151,6 +191,24 @@ curl -k -X POST https://192.168.0.10/api/byob/session \
   -H 'Content-Type: application/json' \
   --data '{"token":"<dein-bot-token>","chat_id":"-1001234567890","consent":true}'
 ```
+
+**Body-Format (seit v2.13.0).** JSON ist der Normalfall und hat Vorrang.
+Zusätzlich wird `application/x-www-form-urlencoded` akzeptiert, damit das
+HTML-Formular der Seite auch ohne JavaScript funktioniert:
+
+```bash
+# Ohne JavaScript (der Fall, für den es das gibt):
+curl -k -X POST https://192.168.0.10/api/byob/session \
+  -d 'token=<dein-bot-token>' -d 'chat_id=-1001234567890' -d 'consent=on'
+```
+
+**Warum es den Formular-Weg braucht:** das `<form>` auf der Seite trägt
+bewusst `method="post"`. Ohne diese Angabe hätte ein Browser per HTML-Default
+GET verwendet und den Bot-Token als Query-String an die URL gehängt — in die
+Adressleiste, die Browser-Historie und das Caddy-Access-Log. Bei einem
+Formular-Body kommt `consent` als **String** (`"on"` bei angehaktem
+Kontrollkästchen), im JSON als Boolean `true`; `"false"`, `"0"` und `""`
+sind in beiden Fällen **keine** Zustimmung.
 
 ```json
 {

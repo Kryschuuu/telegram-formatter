@@ -10,10 +10,17 @@ Verlauf** — für den Kern-Code des Projekts ebenso wie für Nutzer-Bots
 peer-review/
 ├── README.md            # diese Konventionen
 ├── TEMPLATE.md          # Vorlage für einen neuen Review-Bericht
-├── CODE_REVIEW.md       # aktuellster abgeschlossener Review-Bericht
+├── CODE_REVIEW.md       # Einstieg: letzter abgeschlossener Review
+├── 2026-09_CODE-REVIEW-V2.13.0.md      # Vollständiges Review zum Release 2.13.0
+├── 2026-09_DOCKER-CADDY-DEPLOYMENT.md  # Review zum Deployment-Release 2.12.0
 └── archive/             # abgeschlossene Vorgänge (Prompts, PR-Beschreibungen, alte Berichte)
     └── …
 ```
+
+Berichte werden **nicht** überschrieben. Jeder Release-Zyklus bekommt eine
+eigene Datei `<JAHR>-<MONAT>_<kurztitel>.md`; `CODE_REVIEW.md` und der
+Abschnitt „Release Notes" in `CHANGELOG.md` verweisen darauf. So bleibt
+nachvollziehbar, welcher Befund in welcher Version behoben wurde.
 
 ## Konventionen
 
