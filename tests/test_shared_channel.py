@@ -20,6 +20,7 @@ gelöscht werden. Die Tests sichern drei Ebenen:
 from __future__ import annotations
 
 import logging
+import time
 from collections import deque
 
 import pytest
@@ -38,6 +39,7 @@ def client(monkeypatch):
     monkeypatch.setattr(app_module, "SENDS_PER_MINUTE", 0)
     monkeypatch.setattr(app_module, "CONVERTS_PER_MINUTE", 0)
     app_module._RATE_HITS.clear()
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", 0.0)
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as c:
         yield c
@@ -399,26 +401,87 @@ def test_unknown_http_status_gets_a_generic_html_free_message():
         assert "<" not in response.get_json()["error"]
 
 
-def test_prune_rate_buckets_removes_empty_entries():
+def test_prune_rate_buckets_removes_empty_and_expired_entries():
+    """v2.13.0: Der Sweep räumt nach Alter, nicht nur nach Leerheit.
+
+    v2.12.0 entfernte nur *leere* Eimer. Ein Client, der genau einmal kam,
+    hinterlässt aber ein ``deque`` mit einem Zeitstempel — das wird erst
+    geleert, wenn derselbe Key zurueckkehrt, und das Leeren passiert nach dem
+    Prune-Aufruf. Ein-shot-Adressen sammelten sich damit dauerhaft an.
+    """
     app_module._RATE_HITS.clear()
-    app_module._RATE_HITS[("convert", "1.1.1.1")] = deque([1.0])
-    app_module._RATE_HITS[("convert", "2.2.2.2")] = deque()
-    app_module._RATE_HITS[("send", "3.3.3.3")] = deque()
-    assert app_module._prune_rate_buckets() == 2
+    now = 1_000_000.0
+    app_module._RATE_HITS[("convert", "1.1.1.1")] = deque([now - 1.0])  # frisch
+    app_module._RATE_HITS[("convert", "2.2.2.2")] = deque()  # leer
+    app_module._RATE_HITS[("send", "3.3.3.3")] = deque([now - 600.0])  # alt
+    assert app_module._prune_rate_buckets(now, window_seconds=60.0) == 2
     assert list(app_module._RATE_HITS) == [("convert", "1.1.1.1")]
     app_module._RATE_HITS.clear()
 
 
 def test_rate_limited_prunes_when_buckets_pile_up(client, monkeypatch):
-    """Viele leere Eimer (je gesehene IP) werden beim nächsten Zählen entfernt.
+    """Viele verwaiste Eimer (je gesehene IP) werden beim Zählen entfernt.
 
     Regression: ``_RATE_HITS`` war ein ``defaultdict``, das für jede jemals
     gesehene Adresse einen Eintrag behielt — in einem langlebigen Prozess ein
     unbegrenztes Speicherwachstum.
     """
     monkeypatch.setattr(app_module, "CONVERTS_PER_MINUTE", 60)
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", 0.0)
+    now = time.monotonic()
     for i in range(app_module._RATE_PRUNE_THRESHOLD + 10):
-        app_module._RATE_HITS[("convert", f"10.{i // 250}.{i % 250}.1")] = deque()
+        # Verwaist: leer ODER älter als jedes benutzte Fenster.
+        hits = deque() if i % 2 else deque([now - 3600.0])
+        app_module._RATE_HITS[("convert", f"10.{i // 250}.{i % 250}.1")] = hits
     client.post("/api/convert", json={"text": "hi"})
+    assert len(app_module._RATE_HITS) < app_module._RATE_PRUNE_THRESHOLD
+    app_module._RATE_HITS.clear()
+
+
+def test_one_shot_client_addresses_are_eventually_removed(client, monkeypatch):
+    """Regression v2.13.0: Ein-shot-Adressen blieben fuer immer im Dict.
+
+    Der alte Sweep pruefte ``not hits`` — ein Client mit genau einem Request
+    liess einen nicht-leeren Eimer mit *einem* Zeitstempel zurueck, der nur
+    bei einer Rueckkehr desselben Keys geleert wurde (und zwar nach dem
+    Sweep). Bei IPv6 ist jeder /64-Praefix eine „neue“ Adresse.
+    """
+    monkeypatch.setattr(app_module, "CONVERTS_PER_MINUTE", 60)
+    monkeypatch.setattr(app_module, "_RATE_PRUNE_THRESHOLD", 10)
+    app_module._RATE_HITS.clear()
+    # 40 Adressen, jede genau einmal gesehen, alle weit in der Vergangenheit.
+    stale = time.monotonic() - 3600.0
+    for i in range(40):
+        app_module._RATE_HITS[("convert", f"fd00:{i:x}::1")] = deque([stale])
+    app_module._maybe_prune_rate_buckets(time.monotonic(), window_seconds=60.0)
+    assert app_module._RATE_HITS == {}
+    app_module._RATE_HITS.clear()
+
+
+def test_prune_sweep_is_rate_limited(client, monkeypatch):
+    """Regression v2.13.0: der Sweep lief bei *jedem* Request unter dem Lock.
+
+    Sobald die Schwelle einmal ueberschritten ist, bleibt sie es (die Zahl
+    waechst monoton). Jeder Request zahlte dann ein vollstaendiges O(n)-
+    Iterieren unter dem globalen Lock — ein Serialisierungspunkt ueber alle
+    Threads. Der Sweep darf hoechstens einmal je `_RATE_PRUNE_INTERVAL` laufen.
+    """
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", 0.0)
+    now = time.monotonic()
+    for i in range(app_module._RATE_PRUNE_THRESHOLD + 10):
+        app_module._RATE_HITS[("convert", f"10.1.{i // 250}.{i % 250}")] = deque()
+    app_module._maybe_prune_rate_buckets(now, window_seconds=60.0)
+    first = len(app_module._RATE_HITS)
+    assert first < app_module._RATE_PRUNE_THRESHOLD
+    # Sofort erneut: der Schwellwert ist wieder ueberschritten, aber der Sweep
+    # ist gedrosselt -> die Eimer bleiben unangetastet.
+    for i in range(app_module._RATE_PRUNE_THRESHOLD + 10):
+        app_module._RATE_HITS[("convert", f"10.2.{i // 250}.{i % 250}")] = deque()
+    app_module._maybe_prune_rate_buckets(now + 1.0, window_seconds=60.0)
+    assert len(app_module._RATE_HITS) > app_module._RATE_PRUNE_THRESHOLD
+    # Nach Ablauf der Intervallzeit greift er wieder.
+    app_module._maybe_prune_rate_buckets(
+        now + app_module._RATE_PRUNE_INTERVAL + 1.0, window_seconds=60.0
+    )
     assert len(app_module._RATE_HITS) < app_module._RATE_PRUNE_THRESHOLD
     app_module._RATE_HITS.clear()

@@ -62,6 +62,7 @@ from telegram_formatter.botkit.review import (
 from telegram_formatter.botkit.session import SessionConfig, SessionError, SessionManager
 from telegram_formatter.botkit.telegram_api import TelegramAPIError, get_me
 from telegram_formatter.botkit.tokens import BotToken, TokenError
+from telegram_formatter.sender import SendError
 
 DEFAULT_LEDGER = "audit/reviews.json"
 
@@ -203,7 +204,13 @@ def cmd_review(args: argparse.Namespace) -> int:
             return 0
 
         try:
-            ticket = gate.submit(args.bot_id, path)
+            # v2.13.0: den bereits analysierten Report mitgeben. `submit()`
+            # las `path` ein zweites Mal und analysierte es erneut — die Datei
+            # wurde doppelt gelesen und geparst, und zwischen beiden Lesevorgängen
+            # konnte jemand editieren. DannPrinted oben ein Report, für den nie
+            # ein Ticket existierte. Außerdem fiel die Prüfsumme unterschiedlich
+            # aus (siehe `ReviewGate.submit` / `source_sha256`).
+            ticket = gate.submit(args.bot_id, path, report=report)
         except ReviewGateError as exc:
             print(f"\n✖ {exc}")
             return 1
@@ -368,8 +375,20 @@ def cmd_send(args: argparse.Namespace) -> int:
             print(f"✔ Gesendet: {len(responses)} Chunk(s) über Bot {session.bot_id}.")
             print(f"  Session {session.session_id[:8]} wurde geschlossen (Token verworfen).")
             return 0
-    except SessionError as exc:
+    except (SessionError, SendError) as exc:
+        # v2.13.0: `SendError` ist ein **Geschwister** von `SessionError` (beide
+        # RuntimeError, aber keine Verwandtschaft) und wurde hier nicht
+        # abgefangen — jeder Telegram-400/429/5xx/Netzwerkfehler entkam also
+        # `main()` komplett und Python druckte einen rohen Traceback. Damit
+        # wurden ausgerechnet der `except`-Vertrag ("✖ Versand abgebrochen")
+        # und das `finally` mit `scrub_environment` umgangen. Der
+        # wahrscheinlichste Fehlerfall des Kommandos war damit der einzige mit
+        # Stacktrace.
         print(f"✖ Versand abgebrochen: {exc}")
+        # `retry_after` durchreichen, damit die CLI denselben Hinweis geben
+        # kann wie der Web-Pfad (dort seit langem als `note`).
+        if getattr(exc, "retry_after", None) is not None:
+            print(f"  Telegram-Rate-Limit: in {exc.retry_after:.0f}s erneut versuchen.")
         return 1
     finally:
         scrub_environment(args.token_env)

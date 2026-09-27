@@ -104,12 +104,28 @@ def _get_session():
     return _SESSION[1]
 
 
-def _error_detail(response) -> tuple[str, float | None]:
-    """Holt (gekürzte Description, retry_after) aus einem Fehler-Body — sicher."""
+def _read_error_body(response) -> dict | None:
+    """Liest den Antwort-Body **einmal** als Dict; ``None`` bei unbrauchbarem JSON.
+
+    v2.13.0: v2.12.0 rief ``response.json()`` zweimal auf — einmal hier und
+    noch einmal im Aufrufer. Bei einem nicht seekbaren Response-Objekt (Gzip,
+    Stream, Test-Stub) ist der Zweitaufruf nicht idempotent und liefert
+    ``None``; das Ergebnis war dann eine leere Description ohne ``retry_after``
+    und damit der Verlust der 429-Wartezeit. Der Body wird jetzt genau einmal
+    dekodiert und weitergereicht.
+    """
     try:
         body = response.json()
     except (ValueError, AttributeError):
-        return "", None
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _error_detail(body: dict | None) -> tuple[str, float | None]:
+    """Holt (gekürzte Description, retry_after) aus einem Fehler-Body — sicher.
+
+    Nimmt den **bereits dekodierten** Body entgegen (siehe :func:`_read_error_body`).
+    """
     if not isinstance(body, dict):
         return "", None
     description = str(body.get("description", ""))[:MAX_DESCRIPTION_CHARS]
@@ -165,19 +181,25 @@ def send_message(
         ) from None
 
     if response.status_code != 200:
-        detail, retry_after = _error_detail(response)
+        detail, retry_after = _error_detail(_read_error_body(response))
         suffix = f": {detail}" if detail else ""
         raise SendError(f"Telegram-API-Fehler {response.status_code}{suffix}.", retry_after=retry_after)
 
-    try:
-        body = response.json()
-    except ValueError:
+    # v2.13.0: EIN Erfolgspraedikat fuer beide Telegram-Pfade. `send_message`
+    # benutzte `body.get("ok") is False`, `botkit.telegram_api` `if not
+    # body.get("ok")` — bei `{"result": null}` ohne `ok`-Schluessel wertete
+    # das eine als Erfolg (und inkrementierte `chunks_sent`), das andere als
+    # Fehler. Telegram sendet `ok` immer, die Divergenz war also defensiv —
+    # aber zwei Pruefungen fuer eine API sind eine latente Fehlerquelle.
+    # Jetzt gilt ein Erfolg nur bei explizitem `ok is True`.
+    body = _read_error_body(response)
+    if body is None:
         raise SendError("Telegram-API: ungültige JSON-Antwort erhalten.") from None
 
-    if isinstance(body, dict) and body.get("ok") is False:
-        detail, retry_after = _error_detail(response)
+    if body.get("ok") is not True:
+        detail, retry_after = _error_detail(body)
         raise SendError(
             f"Telegram-API: {detail or 'Anfrage abgelehnt.'}",
             retry_after=retry_after,
         )
-    return body if isinstance(body, dict) else {"result": body}
+    return body

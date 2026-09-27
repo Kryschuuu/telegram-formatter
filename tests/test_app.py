@@ -31,6 +31,7 @@ def client(monkeypatch):
     monkeypatch.setattr(app_module, "SENDS_PER_MINUTE", 0)
     monkeypatch.setattr(app_module, "CONVERTS_PER_MINUTE", 0)
     app_module._RATE_HITS.clear()
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", 0.0)
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as c:
         yield c

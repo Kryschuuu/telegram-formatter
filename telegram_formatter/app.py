@@ -469,20 +469,52 @@ _RATE_HITS: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 #: klein (eine ``deque`` pro IP und Endpunkt), der Schwellwert macht das
 #: Aufräumen amortisiert statt pro Request.
 _RATE_PRUNE_THRESHOLD = 4096
+#: Frueheste Ausfuehrung des naechsten Sweeps (Sekunden, ``time.monotonic``).
+#: v2.13.0: vorher lief ``len(_RATE_HITS) > _RATE_PRUNE_THRESHOLD`` bei jedem
+#: Request — und da die Schwelle einmal ueberschritten ist, bleibt sie es
+#: (die Zahl waechst monoton, bis etwas entfernt wird). Jeder Request zahlte
+#: dann ein vollstaendiges O(n)-Iterieren des Dict unter dem globalen Lock —
+#: ein Serialisierungspunkt ueber alle 8 Threads. Der Sweep kostet dann hoechstens
+#: einmal pro ``_RATE_PRUNE_INTERVAL`` und wird nicht weiter verstaendigt, wenn
+#: der Schwellwert ueberschritten ist, sondern nur noch ausgefuehrt, wenn
+#: tatsaechlich Zeit vergangen ist.
+_RATE_PRUNE_INTERVAL = 60.0
+_RATE_LAST_PRUNE = 0.0
 
 
-def _prune_rate_buckets() -> int:
-    """Wirft leere Rate-Limit-Eimer raus; liefert die Zahl der entfernten Keys.
+def _prune_rate_buckets(now: float, window_seconds: float) -> int:
+    """Wirft verwaiste Rate-Limit-Eimer raus; liefert die Zahl entfernter Keys.
 
-    Ohne diesen Schritt bliebe für **jede** je gesehene Client-Adresse ein
-    Eintrag im Dict stehen, auch wenn seine ``deque`` längst leer ist — in
-    einem langlebigen Prozess wächst ``_RATE_HITS`` damit unbegrenzt.
+    Ein Eimer gilt als verwaist, wenn er **leer** ist *oder* sein letzter
+    Treffer aelter als das laengste je benutzte Zeitfenster ist.
+
+    v2.12.0 pruefte nur ``not hits``. Das entfernt einen Client, der genau
+    einmal kam, gerade nicht: sein ``deque`` enthaelt einen Zeitstempel und
+    wird erst geleert, wenn *derselbe* Key zurueckkehrt — und das Leeren
+    passiert nach dem Prune-Aufruf. Ein-shot-Adressen (und bei IPv6 praktisch
+    jeder /64-Präfix) sammelten sich damit dauerhaft an. v2.13.0 raeumt nach
+    Alter.
     """
+    cutoff = now - window_seconds
     with _RATE_LOCK:
-        stale = [key for key, hits in _RATE_HITS.items() if not hits]
+        stale = [key for key, hits in _RATE_HITS.items() if not hits or hits[-1] < cutoff]
         for key in stale:
             del _RATE_HITS[key]
         return len(stale)
+
+
+def _maybe_prune_rate_buckets(now: float, window_seconds: float) -> None:
+    """Amortisierter Sweep: höchstens einmal je ``_RATE_PRUNE_INTERVAL``."""
+    global _RATE_LAST_PRUNE
+    if len(_RATE_HITS) <= _RATE_PRUNE_THRESHOLD:
+        return
+    if now - _RATE_LAST_PRUNE < _RATE_PRUNE_INTERVAL:
+        return
+    with _RATE_LOCK:
+        if now - _RATE_LAST_PRUNE < _RATE_PRUNE_INTERVAL:
+            return
+        _RATE_LAST_PRUNE = now
+        _prune_rate_buckets(now, window_seconds)
 
 
 def _rate_limited(
@@ -506,9 +538,8 @@ def _rate_limited(
     who = (request.remote_addr or "unknown") if per_ip else "alle"
     key = (bucket, who)
     now = time.monotonic()
+    _maybe_prune_rate_buckets(now, window_seconds)
     with _RATE_LOCK:
-        if len(_RATE_HITS) > _RATE_PRUNE_THRESHOLD:
-            _prune_rate_buckets()
         hits = _RATE_HITS[key]
         while hits and hits[0] < now - window_seconds:
             hits.popleft()
@@ -715,11 +746,35 @@ def _operator_token_required() -> bool:
     return not (request.endpoint == SHARED_SEND_ENDPOINT and _shared_web_send_available())
 
 
+def _token_matches(supplied: str) -> bool:
+    """Zeitkonstanter Vergleich — **über Bytes**, nicht über ``str`` (v2.13.0).
+
+    ``hmac.compare_digest`` wirft für Nicht-ASCII-``str`` einen ``TypeError``
+    ("comparing strings with non-ASCII characters is not supported"). WSGI
+    dekodiert Header nach PEP 3333 als **latin-1**, gunicorn tut das ebenfalls
+    — ein Client, der ein einzelnes Byte ``0xE4`` mitsendet, liefert damit den
+    Python-String ``'ä'`` und damit reproduzierbar einen 500er.
+
+    Betroffen waren alle token-geschützten POSTs (`_guard`) und — bei
+    aktiviertem Browser-Versand — der gesamte anonyme Shared-Send-Pfad, weil
+    dort `_request_authenticated()` aufgerufen wird. Ein unauthentifizierter
+    Client konnte also jeden Schreibendpunkt in einen 500 verwandeln.
+
+    ``encode("utf-8")`` bildet die Strings verlustfrei auf Bytes ab; der
+    Vergleich bleibt zeitkonstant (die Längen sind durch die Tokenlänge
+    ohnehin bekannt).
+    """
+    try:
+        return hmac.compare_digest(supplied.encode("utf-8"), API_TOKEN.encode("utf-8"))
+    except (AttributeError, UnicodeError):
+        return False
+
+
 def _request_authenticated() -> bool:
     """Zeitkonstanter Vergleich des ``X-Auth-Token``-Headers gegen den Operator-Token."""
     if not API_TOKEN:
         return False
-    return hmac.compare_digest(request.headers.get("X-Auth-Token", ""), API_TOKEN)
+    return _token_matches(request.headers.get("X-Auth-Token", ""))
 
 
 @app.before_request
@@ -728,13 +783,15 @@ def _guard():
     if request.method == "GET":
         return None
     origin = request.headers.get("Origin")
-    if origin:
-        parsed = urlparse(origin)
-        if parsed.netloc and parsed.netloc != request.host:
-            return jsonify({"error": "Ursprung (Origin) nicht erlaubt."}), 403
+    # v2.13.0: `Origin: null` wird nicht mehr durchgewunken. Sandboxed iframes,
+    # `file://` und einige Redirect-Verläufe senden genau das; `urlparse("null")`
+    # hat `.netloc == ""`, die alte Prüfung `if parsed.netloc and ...` hat den
+    # Fall also kommentarlos übersprungen — schwächer, als der Docstring
+    # behauptete. Ein leerer `netloc` ist kein „gleicher Ursprung“, also 403.
+    if origin and urlparse(origin).netloc != request.host:
+        return jsonify({"error": "Ursprung (Origin) nicht erlaubt."}), 403
     if _operator_token_required():
-        supplied = request.headers.get("X-Auth-Token", "")
-        if not hmac.compare_digest(supplied, API_TOKEN):
+        if not _token_matches(request.headers.get("X-Auth-Token", "")):
             return jsonify({"error": "Autorisierung erforderlich."}), 401
     return None
 
@@ -831,17 +888,48 @@ def _json_body() -> tuple[dict | None, tuple | None]:
     return data, None
 
 
+def _has_lone_surrogate(text: str) -> bool:
+    """``True``, wenn der String einen ungepaarten UTF-16-Surrogate enthält.
+
+    Ein Surrogate (U+D800–U+DFFF) ist im UTF-8-Encoding gar nicht darstellbar;
+    gültiges UTF-8 kann ihn daher **nie** enthalten. Taucht er auf, stammt er
+    zwingend aus einem ``\\uD800``-Escape im JSON-Payload — und ist damit
+    unkodierbar: ``utf-16-le`` (Längenmessung) und ``json.dumps`` mit
+    ``ensure_ascii=False`` scheitern beide daran.
+
+    Statt einen ``UnicodeEncodeError`` bis zum 500er durchschlagen zu lassen,
+    wird die Eingabe an der Grenze mit 400 abgewiesen.
+    """
+    return any(0xD800 <= ord(char) <= 0xDFFF for char in text)
+
+
 def _valid_text(data: dict, max_chars: int | None = None) -> tuple[str | None, tuple | None]:
     """
     ``text``-Feld prüfen (Typ + Länge) — gemeinsam für alle Sendewege.
 
     ``max_chars`` erlaubt die kürzere Kappe des anonymen Browser-Versands
     (:data:`SHARED_WEB_MAX_INPUT_CHARS`); ohne Wert gilt :data:`MAX_INPUT_CHARS`.
+
+    v2.13.0: **Paarweise Surrogates werden hier abgewiesen.** Der JSON-Decoder
+    erzeugt aus ``"\\ud800"`` (gültiges JSON, reine ASCII-Bytes auf dem Draht,
+    also von jeder UTF-8-Validierung nicht zu beanstanden) einen *vereinzelten*
+    Surrogate. Derunicode-Normalisierung lässt ihn durch, und
+    ``_telegram_len`` scheitert beim UTF-16-Encoding mit
+    ``UnicodeEncodeError`` — also 500 statt 400. Auf den Sendewegen kam noch
+    schlimmeres dazu: ``requests`` kann denselben String nicht als
+    JSON-Body kodieren, und ``UnicodeEncodeError`` ist *keine*
+    ``RequestException``; der Fehler entkam also ``sender.py`` und ein
+    bereits halb zugestellter Versand wurde als undurchsichtiger 500 gemeldet.
     """
     limit = MAX_INPUT_CHARS if max_chars is None else max_chars
     text = data.get("text", "")
     if not isinstance(text, str):
         return None, (jsonify({"error": "'text' muss ein String sein."}), 400)
+    if _has_lone_surrogate(text):
+        return None, (
+            jsonify({"error": "'text' enthält ungültige Zeichen (unvollständiges Unicode)."}),
+            400,
+        )
     if len(text) > limit:
         return None, (
             jsonify({"error": f"Eingabe zu lang (max. {limit} Zeichen)."}),

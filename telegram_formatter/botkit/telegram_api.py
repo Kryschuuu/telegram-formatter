@@ -36,7 +36,36 @@ _DEFAULT_TIMEOUT = 10.0
 
 
 class TelegramAPIError(RuntimeError):
-    """Telegram hat einen Fehler gemeldet oder war nicht erreichbar."""
+    """Telegram hat einen Fehler gemeldet oder war nicht erreichbar.
+
+    :attr:`retry_after` trägt den Telegram-Backoff in Sekunden bei 429 (seit
+    v2.13.0; vorher ging der Wert verloren und der Session-Betrieb lief in
+    wiederholte 429er, weil niemand warten konnte).
+    """
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _error_detail(response) -> tuple[str, float | None]:
+    """Gekürzte Description + ``retry_after`` aus einem Fehler-Body — sicher.
+
+    Nennt bewusst nur ``description`` (max. 200 Zeichen), nie ``response.text``:
+    der Rohtext könnte Inhalte oder das Token enthalten.
+    """
+    try:
+        body = response.json()
+    except (ValueError, AttributeError):
+        return "", None
+    if not isinstance(body, dict):
+        return "", None
+    description = str(body.get("description", ""))[:200]
+    params = body.get("parameters")
+    retry_after = None
+    if isinstance(params, dict) and isinstance(params.get("retry_after"), (int, float)):
+        retry_after = float(params["retry_after"])
+    return description, retry_after
 
 
 def _post(secret: str, method: str, payload: Mapping[str, Any], *, timeout: float, api_base: str) -> dict:
@@ -52,23 +81,41 @@ def _post(secret: str, method: str, payload: Mapping[str, Any], *, timeout: floa
     try:
         response = requests.post(url, json=dict(payload), timeout=timeout)
     except requests.RequestException as exc:
-        # Kein Inhalt, kein Token in der Fehlermeldung.
-        raise TelegramAPIError(f"Netzwerkfehler bei {method}: {exc.__class__.__name__}") from exc
+        # Kein Inhalt, kein Token in der Fehlermeldung — und v2.13.0 auch nicht
+        # in der Exception-Chain.
+        #
+        # `from exc` setzt `__cause__`; `str(requests.exceptions.ConnectionError)`
+        # enthaelt den vollen Pfad `/bot<BOT_ID>:<35-Zeichen-Geheimnis>/getMe`
+        # und damit das Bot-Token im Klartext. Damit leckte das Token in jedes
+        # `logging.exception`, `traceback.print_exc()` und jeden Flask-Debug-
+        # Traceback — bei jedem Aufrufer, der `install_privacy_filters()` nicht
+        # benutzt. `sender.py` macht es seit jeher richtig (`from None` mit
+        # Kommentar K-1); dieses Modul jetzt genauso.
+        raise TelegramAPIError(
+            f"Netzwerkfehler bei {method}: {exc.__class__.__name__}"
+        ) from None
 
     if response.status_code != 200:
-        raise TelegramAPIError(f"Telegram-API {method} → HTTP {response.status_code}")
+        # v2.13.0: `retry_after` mitgeben (wie `sender.py`). Sonst erfährt der
+        # Aufruher bei 429 nur "HTTP 429" und wartet nicht — der
+        # Session-Betrieb lief dadurch in wiederholte 429er.
+        detail, retry_after = _error_detail(response)
+        message = f"Telegram-API {method} → HTTP {response.status_code}"
+        if detail:
+            message += f": {detail}"
+        raise TelegramAPIError(message, retry_after=retry_after)
 
     try:
         body = response.json()
-    except ValueError as exc:  # pragma: no cover - defensiv
-        raise TelegramAPIError(f"Ungültige JSON-Antwort bei {method}") from exc
+    except ValueError:  # pragma: no cover - defensiv
+        raise TelegramAPIError(f"Ungültige JSON-Antwort bei {method}") from None
 
     if not isinstance(body, dict):
         # Fremde Netzantwort (z. B. Proxy-Fehlerseite als Liste) — kein
         # roher AttributeError auf body.get (seit v2.11.1).
         raise TelegramAPIError(f"Ungültige JSON-Antwort bei {method}")
 
-    if not body.get("ok"):
+    if body.get("ok") is not True:
         # Telegram liefert 'description' — kann Inhalte enthalten, daher kürzen.
         description = str(body.get("description", "unbekannter Fehler"))[:200]
         raise TelegramAPIError(f"Telegram-API {method} lehnte ab: {description}")

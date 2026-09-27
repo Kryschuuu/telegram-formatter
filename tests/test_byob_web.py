@@ -54,6 +54,7 @@ def byob_client(monkeypatch):
     monkeypatch.setattr(app_module, "_BYOB_RUNTIME", None)
     monkeypatch.setattr(app_module, "get_me", _get_me_ok)
     app_module._RATE_HITS.clear()
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", 0.0)
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as client:
         yield client

