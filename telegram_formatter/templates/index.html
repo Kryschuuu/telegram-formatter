@@ -58,6 +58,13 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/layout.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+    {# KaTeX 0.18.9, selbst gehostet (MIT, siehe static/katex/LICENSE). Die
+       Vorschau setzt LaTeX damit genauso wie Telegram es tut; bis v2.13.0
+       standen dort roher LaTeX-Quelltext. Das CSS referenziert die Fonts
+       relativ (`url(fonts/…)`), deshalb muss es unter static/katex liegen.
+       Reihenfolge: nach components.css, damit unsere Regeln bei
+       gleichem Spezifitaetsgrad gewinnen. #}
+    <link rel="stylesheet" href="{{ url_for('static', filename='katex/katex.min.css') }}">
     {# Synchron (kein defer!) und VOR dem Body: setzt data-theme antes
        ersten Paint — siehe static/js/theme.js. #}
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
@@ -309,6 +316,14 @@
                 <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
                 Vorschau (Live)
             </h2>
+            {# ============================================================
+               Vorschau — seit v2.14.0 eine Sprechblase PRO NACHTRICHT.
+               Telegram stellt lange Eingaben als mehrere einzelne
+               Nachrichten zu; bis hierher zeigte die Vorschau einen
+               einzigen zusammenhaengenden Block und damit etwas, das es
+               so nicht gibt. `app.js` fuellt `data-bubbles` aus der
+               `preview`-Antwort von POST /api/convert.
+               ============================================================ #}
             <div class="tf-preview-frame">
                 <div class="tg-bubble" id="preview" role="img" aria-label="Live-Vorschau der Telegram-Nachricht">
                     Vorschau erscheint hier…
@@ -317,6 +332,9 @@
                     <svg class="tf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>
                     so kommt es in Telegram an
                 </p>
+                {# Wird von app.js befuellt; `hidden` faellt ohne JS auf die
+                   einzelne Blase oben zurueck (schonender Verlauf). #}
+                <div id="previewBubbles" data-bubbles hidden></div>
             </div>
 
             <h2 class="tf-card__title" id="payload-title">
@@ -1158,6 +1176,14 @@
     </div>
 </footer>
 
+{# KaTeX 0.18.9 (MIT) — muss VOR app.js laden. `defer` bewahrt die
+   Dokumentreihenfolge, `typesetMath` in app.js findet window.katex dann
+   garantiert. Zusammen mit der CSP-Ausnahme `style-src-attr 'unsafe-inline'`
+   in app.py — KaTeX braucht Inline-Styles für die Glyphen-Metrik.
+   `auto-render.min.js` wird bewusst NICHT geladen: es sucht selbst nach
+   `$`-Delimitern und würde den serverseitig markierten TeX-Code ein zweites
+   Mal zerlegen. #}
+<script src="{{ url_for('static', filename='katex/katex.min.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/byob.js') }}" defer></script>
 </body>

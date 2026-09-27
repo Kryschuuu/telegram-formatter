@@ -53,7 +53,7 @@ Billig (kein Template), nie ratenlimitiert, ohne Konfigurationsdetails:
 
 ```bash
 curl -k https://192.168.0.10/healthz
-# {"status":"ok","version":"2.13.0"}
+# {"status":"ok","version":"2.14.0"}
 ```
 
 ## POST /api/convert
@@ -82,6 +82,55 @@ curl -k -X POST https://192.168.0.10/api/convert \
 `regular` (→ `sendMessage` + `parse_mode="HTML"`, ≤ 4096 Zeichen). Lange
 Eingaben kommen als **mehrere** Nachrichten zurück (Aufteilung an Absatz-,
 Zeilen- und Wortgrenzen, Formatierungen bleiben je Chunk wohlgeformt).
+
+### Feld `preview` (seit v2.14.0)
+
+Dieselben Nachrichten, **fertig als Anzeige-HTML** für die Live-Vorschau.
+Damit zeigt die Vorschau exakt das, was Telegram bekommt — statt es ein
+zweites Mal zu rechnen (was bis v2.13.0 in `app.js` geschah und sofort
+veraltete: keine Emoji-Überschriften, Pipe-Tabellen als Rohtext, LaTeX
+ungesetzt, keine Nachrichtenteilung).
+
+```json
+{
+  "count": 2,
+  "messages": [ … ],
+  "preview": {
+    "path": "rich",
+    "count": 2,
+    "messages": [
+      {
+        "index": 1,
+        "kind": "rich",
+        "html": "<h1 class=\"tf-heading tf-heading--1\">Titel</h1><table class=\"tf-table\">…</table>",
+        "utf16": 1820,
+        "limit": 32768
+      }
+    ]
+  }
+}
+```
+
+| Feld | Bedeutung |
+|---|---|
+| `path` | `regular` \| `rich` — der Anzeigedialekt der **ersten** Nachricht. `build_messages` entscheidet je Nachricht, die Vorschau daher ebenfalls (`messages[].kind`) |
+| `count` | Anzahl Nachrichten = Anzahl Sprechblasen in der Vorschau |
+| `messages[].index` | 1-basiert, für die Nummerierung |
+| `messages[].html` | Anzeige-HTML, **bereits sanitisiert** (Allowlist). Nur die von Telegram unterstützten Tags; LaTeX steht als `<span class="tf-math" data-tex="…">` und wird vom Client mit KaTeX gesetzt |
+| `messages[].utf16` / `.limit` | Zeichen in UTF-16-Einheiten (so zählt Telegram) und das jeweilige Limit |
+
+**Sicherheit.** `html` ist per Konstruktion sicher (jedes Textfragment wird vor
+einem Tag escaped) und wird zusätzlich gegen eine Allowlist gefiltert:
+`b i u s code pre a blockquote br tg-spoiler details tg-emoji` samt `href`,
+`language`, `emoji-id`. Event-Handler, `style`, `class` und `javascript:`-URLs
+fliegen raus. Wer `html` in eine eigene Oberfläche einsetzt, bekommt
+denselben Schutz — der Client muss es nur noch einsetzen.
+
+**Zwei Dialekte, zwei Renderer.** `regular` liefert bereits Telegram-HTML
+(einschließlich der Emoji-Präfixe `🚀 📍 🔹 🔸`, die aus `utils` stammen) und
+wird nur sanitisiert. `rich` ist GFM-Markdown und wird vom Server in das
+Anzeige-Subset übersetzt — dort gibt es **keine** Emoji-Präfixe, weil
+`sendRichMessage` sie nicht erzeugt.
 
 Fehler: `400` (kein JSON-Objekt, `text` kein String, zu lang — max.
 `TELEGRAM_FORMATTER_MAX_INPUT_CHARS`, ungültige `chat_id`, unvollständiges

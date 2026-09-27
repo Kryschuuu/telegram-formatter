@@ -419,11 +419,265 @@
     text-underline-offset: 2px;
 }
 
-/* von app.js erzeugt: Hervorhebung für $…$-Formeln in der Vorschau */
+/* von app.js erzeugt: Hervorhebung für $…$-Formeln in der Vorschau
+   (v2.13.0, ersetzt durch echtes KaTeX-Rendering in v2.14.0 — die Klasse
+   bleibt für den Fallback erhalten, falls KaTeX nicht geladen werden
+   konnte, siehe .tf-math--fallback in app.js). */
 .tf-preview-math {
     font-family: var(--font-mono);
     font-size: .95em;
     color: var(--accent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Vorschau 1:1 zu Telegram (v2.14.0)
+
+   Bis hierher stand ein einzelner Block in der Sprechblase, obwohl Telegram
+   lange Eingaben als mehrere einzelne Nachrichten zustellt. `#previewBubbles`
+   traegt jetzt pro Nachricht eine echte Blase.
+   ═══════════════════════════════════════════════════════════════════════════ */
+#previewBubbles {
+    display: flex;
+    flex-direction: column;
+    gap: .7rem;
+}
+
+#previewBubbles[hidden] {
+    display: none;
+}
+
+/* Nummer + Zeichenzusage pro Nachricht. Telegram zeigt keine Nummer, aber
+   ohne sie ist bei 17 Blasen nicht erkennbar, wo man im Text steht. */
+.tg-bubble__meta {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: .75rem;
+    margin-bottom: .5rem;
+    padding-bottom: .35rem;
+    border-bottom: 1px solid var(--border);
+    font-size: .68rem;
+    line-height: 1.2;
+    color: var(--text-faint);
+    letter-spacing: .02em;
+}
+
+.tg-bubble__meta b {
+    font-weight: 650;
+    color: var(--text-muted);
+}
+
+/* Zeichenzusage im Telegram-Verhältnis (UTF-16-Einheiten, wie Telegram zählt).
+   Über dem Limit kann Telegram gar nicht mehr senden. */
+.tg-bubble__size.is-near {
+    color: var(--accent);
+}
+
+.tg-bubble__size.is-full {
+    color: var(--err);
+    font-weight: 650;
+}
+
+/* Umbruch: Telegram bricht am Zeilenende um und respektiert harte Umbrüche.
+   `pre-wrap` macht beides — anders als `white-space: normal`, das die
+   Umbrüche im HTML-Text verschlucken würde. */
+.tg-bubble__body {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* Codeblöcke: Telegram bricht sie NICHT um (horizontal scrollbar). */
+.tg-bubble__body .tf-code,
+.tg-bubble__body pre {
+    white-space: pre;
+    overflow-x: auto;
+    margin: 0 0 .5rem;
+    padding: .5rem .65rem;
+    border-radius: .35rem;
+    background: rgba(127, 127, 127, .16);
+    font-family: var(--font-mono);
+    font-size: .82rem;
+    line-height: 1.45;
+    text-align: left;
+}
+
+.tg-bubble__body .tf-code:last-child,
+.tg-bubble__body pre:last-child {
+    margin-bottom: 0;
+}
+
+/* ── Überschriften ─────────────────────────────────────────────────────── */
+.tg-bubble__body .tf-heading {
+    margin: .2em 0 .35em;
+    font-weight: 750;
+    line-height: 1.3;
+}
+
+.tg-bubble__body .tf-heading--1 {
+    font-size: 1.2em;
+}
+
+.tg-bubble__body .tf-heading--2 {
+    font-size: 1.12em;
+}
+
+.tg-bubble__body .tf-heading--3 {
+    font-size: 1.06em;
+}
+
+.tg-bubble__body .tf-heading--4,
+.tg-bubble__body .tf-heading--5,
+.tg-bubble__body .tf-heading--6 {
+    font-size: 1em;
+}
+
+.tg-bubble__body > .tf-heading:first-child {
+    margin-top: 0;
+}
+
+/* ── Absätze, Listen, Zitate ───────────────────────────────────────────── */
+.tg-bubble__body .tf-para {
+    margin: 0 0 .5em;
+}
+
+.tg-bubble__body .tf-para:last-child {
+    margin-bottom: 0;
+}
+
+.tg-bubble__body .tf-list {
+    margin: 0 0 .5em;
+    padding-inline-start: 1.35rem;
+}
+
+.tg-bubble__body .tf-list:last-child {
+    margin-bottom: 0;
+}
+
+.tg-bubble__body .tf-list li {
+    margin: .1em 0;
+}
+
+.tg-bubble__body .tf-quote {
+    margin: 0 0 .5em;
+    padding: .1rem 0 .1rem .7rem;
+    border-inline-start: 3px solid var(--border-strong);
+    color: var(--text-muted);
+}
+
+.tg-bubble__body .tf-quote:last-child {
+    margin-bottom: 0;
+}
+
+/* ── Tabellen: so zeigt Telegram eine GFM-Tabelle an ───────────────────── */
+.tg-bubble__body .tf-table {
+    width: 100%;
+    margin: 0 0 .5em;
+    border-collapse: collapse;
+    font-size: .92em;
+    table-layout: auto;
+}
+
+.tg-bubble__body .tf-table:last-child {
+    margin-bottom: 0;
+}
+
+.tg-bubble__body .tf-table th,
+.tg-bubble__body .tf-table td {
+    padding: .3rem .5rem;
+    border: 1px solid var(--border-strong);
+    text-align: start;
+    vertical-align: top;
+    white-space: normal;
+}
+
+.tg-bubble__body .tf-table th {
+    background: rgba(127, 127, 127, .14);
+    font-weight: 700;
+}
+
+.tg-bubble__body .tf-table tbody tr:nth-child(even) {
+    background: rgba(127, 127, 127, .06);
+}
+
+/* ── Formeln (KaTeX) ───────────────────────────────────────────────────── */
+.tg-bubble__body .tf-math--inline {
+    display: inline-block;
+    vertical-align: baseline;
+}
+
+.tg-bubble__body .tf-math--block {
+    display: block;
+    margin: .5em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    text-align: center;
+}
+
+/* Fallback, falls KaTeX nicht geladen werden konnte: Der TeX-Code bleibt
+   sichtbar, aber korrekt als *Formel* erkennbar und nicht als Rohtext. */
+.tg-bubble__body .tf-math--fallback {
+    display: inline-block;
+    padding: 0 .15em;
+    border-radius: .2em;
+    background: rgba(127, 127, 127, .16);
+    font-family: var(--font-mono);
+    font-size: .88em;
+    color: var(--accent);
+}
+
+.tg-bubble__body .tf-math--fallback[data-display="true"] {
+    display: block;
+    margin: .5em 0;
+    text-align: center;
+}
+
+/* KaTeX-Skalierung: die Schrift ist auf Web-Fonts optimiert, in einer
+   Telegram-Sprechblase wirkt sie sonst zu groß. */
+.tg-bubble__body .katex {
+    font-size: 1.02em;
+}
+
+/* ── Spoiler (Telegram blendet den Text weich aus) ─────────────────────── */
+.tg-bubble__body tg-spoiler {
+    background: currentColor;
+    border-radius: .2em;
+    transition: background .15s ease;
+}
+
+.tg-bubble__body tg-spoiler:hover,
+.tg-bubble__body tg-spoiler:focus-within {
+    background: transparent;
+}
+
+/* ── Pending-Zustand: letzte Vorschau bleibt sichtbar, aber gedimmt ────── */
+.tf-preview-frame.is-pending .tg-bubble {
+    opacity: .55;
+    transition: opacity .12s ease;
+}
+
+.tf-preview-frame.is-pending .tf-preview-frame__hint {
+    opacity: 1;
+}
+
+.tf-preview-frame__hint {
+    margin: .5rem 0 0;
+    font-size: .7rem;
+    color: var(--text-faint);
+    opacity: 0;
+    transition: opacity .12s ease;
+}
+
+/* Vorschau-Fehler: die letzte gültige Vorschau bleibt stehen (nicht leer),
+   der Fehler steht als Text darüber. */
+.tf-preview-error {
+    margin: 0 0 .6rem;
+    padding: .45rem .6rem;
+    border: 1px solid var(--danger-border);
+    border-radius: .35rem;
+    background: var(--danger-bg);
+    color: var(--err);
+    font-size: .78rem;
+    line-height: 1.4;
 }
 
 /* von app.js erzeugt: fence-code Blöcke in der Vorschau */

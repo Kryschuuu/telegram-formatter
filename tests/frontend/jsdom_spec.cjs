@@ -49,17 +49,29 @@ function buildHarnessHtml(flags = {}) {
     }
     // CSS-Links sind für jsdom bedeutungslos, Skript-/Linktags stören beim
     // Nachladen (kein Server) -> entfernen und die echten Dateien inline
-    // in den Harness einsetzen (Skriptreihenfolge wie im Template).
+    // in den Harness einsetzen (Skriptreihenfolge wie im Template: KaTeX
+    // VOR app.js, weil app.js window.katex beim ersten Rendern braucht).
+    //
+    // WICHTIG: `replace` bekommt einen **Funktions**-Ersatz, keinen String.
+    // Als String wertet `replace` `$&`, `` $` ``, `$'` und `$1` im Ersatz aus
+    // — und JavaScript-Kommentare enthalten davon reichlich. Konkretes
+    // Beispiel aus app.js: ein Kommentar über die `$`-Delimitern von KaTeX
+    // enthält exakt die Sequenz `` $` `` und wurde dadurch durch den Rest des
+    // HTML-Dokuments ersetzt. Das Ergebnis war ein SyntaxError mitten in
+    // app.js, ohne dass irgendetwas davon auf app.js hindeutete.
+    // Mit Funktions-Ersatz ist der Ersatztext wörtlich.
     html = html.replace(/<link[^>]*>/g, "");
     html = html.replace(/<script[^>]*src=[^>]*><\/script>/g, "");
     html = html.replace(
         "</head>",
-        `<script>${read(path.join(STATIC_DIR, "js/theme.js"))}</script></head>`
+        () => `<script>${read(path.join(STATIC_DIR, "js/theme.js"))}</script></head>`
     );
     html = html.replace(
         "</body>",
-        `<script>${read(path.join(STATIC_DIR, "js/app.js"))}</script>` +
-        `<script>${read(path.join(STATIC_DIR, "js/byob.js"))}</script></body>`
+        () =>
+            `<script>${read(path.join(STATIC_DIR, "katex/katex.min.js"))}</script>` +
+            `<script>${read(path.join(STATIC_DIR, "js/app.js"))}</script>` +
+            `<script>${read(path.join(STATIC_DIR, "js/byob.js"))}</script></body>`
     );
     return html;
 }
@@ -87,7 +99,24 @@ function trackedConsole(store) {
 async function main() {
     const harness = buildHarnessHtml();
     const calls = [];
-    let convertPayload = { count: 1, messages: [{ kind: "regular", payload: { chat_id: "1" } }] };
+    // Seit v2.14.0 liefert /api/convert das Feld `preview` mit fertigem
+    // Anzeige-HTML mit — die Vorschau rechnet nichts mehr selbst.
+    let convertPayload = {
+        count: 1,
+        messages: [{ kind: "regular", payload: { chat_id: "1" } }],
+        preview: {
+            path: "regular",
+            count: 1,
+            messages: [{
+                index: 1,
+                kind: "regular",
+                html: "<b>fett</b> <i>schief</i> <code>code</code> <s>strich</s> "
+                    + '<span class="tf-math tf-math--inline" data-tex="x^2"></span>',
+                utf16: 45,
+                limit: 4096,
+            }],
+        },
+    };
     let sendResult = {
         ok: true,
         // Der Shared-Endpunkt meldet seit 2.6.0 `via` — die UI zeigt daraus
@@ -170,14 +199,19 @@ async function main() {
         preview.textContent.includes("Vorschau erscheint hier…"));
     check("Startzustand: Payloads zeigen '—'", payloads.textContent.trim() === "—");
 
+    /* ── Vorschau 1:1 zu Telegram (v2.14.0) ────────────────────────────
+       Bis hierher bildete app.js den Konverter ein zweites Mal in
+       JavaScript nach. Jetzt kommt die Vorschau aus der Antwort von
+       /api/convert; der Test prüft, dass app.js sie anzeigt und selbst
+       nichts nachrechnet. */
     input.value = "**fett** *schief* `code` ~~strich~~ und $x^2$";
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
-    const pv = preview.innerHTML;
-    check("Vorschau: <b> für **fett**", pv.includes("<b>fett</b>"));
-    check("Vorschau: <i> für *schief*", pv.includes("<i>schief</i>"));
-    check("Vorschau: <code> für `code`", pv.includes("<code>code</code>"));
-    check("Vorschau: <s> für ~~strich~~", pv.includes("<s>strich</s>"));
-    check("Vorschau: Formel-Highlight tf-preview-math", pv.includes("tf-preview-math") && pv.includes("x^2"));
+    check("Vorschau: Pending-Zustand blendet nicht leer",
+        doc.querySelector(".tf-preview-frame").classList.contains("is-pending"),
+        "die letzte Vorschau muss sichtbar bleiben");
+    check("Vorschau: vor der Antwort noch keine Blasen",
+        doc.getElementById("previewBubbles").children.length === 0);
+
     check("Zeichenzähler aktualisiert (45 Zeichen)",
         doc.getElementById("charCount").textContent.includes("45 Zeichen"),
         doc.getElementById("charCount").textContent);
@@ -188,13 +222,153 @@ async function main() {
         `calls=${JSON.stringify(calls)}`);
     check("Payloads-Panel zeigt Server-JSON", payloads.textContent.includes('"count": 1'));
 
+    const host = doc.getElementById("previewBubbles");
+    check("Vorschau: genau eine Blase bei einer Nachricht",
+        host.children.length === 1, `children=${host.children.length}`);
+    const bubble = host.querySelector(".tg-bubble");
+    const body = bubble.querySelector(".tg-bubble__body");
+    check("Vorschau: Server-HTML wird übernommen — <b> für **fett**",
+        body.innerHTML.includes("<b>fett</b>"), body.innerHTML);
+    check("Vorschau: <i> für *schief*", body.innerHTML.includes("<i>schief</i>"));
+    check("Vorschau: <code> für `code`", body.innerHTML.includes("<code>code</code>"));
+    check("Vorschau: <s> für ~~strich~~", body.innerHTML.includes("<s>strich</s>"));
+    check("Vorschau: Nummer + Zeichen/Limit pro Blase",
+        /Nachricht\s*1\s*von\s*1/.test(bubble.textContent.replace(/\s+/g, " ")),
+        bubble.textContent);
+    check("Vorschau: Pending-Zustand beendet",
+        !doc.querySelector(".tf-preview-frame").classList.contains("is-pending"));
+    check("Vorschau: Formel ist von KaTeX gesetzt (kein Rohtext)",
+        window.katex && body.querySelector(".katex") !== null,
+        "KaTeX muss window.katex bereitstellen (Reihenfolge im Template: vor app.js)");
+
+    /* Emoji-Präfix: kommt aus utils.markdown_to_html, nicht aus app.js. */
+    convertPayload = {
+        count: 1,
+        messages: [{ kind: "regular", payload: { chat_id: "1", text: "<b>🚀 Titel</b>" } }],
+        preview: {
+            path: "regular",
+            count: 1,
+            messages: [{
+                index: 1, kind: "regular", html: "<b>🚀 Titel</b>", utf16: 14, limit: 4096,
+            }],
+        },
+    };
+    input.value = "# Titel";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await sleep(420);
+    check("Vorschau: Emoji-Präfix aus der Payload (Regression: fehlte vorher)",
+        host.querySelector(".tg-bubble__body").innerHTML.includes("🚀"));
+
+    /* Tabelle: echte <table>, kein Pipe-Rohtext (Regression). */
+    convertPayload = {
+        count: 1,
+        messages: [{ kind: "rich", payload: { chat_id: "1" } }],
+        preview: {
+            path: "rich",
+            count: 1,
+            messages: [{
+                index: 1,
+                kind: "rich",
+                html: '<table class="tf-table"><thead><tr><th>Name</th></tr></thead>'
+                    + '<tbody><tr><td>A</td></tr></tbody></table>',
+                utf16: 20,
+                limit: 32768,
+            }],
+        },
+    };
+    input.value = "| Name |\n|---|\n| A |";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await sleep(420);
+    check("Vorschau: Tabelle wird als <table> gerendert (Regression: Pipe-Rohtext)",
+        host.querySelector("table.tf-table") !== null);
+    check("Vorschau: kein Pipe-Rohtext mehr",
+        !host.textContent.includes("|---"));
+
+    /* Nachrichtenteilung: eine Blase pro Nachricht (Regression: ein Block). */
+    convertPayload = {
+        count: 3,
+        messages: [{ kind: "regular", payload: { chat_id: "1" } }],
+        preview: {
+            path: "regular",
+            count: 3,
+            messages: [
+                { index: 1, kind: "regular", html: "<p>Teil eins</p>", utf16: 10, limit: 4096 },
+                { index: 2, kind: "regular", html: "<p>Teil zwei</p>", utf16: 10, limit: 4096 },
+                { index: 3, kind: "regular", html: "<p>Teil drei</p>", utf16: 10, limit: 4096 },
+            ],
+        },
+    };
+    input.value = "sehr langer Text ".repeat(200);
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await sleep(420);
+    check("Vorschau: eine Blase pro Nachricht (Regression: ein zusammenhaengender Block)",
+        host.children.length === 3, `children=${host.children.length}`);
+    check("Vorschau: Nummerierung 1..3",
+        /Nachricht 3 von 3/.test(host.children[2].textContent.replace(/\s+/g, " ")),
+        host.children[2].textContent);
+    const singleBubble = doc.getElementById("preview");
+    check("Vorschau: Einzelblase aus dem Markup ist bei >1 Nachricht ausgeblendet",
+        singleBubble.hidden === true,
+        `hidden=${singleBubble.hidden} attr=${singleBubble.getAttribute("hidden")}`);
+
+    /* Zurück auf eine Nachricht: Einzelblase kommt zurück. */
+    convertPayload = {
+        count: 1,
+        messages: [{ kind: "regular", payload: { chat_id: "1" } }],
+        preview: {
+            path: "regular",
+            count: 1,
+            messages: [{ index: 1, kind: "regular", html: "<b>x</b>", utf16: 1, limit: 4096 }],
+        },
+    };
+    input.value = "kurz";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await sleep(420);
+    check("Vorschau: bei einer Nachricht wieder eine Blase + Platzhalter-Blase sichtbar",
+        host.children.length === 1 && doc.getElementById("preview").hidden === false);
+
+    /* Serverfehler: die letzte gültige Vorschau darf NICHT verschwinden. */
+    const before = host.children.length;
+    convertPayload = { error: "Eingabe zu lang" };
+    const okResult = { ok: true };
+    window.fetch = (url, opts) => {
+        calls.push({ url: String(url), body: opts && opts.body });
+        return Promise.resolve({
+            ok: false, status: 400, json: () => Promise.resolve(convertPayload),
+        });
+    };
+    input.value = "x".repeat(70_000);
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await sleep(420);
+    check("Vorschau: bei Serverfehler bleibt die letzte Vorschau stehen",
+        host.children.length === before && before > 0,
+        `children=${host.children.length}, vorher=${before}`);
+    check("Vorschau: Fehler wird als Text ausgewiesen, nicht nur im Payload-Panel",
+        doc.querySelector(".tf-preview-error") !== null);
+    window.fetch = (url, opts) => {
+        calls.push({ url: String(url), body: opts && opts.body });
+        const result = String(url).includes("api/send") ? sendResult : { ok: true, body: convertPayload };
+        return Promise.resolve({
+            ok: result.ok,
+            status: result.ok ? 200 : 429,
+            json: () => Promise.resolve(result.body),
+        });
+    };
+    void okResult;
+
     /* Leerer Editor => kein Roundtrip */
+    const convertCallsBefore = calls.filter((c) => c.url.includes("api/convert")).length;
     input.value = "";
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
     await sleep(420);
     check("Leerer Editor löst keinen zusätzlichen POST aus",
-        calls.filter((c) => c.url.includes("api/convert")).length === 1);
+        calls.filter((c) => c.url.includes("api/convert")).length === convertCallsBefore,
+        `vorher=${convertCallsBefore}`);
     check("Leerer Editor setzt Payloads auf '—'", payloads.textContent.trim() === "—");
+    check("Leerer Editor leert die Blasen und zeigt den Platzhalter",
+        doc.getElementById("previewBubbles").children.length === 0
+        && !doc.getElementById("preview").hidden
+        && preview.textContent.includes("Vorschau erscheint hier…"));
 
     /* Aufteilungs-Hinweis */
     convertPayload = {

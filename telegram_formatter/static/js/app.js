@@ -120,72 +120,180 @@
     // die Wahl ist eine Sitzungs-Präferenz, kein Persistenzversprechen.
     var chosenPath = null;
 
-    function escapeHtml(t) {
-        return t
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#39;");
-    }
+    // ═══════════════════════════════════════════════════════════════════
+    // Vorschau 1:1 zu Telegram (v2.14.0)
+    //
+    // Bis hierher hat `renderPreview` den Konverter ein zweites Mal in
+    // JavaScript nachgebildet — mit den Folgefehlern, die daraus folgten:
+    // keine Emoji-Präfixe, Pipe-Tabellen gar nicht behandelt, LaTeX als
+    // Rohtext, und die Nachrichtenteilung unsichtbar. Die Vorschau zeigte
+    // damit etwas anderes als das, was Telegram bekommen hätte.
+    //
+    // Jetzt gilt: **Die Vorschau ist die Payload.** `POST /api/convert`
+    // liefert sie im Feld `preview` mit — dieselbe Nachricht, dieselbe
+    // Aufteilung, dieselben Inhalte. Dieses Skript rechnet nichts mehr
+    // nach, es zeigt an.
+    //
+    // `convertSeq` verhindert, dass eine langsamere alte Antwort eine
+    // neuere überschreibt (bei schnellem Tippen leicht möglich).
+    // ═══════════════════════════════════════════════════════════════════
+    var bubblesHost = document.getElementById("previewBubbles");
+    var previewFrame = document.querySelector(".tf-preview-frame");
+    var convertSeq = 0;
+    var lastPreviewOk = false;
 
-    /* Einzeilige, irreversible Hilfskonstruktion: geschützte Abschnitte
-       (Code, Formeln) werden vor allen anderen Ersetzungen extrahiert und
-       am Ende wieder eingesetzt — so zerlegt Markdown-Hervorhebung kein
-       \`code\` und kein $x_1$. */
-    function renderPreview() {
-        var raw = input.value || "";
-        // NUL-Zeichen entfernen (Parität zu utils.normalize_text, Audit N-1/R-4):
-        // die Vorschau nutzt \u0000 als Platzhalter-Marker — Nutzer-NULs würden
-        // den Restore-Mechanismus kollidieren lassen.
-        raw = raw.replace(/\u0000/g, "");
-        if (!raw.trim()) {
-            preview.innerHTML = PLACEHOLDER;
+    // Formeln setzen: KaTeX rendert jeden `.tf-math[data-tex]`-Span über
+    // `renderToString`. Bewusst NICHT `auto-render` — das sucht selbst nach
+    // Dollar-Delimitern im Text und würde bereits gesetzten TeX-Code ein
+    // zweites Mal zerlegen. Wir markieren die Stellen serverseitig (der
+    // Server weiß, was Formel ist) und setzen sie hier nur noch um.
+    //
+    // Ohne KaTeX (Netzwerk, CSP, defekte Datei) bleibt der TeX-Code sichtbar
+    // und als Formel markiert — ehrlicher als eine leere Fläche.
+    function typesetMath(root) {
+        var scope = root || document;
+        var spans = scope.querySelectorAll(".tf-math[data-tex]");
+        if (!spans.length) {
             return;
         }
-        var store = [];
-        function protect(html) {
-            store.push(html);
-            return "\u0000" + (store.length - 1) + "\u0000";
+        var katex = window.katex;
+        for (var i = 0; i < spans.length; i++) {
+            var span = spans[i];
+            if (span.dataset.typeset === "1") {
+                continue;
+            }
+            var tex = span.getAttribute("data-tex") || "";
+            var display = span.getAttribute("data-display") === "true";
+            if (katex && typeof katex.renderToString === "function") {
+                try {
+                    span.innerHTML = katex.renderToString(tex, {
+                        displayMode: display,
+                        throwOnError: false,
+                        // LaTeX ist nicht vertrauenswürdig: `trust: false`
+                        // verhindert, dass \href/\url aus Nutzertext klickbar
+                        // werden oder \htmlOn/eine externe Ressource escaped.
+                        trust: false,
+                        output: "htmlAndMathml",
+                    });
+                    span.dataset.typeset = "1";
+                    span.removeAttribute("data-tex");
+                    continue;
+                } catch (err) {
+                    // Fehlerhafte Formel: auf den Fallback durchfallen.
+                }
+            }
+            if (!span.classList.contains("tf-math--fallback")) {
+                span.classList.add("tf-math--fallback");
+                span.textContent = (display ? "$$" : "$") + tex + (display ? "$$" : "$");
+                span.dataset.typeset = "fallback";
+            }
+        }
+    }
+
+    function fmtInt(n) {
+        return Number(n).toLocaleString("de-DE");
+    }
+
+    // Pending-Zustand: die letzte gültige Vorschau bleibt sichtbar und wird
+    // gedimmt, statt leer zu werden. Ein Bildschirm, auf dem der Text
+    // verschwindet, während man tippt, ist unberuhigend — und bei
+    // 300-ms-Debounce wäre das nach jedem Wort der Fall.
+    function setPending(on) {
+        if (previewFrame) {
+            previewFrame.classList.toggle("is-pending", !!on);
+        }
+    }
+
+    // Baut die Sprechblasen aus `preview.messages` — eine pro Nachricht,
+    // genau wie Telegram sie einzeln zustellt.
+    // Parameter heißt bewusst `data` und NICHT `preview`: `preview` ist das
+    // DOM-Element (#preview), und ein gleichnamiger Parameter würde es
+    // verdecken. Dann schrieb `preview.hidden = …` auf das Payload-Objekt —
+    // was stillschweigend funktioniert und die Sprechblase sichtbar lässt.
+    function renderBubbles(data) {
+        var messages = (data && data.messages) || [];
+        bubblesHost.textContent = "";
+
+        for (var i = 0; i < messages.length; i++) {
+            var m = messages[i];
+            var wrap = document.createElement("div");
+            wrap.className = "tg-bubble";
+
+            // Kopf: Nummer + Zeichen/Limit. Telegram zeigt keine Nummer —
+            // ohne sie ist bei 17 Blasen nicht erkennbar, wo man steht.
+            var meta = document.createElement("div");
+            meta.className = "tg-bubble__meta";
+            var label = document.createElement("span");
+            label.appendChild(document.createTextNode("Nachricht "));
+            var num = document.createElement("b");
+            num.textContent = fmtInt(m.index);
+            label.appendChild(num);
+            label.appendChild(document.createTextNode(" von " + fmtInt(messages.length)));
+            var size = document.createElement("span");
+            size.className = "tg-bubble__size";
+            var ratio = m.limit > 0 ? m.utf16 / m.limit : 0;
+            if (ratio >= 0.98) {
+                size.classList.add("is-full");
+            } else if (ratio >= 0.8) {
+                size.classList.add("is-near");
+            }
+            size.textContent = fmtInt(m.utf16) + " / " + fmtInt(m.limit)
+                + " Zeichen · " + (m.kind === "rich" ? "Rich" : "Text");
+            meta.appendChild(label);
+            meta.appendChild(size);
+
+            // Das HTML kommt vom SERVER und ist dort bereits sanitisiert
+            // (telegram_formatter/preview.py, Allowlist). Hier wird es nur
+            // eingesetzt — keine Nachbearbeitung, kein Nachrechnen.
+            var body = document.createElement("div");
+            body.className = "tg-bubble__body";
+            body.innerHTML = m.html;
+
+            wrap.appendChild(meta);
+            wrap.appendChild(body);
+            bubblesHost.appendChild(wrap);
         }
 
-        var t = escapeHtml(raw);
-
-        /* 1) fenced code blocks ```lang\n...\\n``` */
-        t = t.replace(/```[^\n]*\n([\s\S]*?)```/g, function (_m, code) {
-            return protect("<pre class=\"tf-preview-code\"><code>" + code + "</code></pre>");
-        });
-        /* 2) Inline-Code `...` */
-        t = t.replace(/`([^`\n]+)`/g, function (_m, code) {
-            return protect("<code>" + code + "</code>");
-        });
-        /* 3) LaTeX: $$...$$ (Display) und $...$ (inline) — nur als Hinweis
-           formatiert; echtes Rendering übernimmt Telegram (Rich Message). */
-        t = t.replace(/\$\$([^$\n]+)\$\$/g, function (_m, math) {
-            return protect("<span class=\"tf-preview-math\">" + math + "</span>");
-        });
-        t = t.replace(/\$([^$\n]+)\$/g, function (_m, math) {
-            return protect("<span class=\"tf-preview-math\">" + math + "</span>");
-        });
-
-        /* 4) Telegram-Markdown */
-        t = t.replace(/^#{1,6}\s+(.*)$/gm, "<b>$1</b>");
-        t = t.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
-        t = t.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, "$1<i>$2</i>");
-        t = t.replace(/(^|[^_\w])__([^_\n]+)__(?![^_\w])/g, "$1<u>$2</u>");
-        t = t.replace(/(^|[^_\w])_([^_\n]+)_(?![^_\w])/g, "$1<i>$2</i>");
-        t = t.replace(/~~([^~\n]+)~~/g, "<s>$1</s>");
-        t = t.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g,
-            "<a href=\"$2\" target=\"_blank\" rel=\"noopener\">$1</a>");
-        t = t.replace(/^&gt;\s?(.*)$/gm, "<i>$1</i>");
-
-        /* 5) Zeilenumbrüche wiederherstellen, Schutzbelegungen auflösen */
-        t = t.replace(/\n/g, "<br>");
-        t = t.replace(/\u0000(\d+)\u0000/g, function (_m, i) {
-            return store[Number(i)];
-        });
-        preview.innerHTML = t;
+        typesetMath(bubblesHost);
+        // Mehrere Blasen: die Einzelblase aus dem Markup ausblenden.
+        preview.hidden = messages.length !== 1;
+        bubblesHost.hidden = messages.length === 0;
     }
+
+    function showPreviewError(message) {
+        // Die letzte gültige Vorschau bleibt stehen — ein Fehler bei der
+        // Vorschau darf nicht den Text verschwinden lassen, den man gerade
+        // bearbeitet.
+        if (!lastPreviewOk) {
+            return;
+        }
+        var box = previewFrame.querySelector(".tf-preview-error");
+        if (!box) {
+            box = document.createElement("p");
+            box.className = "tf-preview-error";
+            box.setAttribute("role", "status");
+            previewFrame.insertBefore(box, previewFrame.firstChild);
+        }
+        box.textContent = "Vorschau nicht aktualisiert: " + message;
+    }
+
+    function clearPreviewError() {
+        var box = previewFrame && previewFrame.querySelector(".tf-preview-error");
+        if (box && box.parentNode) {
+            box.parentNode.removeChild(box);
+        }
+    }
+
+    function resetPreview() {
+        bubblesHost.textContent = "";
+        bubblesHost.hidden = true;
+        preview.hidden = false;
+        preview.textContent = PLACEHOLDER;
+        lastPreviewOk = false;
+        clearPreviewError();
+        setPending(false);
+    }
+
 
     function updateCharCount() {
         if (!charCount) {
@@ -229,25 +337,52 @@
         if (!input.value.trim()) {
             // Leerer Editor erzeugt keinen Roundtrip (und keinen POST beim
             // Seitenaufruf).
+            convertSeq += 1;
+            resetPreview();
             payloads.textContent = "—";
             setSendStatus("", null);
             return Promise.resolve();
         }
+        // Sequenznummer: bei schnellem Tippen koennen Antworten in
+        // falscher Reihenfolge eintreffen (eine langsame alte nach einer
+        // schnellen neuen). Nur die jeweils juengste Antwort darf rendern.
+        var seq = ++convertSeq;
+        setPending(true);
         return postJson(convertUrl, { text: input.value }).then(function (res) {
+            if (seq !== convertSeq) {
+                return;  // veraltet — eine neuere Antwort ist unterwegs
+            }
             var data = res.data || {};
             if (!res.ok && data.error) {
                 payloads.textContent = "Fehler: " + data.error;
+                showPreviewError(data.error);
                 setSendStatus("", null);
                 return;
+            }
+            // Die Vorschau kommt aus derselben Antwort — kein zweiter
+            // Round-Trip und keine zweite Berechnung.
+            if (data.preview) {
+                renderBubbles(data.preview);
+                lastPreviewOk = true;
+                clearPreviewError();
             }
             payloads.textContent = JSON.stringify(data, null, 2);
             if (data.count > 1) {
                 setSendStatus(
-                    "Hinweis: " + data.count + " Nachrichten (automatisch aufgeteilt).",
+                    "Hinweis: " + data.count + " Nachrichten (automatisch aufgeteilt) — " +
+                    "die Vorschau zeigt jede einzeln.",
                     null
                 );
             } else {
                 setSendStatus("", null);
+            }
+        }).catch(function () {
+            if (seq === convertSeq) {
+                showPreviewError("Server nicht erreichbar");
+            }
+        }).then(function () {
+            if (seq === convertSeq) {
+                setPending(false);
             }
         });
     }
@@ -262,7 +397,8 @@
     function resetAll() {
         clearTimeout(convertTimer);
         input.value = "";
-        preview.innerHTML = PLACEHOLDER;
+        convertSeq += 1;
+        resetPreview();
         payloads.textContent = "—";
         setSendStatus("", null);
         updateCharCount();
@@ -692,7 +828,12 @@
     document.addEventListener("tf:botsessionchange", refreshSendPath);
 
     input.addEventListener("input", function () {
-        renderPreview();
+        // Kein clientseitiges Rendern mehr: die Vorschau wird aus der
+        // Antwort von /api/convert befuellt (scheduleRefresh -> refreshPayloads).
+        // Bis sie da ist, bleibt die letzte Vorschau stehen (gedimmt).
+        if (input.value.trim()) {
+            setPending(true);
+        }
         updateCharCount();
         scheduleRefresh();
     });
@@ -709,7 +850,7 @@
         }
     });
 
-    renderPreview();
+    resetPreview();
     updateCharCount();
     refreshSendPath();
 })();

@@ -98,13 +98,40 @@ def test_all_referenced_assets_exist(page: str):
         assert file.stat().st_size > 200, f"Asset auffällig klein (leer?): {ref}"
 
 
+#: Verzeichnisse unter ``static/`` mit Dateien, die das Template **nicht**
+#: direkt referenziert, weil sie indirekt geladen werden. Wer diese Liste
+#: erweitert, muss die Begründung mitliefern — der Test soll verhindern, dass
+#: Assets versehentlich liegen bleiben, nicht dass dynamisch geladene Dateien
+#: beanstandet werden.
+#:
+#: ``katex/`` (v2.14.0): die ~20 WOFF2-Fonts werden über KaTeXs CSS
+#: referenziert (``url(fonts/KaTeX_*.woff2)``), nicht über ein ``<link>``.
+#: ``LICENSE``/``VERSION`` sind Provenienz-Angaben, kein ausgeliefertes Asset.
+#: Dass die Fonts wirklich da sind, prüft
+#: ``test_katex_assets_are_complete``.
+INDIRECT_STATIC_DIRS: tuple[str, ...] = ("katex/",)
+
+
 def test_no_orphan_static_files(page: str):
     referenced = {ref.removeprefix("/static/") for ref in re.findall(r'(?:href|src)="(/static/[^"]+)"', page)}
     on_disk = {str(p.relative_to(STATIC_DIR)) for p in STATIC_DIR.rglob("*") if p.is_file()}
-    assert on_disk == referenced, (
-        "Dateien auf der Platte und Referenzen im Template driften auseinander: "
-        f"nur auf Platte {sorted(on_disk - referenced)}, nur referenziert {sorted(referenced - on_disk)}"
-    )
+    # Die Regel lautet: jede Datei auf der Platte ist entweder im Template
+    # referenziert ODER gehört zu einem Verzeichnis, das indirekt geladen wird.
+    # Das erfasst beide Richtungen:
+    #   * verwaiste Datei  -> liegt auf Platte, wird nirgends referenziert
+    #   * toter Verweis    -> wird referenziert, existiert nicht (s. Test oben)
+    allowed = referenced | {p for p in on_disk if p.startswith(INDIRECT_STATIC_DIRS)}
+    orphans = on_disk - allowed
+    assert orphans == set(), f"verwaiste Assets (weder referenziert noch indirekt): {sorted(orphans)}"
+
+    # Und: aus jedem indirekt geladenen Verzeichnis muss die Seite auch
+    # mindestens eine Datei direkt referenzieren. Sonst liegt da etwas ohne
+    # Verbindung (das war der Fehler, als katex/ noch ohne <link> im Template war).
+    for prefix in INDIRECT_STATIC_DIRS:
+        assert any(r.startswith(prefix) for r in referenced), (
+            f"aus {prefix} wird nichts referenziert — die Seite lädt den "
+            f"Formel-Renderer nicht, die Vorschau bliebe ungesetzt"
+        )
 
 
 def test_css_load_order_is_layers(page: str):
@@ -598,3 +625,96 @@ def test_channel_banner_only_with_configured_shared_bot(page, monkeypatch):
     # Direkt unter der Überschrift, vor dem Editor — nicht irgendwo unten.
     assert enabled.index('id="sharedChannel"') < enabled.index('id="editor"')
     assert 'id="sharedChannel"' not in _render(monkeypatch, bot_token="", chat_id="")
+
+
+# --------------------------------------------------------------------------- #
+# KaTeX-Assets: vollständig und konsistent (v2.14.0)
+# --------------------------------------------------------------------------- #
+KATEX_DIR = STATIC_DIR / "katex"
+
+
+def test_katex_assets_are_complete():
+    """Jede im CSS referenzierte Font-Datei muss existieren.
+
+    KaTeX lädt Fonts **über sein eigenes CSS** (`url(fonts/…)`) — sie stehen
+    in keinem `<link>` und keinem `@font-face` dieses Projekts. Fehlt eine
+    Datei, fällt das nicht im Test auf, sondern beim Nutzer: die Formel
+    erscheint in der Sprechblase in einer Ersatzschrift. Deshalb wird hier
+    jede Referenz aus dem CSS gegen die Platte geprüft.
+    """
+    css = (KATEX_DIR / "katex.min.css").read_text(encoding="utf-8")
+    referenced = set(re.findall(r"url\((fonts/[^)]+)\)", css))
+    assert referenced, "KaTeX-CSS referenziert keine Fonts — unerwartet"
+    missing = [ref for ref in sorted(referenced) if not (KATEX_DIR / ref).is_file()]
+    assert missing == [], f"im CSS referenzierte Fonts fehlen auf der Platte: {missing}"
+
+
+def test_katex_provenance_is_recorded():
+    """Version und Lizenz liegen im Repository — nicht nur in der Changelog.
+
+    Verwaltete Fremd-Assets ohne Herkunftsangabe sind die klassische
+    Lücke in einer Lieferkette: niemand kann mehr sagen, welche Version
+    läuft oder unter welcher Lizenz.
+    """
+    version_file = KATEX_DIR / "VERSION"
+    licence = KATEX_DIR / "LICENSE"
+    assert version_file.is_file(), "static/katex/VERSION fehlt"
+    assert version_file.read_text(encoding="utf-8").strip(), "VERSION ist leer"
+    assert "MIT" in licence.read_text(encoding="utf-8"), "KaTeX-Lizenz ist nicht MIT"
+    # Die gepinnte Version muss im Bundle selbst stehen.
+    assert version_file.read_text(encoding="utf-8").strip() in (
+        KATEX_DIR / "katex.min.js"
+    ).read_text(encoding="utf-8", errors="ignore")[:400000]
+
+
+def test_only_woff2_fonts_are_shipped():
+    """Nur WOFF2 — das CSS listet es zuerst, also wird nichts nachgeladen.
+
+    WOFF2 wird von allen Browsern seit 2015 unterstützt; die WOFF-/TTF-Fallbacks
+    im CSS würden nie abgerufen. Sie mitzuliefern hieße 1,2 MB zusätzliche
+    Dateien im Image und in jedem Wheel.
+    """
+    fonts = list((KATEX_DIR / "fonts").glob("*"))
+    assert fonts, "keine Fonts unter static/katex/fonts/"
+    assert all(f.suffix == ".woff2" for f in fonts), (
+        "nur WOFF2 ausliefern: "
+        f"{sorted(f.name for f in fonts if f.suffix != '.woff2')}"
+    )
+
+
+def test_katex_is_loaded_before_app_js(page: str):
+    """app.js braucht ``window.katex`` beim ersten Rendern.
+
+    ``defer`` bewahrt die Dokumentreihenfolge — ohne diese Reihenfolge liefe
+    app.js vor KaTeX, `typesetMath` fiele auf den TeX-Quelltext zurück und
+    die Vorschau zeigte dauerhaft ungesetzte Formeln.
+    """
+    order = re.findall(r'<script src="(/static/[^"]+)"', page)
+    katex_at = next((i for i, s in enumerate(order) if "katex" in s), None)
+    app_at = next((i for i, s in enumerate(order) if s.endswith("app.js")), None)
+    assert katex_at is not None, "KaTeX wird nicht geladen"
+    assert app_at is not None
+    assert katex_at < app_at, f"KaTeX (Position {katex_at}) muss vor app.js ({app_at}) laden"
+
+
+def test_preview_host_element_exists(page: str):
+    """`#previewBubbles` ist der Container für die Nachrichten-Sprechblasen."""
+    assert 'id="previewBubbles"' in page
+    assert 'id="preview"' in page
+
+
+def test_preview_css_uses_only_defined_tokens(page: str):
+    """Keine erfundenen CSS-Variablen.
+
+    Ein Token, das es nicht gibt, fällt still auf den Initialwert zurück —
+    der Vorschau fehlen dann Rahmen, Farben oder Abstände, ohne dass irgendwo
+    ein Fehler sichtbar wäre. `var(--x)` ohne Definition in tokens.css wird
+    hier als Fehler gewertet.
+    """
+    tokens = _strip_comments((STATIC_DIR / "css" / "tokens.css").read_text(encoding="utf-8"))
+    defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", tokens))
+    for sheet in ("components.css", "layout.css", "base.css"):
+        css = (STATIC_DIR / "css" / sheet).read_text(encoding="utf-8")
+        used = set(re.findall(r"var\((--[a-z0-9-]+)", _strip_comments(css)))
+        unknown = sorted(used - defined)
+        assert unknown == [], f"{sheet} nutzt undefinierte Tokens: {unknown}"

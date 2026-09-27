@@ -40,7 +40,7 @@ telegram_formatter/
     │   └── components.css  Ebene 4: Bausteine (.tf-*), nur mit var(--token)
     └── js/
         ├── theme.js        Theme-Switcher (läuft synchron im <head>)
-        ├── app.js          Editor-Funktionen (Vorschau, /api/convert, Sende-Bestätigung, Senden)
+        ├── app.js          Editor-Funktionen (Vorschau-Anzeige, /api/convert, Sende-Bestätigung, Senden)
         └── byob.js         BYOB-Session-UI (v2.2.0): Session-Start/Status/
                             Chat-Erkennung; stellt window.tfByob bereit, an
                             das app.js den Senden-Button delegiert
@@ -52,11 +52,21 @@ abgesichert):
 1. `theme.js` steht als einziges Skript **ohne `defer` im `<head>`** — es
    muss `data-theme` setzen, *bevor* der erste Frame gemalt wird
    (Thema-Flashing vermeiden).
-2. CSS in der Reihenfolge tokens → base → layout → components, damit
-   Spezifität und Kaskade berechenbar bleiben.
-3. `app.js` und `byob.js` bleiben mit `defer` am `</body>`-Ende
-   (Reihenfolge: `app.js` vor `byob.js` — `byob.js` setzt beim Laden das
-   Senden-Label, `app.js` liest `window.tfByob` nur zur Sendezeit).
+2. CSS in der Reihenfolge tokens → base → layout → components → katex, damit
+   Spezifität und Kaskade berechenbar bleiben. KaTeX steht **hinten**: seine
+   Regeln sollen von unseren gewonnen werden, wenn beide dieselbe
+   Spezifität haben.
+3. `katex.min.js`, `app.js` und `byob.js` bleiben mit `defer` am
+   `</body>`-Ende, in dieser Reihenfolge:
+   * **KaTeX zuerst** — `app.js` braucht `window.katex` beim ersten Rendern.
+     `defer` bewahrt die Dokumentreihenfolge; steht KaTeX dahinter, fällt
+     `typesetMath` dauerhaft auf den TeX-Quelltext zurück und die Vorschau
+     zeigt ungesetzte Formeln.
+   * dann `app.js` (liest `window.tfByob` nur zur Sendezeit)
+   * dann `byob.js` (setzt beim Laden das Senden-Label)
+   `auto-render.min.js` wird **nicht** geladen: es sucht selbst nach
+   `$`-Delimitern und würde den serverseitig markierten TeX-Code ein zweites
+   Mal zerlegen.
 
 ## 2. CSS-Architektur
 
@@ -261,13 +271,127 @@ Zustandsklassen, die JS an Stellschrauben klebt (nur diese drei, alle in
   den Zähler, `text-wrap: balance` für Überschriften (ignoriert von älteren
   Engines — reine Verschönerung).
 
+## 5a. Der Vorschau-Vertrag (v2.14.0) — die wichtigste Regel im Frontend
+
+> **Die Vorschau ist die Payload. Sie ist keine zweite Rechnung.**
+
+Bis v2.13.0 hatte `app.js::renderPreview` den Konverter ein **zweites Mal in
+JavaScript nachgebildet**. Diese Parallelfassung driftete sofort, und zwar
+genau dort, wo es auffällt:
+
+| Eingabe | zeigte die Vorschau | bekam Telegram |
+|---|---|---|
+| `# Titel` | `<b>Titel</b>` | `<b>🚀 Titel</b>` |
+| `\(x^2\)` | `\(x^2\)` | `$x^2$` (normalisiert) |
+| Pipe-Tabelle | `\| Name \| Preis \|` — Rohtext | GFM-Tabelle, **echte Tabelle** |
+| `$$\int…$$` | LaTeX-Quelltext in Monospace | **typesetter Formel** |
+| Google-Redirect-Link | unverändert | auf Ziel entpackt |
+| 64 000 Zeichen | ein Block | **17 einzelne Nachrichten** |
+
+Die Spalte „zeigte die Vorschau" ist per Definition falsch: sie war eine
+Rechnung, die neben der echten herlief. Jede Änderung in `utils.py` musste
+**zweimal** portiert werden, und die zweite Portierung passierte nie
+rechtzeitig.
+
+**Die Regel.** `/api/convert` liefert im Feld `preview` dieselben Nachrichten,
+die Telegram bekommt, fertig als Anzeige-HTML. `app.js` setzt es ein und
+rechnet nichts nach:
+
+```js
+// richtig: anzeigen
+if (data.preview) { renderBubbles(data.preview); }
+
+// falsch: nachrechnen (das war app.js bis v2.13.0)
+var t = escapeHtml(raw).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>") /* … */;
+```
+
+**Wer ein neues Markdown-Element braucht, baut es an genau einer Stelle ein:**
+in `telegram_formatter/utils.py` (was Telegram bekommt) und — falls es
+Anzeige-Charakter hat — in `telegram_formatter/preview.py` (wie es
+dargestellt wird). Nie in `app.js`.
+
+### Zwei Dialekte, zwei Renderer
+
+Telegram rendert zwei verschiedene Sprachen, und die Vorschau muss die
+jeweils **richtige** nehmen. Beide stehen in `preview.py`:
+
+| | `regular` (`sendMessage` + `parse_mode="HTML"`) | `rich` (`sendRichMessage`) |
+|---|---|---|
+| Quelle | `payload.text` — **schon** Telegram-HTML | `payload.rich_message.markdown` — GFM-Markdown |
+| Vorschau | Allowlist-Sanitizer, sonst unverändert | Renders des Anzeige-Subsets |
+| Überschrift | `<b>🚀 Titel</b>` — Emoji aus `utils` | `# Titel` → `<h1>Titel</h1>`, **ohne** Emoji |
+| Tabelle | `_tables_to_lines` → `🔸 **Preis:** 3,00` | GFM → echte `<table>` |
+| Formeln | keine (der Pfad kann keine) | `$…$`/`$$…$$` → `data-tex`-Span |
+
+Emoji-Präfixe gehören **ausschließlich** zum HTML-Pfad. Trägt der
+Rich-Renderer sie auch, zeigt die Vorschau etwas, das Telegram nie zeigt —
+dieselbe Fehlerklasse, nur in die andere Richtung. Beide Richtungen sind in
+`tests/test_preview.py` als Test festgenagelt.
+
+### Sanitizer: Allowlist schlägt Denkvermögen
+
+`preview.py` erzeugt das HTML aus bereits escapedem Text — per Konstruktion
+sicher. Trotzdem filtert `sanitize_telegram_html()` gegen eine Allowlist:
+`b i u s code pre a blockquote br tg-spoiler details tg-emoji`, dazu
+`href`/`language`/`emoji-id`. Event-Handler, `style`, `class` und
+`javascript:`-URLs fliegen raus.
+
+Grund: ein einziger künftiger Konverter-Bug, der ein Attribut durchreicht,
+wäre sonst sofort eine XSS-Lücke. Weil das HTML per `innerHTML` gesetzt wird,
+ist die Allowlist die entscheidende Grenze — nicht die Escaping-Vorsicht von
+`utils.py`.
+
+### CSP-Ausnahme für KaTeX
+
+KaTeX braucht `style="…"`-Attribute für die Glyphen-Metrik (`.pstrut`,
+`margin-right`, `min-width` für Wurzel, Klammern, Bruchstriche). Ohne
+`style-src-attr` in der CSP wären Formeln sichtbar zerfallen. Deshalb genau
+eine Ausnahme:
+
+```
+style-src-attr 'unsafe-inline'    # nur Style-Attribute
+style-src      'self'            # bleibt streng: Inline-<style> weiter verboten
+script-src     'self'            # bleibt strikt
+```
+
+Die Ausnahme ist in `tests/test_app.py::test_csp_only_allowance_is_style_src_attr`
+verankert: es darf genau **eine** `unsafe-inline`-Vorkommen in der CSP geben.
+Wer ein `style`-Attribut einschleust, kann damit höchstens Pixel verschieben
+— keine Skripte, keine Daten. Die eigentliche XSS-Abwehr bleibt die
+Allowlist oben.
+
+### Assets: KaTeX vendorn, nicht einbinden
+
+`static/katex/` (596 KB: CSS, JS, 20 WOFF2-Fonts, LICENSE, VERSION) liegt
+als Kopie im Repository — die App läuft ohne Netz, und die CSP erlaubt nur
+`'self'`. Neu einbinden:
+
+```bash
+scripts/vendor-katex.sh            # 0.18.9 = gepinnte Version
+```
+
+Das Skript kürzt in `katex.min.css` jede `src`-Liste auf ihr erstes Format
+(woff2 steht überall vorn und wird von allen Browsern seit 2015 genommen).
+Die woff-/ttf-Fallbacks mitzuliefern hieße ~1,2 MB tote Dateien in jedem
+Image und jedem Wheel. Weil das CSS damit vom Original abweicht, prüft
+`tests/test_frontend.py::test_katex_assets_are_complete`, dass **jede**
+verbleibende `url(fonts/…)`-Referenz auch wirklich existiert — ein
+erneutes Vendoring ohne das Skript schlägt also alarmiert an, statt die
+Formeln still in einer Ersatzschrift zu zeigen.
+
+Fällt KaTeX aus (Netz, CSP, defekte Datei), bleibt der TeX-Code sichtbar
+und als Formel markiert (`tf-math--fallback`). Das ist ehrlicher als eine
+leere Fläche.
+
 ## 6. Teststrategie & Browserkompatibilität
 
 | Ebene | Ort | prüft |
 |---|---|---|
 | Struktur-Verträge | `tests/test_frontend.py` (pytest, ohne Browser) | Token-Vollständigkeit je Theme, var()-Abdeckung, Asset-Existenz/-Orphanings, JS↔HTML-ID-Verträge, Swatch-Whitelist, mobile-first, `min-width` only, HTML-Wellformedness, Kontrast-Heuristik, Feature-Baseline |
-| Funktionale DOM-Tests | `tests/frontend/jsdom_spec.cjs` via `tests/test_jsdom_smoke.py` | echtes theme.js/app.js/byob.js-Verhalten: Boot aus localStorage, Switcher-Klicks + Persistenz, Markdown-Vorschau, Debounce + ein POST pro Tipppause, Senden-Bestätigung (Dialog-Inhalte, Abbrechen, Escape, Bestätigen), Erfolg/Fehler (429-Merge), Reset sowie kompletter BYOB-Durchlauf (Session öffnen/senden/beenden, Chat-Chips, 410-Reset — jeweils durch den Bestätigungsdialog); Skippt sauber ohne Node/jsdom (`npm install` — jsdom ist als Dev-Dependency in `package.json` gepinnt) |
-| API/Security | `tests/test_app.py` | CSP strikt `'self'`, keine Inline-Skripte/Styles, alle Formatter-Endpunkte unverändert |
+| Funktionale DOM-Tests | `tests/frontend/jsdom_spec.cjs` via `tests/test_jsdom_smoke.py` | echtes theme.js/app.js/byob.js-Verhalten: Boot aus localStorage, Switcher-Klicks + Persistenz, **Vorschau aus der Serverantwort** (Emoji-Präfix, `<table>`, eine Blase pro Nachricht, Nummerierung, KaTeX gesetzt, Pending-Zustand, Verhalten bei Serverfehler), Debounce + ein POST pro Tipppause + **Sequenzierung** (eine alte Antwort darf eine neue nicht überschreiben), Senden-Bestätigung (Dialog-Inhalte, Abbrechen, Escape, Bestätigen), Erfolg/Fehler (429-Merge), Reset sowie kompletter BYOB-Durchlauf (Session öffnen/senden/beenden, Chat-Chips, 410-Reset — jeweils durch den Bestätigungsdialog); Skippt sauber ohne Node/jsdom (`npm install` — jsdom ist als Dev-Dependency in `package.json` gepinnt) |
+| Vorschau-Parität | `tests/test_preview.py` (pytest) | dass `preview.py` **dieselben** Inhalte zeigt wie `build_messages`: Emoji nur im HTML-Pfad, Tabelle als `<table>`, `data-tex` für jede Formel, eine Sprechblase je Nachricht, Sanitizer-Allowlist (10 Angriffsmuster), keine leeren/überlangen Nachrichten |
+| KaTeX-Vollständigkeit | `tests/test_frontend.py` | jede im CSS referenzierte Font-Datei existiert, nur WOFF2, VERSION+LICENSE im Repo, KaTeX lädt **vor** app.js, keine undefinierten CSS-Tokens |
+| API/Security | `tests/test_app.py` | CSP strikt `'self'` mit **genau einer** Ausnahme (`style-src-attr`, für KaTeX — s. §5a), keine Inline-Skripte und keine Inline-`<style>`, alle Formatter-Endpunkte unverändert |
 | Syntax-Check (manuell/local) | `css-tree` + `node --check` | Parse-Fehlerfreiheit von CSS/JS (in CI durch pytest-Strukturtests abgedeckt) |
 | Menschlich | Dev-Server (`flask --app telegram_formatter.app run` + Browser) | reales Rendering; Browser-Matrix s. unten |
 

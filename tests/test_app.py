@@ -103,7 +103,6 @@ def test_security_headers_present(client):
     resp = client.get("/")
     csp = resp.headers["Content-Security-Policy"]
     assert "frame-ancestors 'none'" in csp
-    assert "unsafe-inline" not in csp
     assert "script-src 'self'" in csp
     assert "style-src 'self'" in csp
     # Selbst-gehostetes Design: keine externen Hosts mehr in der CSP.
@@ -111,6 +110,43 @@ def test_security_headers_present(client):
     assert resp.headers["X-Content-Type-Options"] == "nosniff"
     assert resp.headers["X-Frame-Options"] == "DENY"
     assert resp.headers["Referrer-Policy"] == "no-referrer"
+
+
+def test_csp_only_allowance_is_style_src_attr(client):
+    """Die CSP bleibt streng — eine Ausnahme, und die ist dokumentiert.
+
+    v2.14.0 hat KaTeX eingeführt (die Vorschau setzt LaTeX genauso wie
+    Telegram). KaTeX braucht `style="…"`-Attribute für die Glyphen-Metrik,
+    die bisher von `style-src 'self'` verboten waren.
+
+    Der Test verankert, dass das die **einzige** gelockerte Directive ist und
+    dass sie auf Style-Attribute begrenzt bleibt: `style-src` selbst bleibt
+    ohne `'unsafe-inline'` (Inline-`<style>`-Elemente sind also weiterhin
+    verboten), `script-src` bleibt strikt.
+
+    Warum das vertretbar ist: wer ein `style`-Attribut einschleust, kann
+    höchstens Pixel verschieben — keine Skripte ausführen, keine Daten
+    exfiltrieren. Die eigentliche XSS-Abwehr bleibt die Allowlist in
+    `telegram_formatter/preview.py`.
+    """
+    csp = client.get("/").headers["Content-Security-Policy"]
+    directives = {d.split()[0]: " ".join(d.split()[1:]) for d in csp.split("; ") if d.strip()}
+
+    # Erlaubt: genau diese eine Directive.
+    assert directives.get("style-src-attr") == "'unsafe-inline'"
+
+    # Alles andere bleibt zu.
+    assert "unsafe-inline" not in directives["style-src"]
+    assert "unsafe-inline" not in directives["script-src"]
+    for name in ("script-src", "style-src", "connect-src", "img-src"):
+        assert "unsafe-eval" not in directives[name], name
+        assert "*" not in directives[name], name
+    assert directives["object-src"] == "'none'"
+    assert directives["base-uri"] == "'none'"
+    assert directives["frame-ancestors"] == "'none'"
+
+    # Genau zwei 'unsafe-inline'-Vorkommen insgesamt: keine weitere Directive.
+    assert csp.count("unsafe-inline") == 1
 
 
 def test_convert_regular(client):

@@ -4,6 +4,167 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.14.0] - 2026-09-27
+
+Minor-Release: **die Live-Vorschau zeigt jetzt 1:1, was Telegram anzeigt.**
+
+Bis v2.13.0 bildete `static/js/app.js::renderPreview` den Konverter ein
+**zweites Mal in JavaScript** nach. Diese Parallelfassung driftete sofort —
+und zwar genau dort, wo es auffällt. Am ausgelieferten Payload gemessen:
+
+| Eingabe | zeigte die Vorschau | bekam Telegram |
+|---|---|---|
+| `# Titel` | `<b>Titel</b>` | `<b>🚀 Titel</b>` |
+| `\(x^2\)` | `\(x^2\)` wörtlich | `$x^2$` (normalisiert) |
+| Pipe-Tabelle | `\| Name \| Preis \|` — Rohtext | GFM-Tabelle, **echte Tabelle** |
+| `$$\int…$$` | LaTeX-Quelltext in Monospace | **typesetter Formel** |
+| Google-Redirect-Link | unverändert | auf Ziel entpackt |
+| 64 000 Zeichen | ein zusammenhängender Block | **17 einzelne Nachrichten** |
+
+Pipe-Tabellen waren in `app.js` **überhaupt nicht** implementiert; der Kommentar
+dort sagte es sogar: *„echtes Rendering übernimmt Telegram"*.
+
+**Grundsatz ab jetzt: die Vorschau ist die Payload, keine zweite Rechnung.**
+Wer ein neues Markdown-Element braucht, baut es an **einer** Stelle ein — in
+`utils.py` (was Telegram bekommt) und, falls es Anzeige-Charakter hat, in
+`preview.py` (wie es dargestellt wird). Nie in `app.js`.
+
+### Added
+
+- **`telegram_formatter/preview.py`** (neu, rein — kein Flask, kein I/O, hält
+  die Schichtregel aus `CONTRIBUTING.md` ein): rendert die von
+  `build_messages` erzeugten Nachrichten als Anzeige-HTML.
+  - `regular` → `payload.text` ist bereits Telegram-HTML und wird gegen eine
+    Allowlist gefiltert (`sanitize_telegram_html`): nur `b i u s code pre a
+    blockquote br tg-spoiler details tg-emoji` samt `href`/`language`/
+    `emoji-id`. Event-Handler, `style`, `class` und `javascript:`-URLs fliegen
+    raus. Das ist die entscheidende Grenze, weil das HTML per `innerHTML`
+    gesetzt wird.
+  - `rich` → `payload.rich_message.markdown` wird ins Anzeige-Subset
+    übersetzt: Überschriften, fett/kursiv/unterstrichen/durchgestrichen,
+    Links, Inline-Code, Codeblöcke, Zitate, Listen und **GFM-Tabellen als
+    echte `<table>`**.
+  - **Zwei Dialekte, zwei Renderer.** Emoji-Präfixe (`🚀 📍 🔹 🔸`) gehören
+    **ausschließlich** zum HTML-Pfad — `sendRichMessage` erzeugt sie nicht. Der
+    Rich-Renderer trägt sie bewusst *nicht*; sonst zeigte die Vorschau etwas,
+    das Telegram nie zeigt. Beide Richtungen sind als Test festgenagelt.
+- **`preview`-Feld in der Antwort von `POST /api/convert`:** dieselben
+  Nachrichten, fertig als Anzeige-HTML, mit `index`, `utf16` und `limit` je
+  Nachricht. **Kein zusätzlicher Round-Trip:** `app.js` schickte den Text für
+  die Payload-Ansicht schon immer bei jeder Tipppause (300 ms) an diesen
+  Endpunkt und ignorierte die Antwort für die Vorschau. Am Datenschutzverhalten
+  ändert sich damit nichts — der Text ging vorher schon beim Tippen an den
+  Server. Vollständige Feld-Dokumentation: `docs/API.md`.
+- **Eine Sprechblase pro Telegram-Nachricht.** `#previewBubbles` ersetzt den
+  einzelnen Block; die Sprechblase aus dem Markup bleibt als Fallback ohne JS.
+  Jede Blase trägt Nummer und Zeichen/Limit (im Verhältnis, in dem Telegram
+  zählt) — bei 25 Nachrichten ist sonst nicht erkennbar, wo man steht.
+  Telegram stellt sie einzeln zu; die Vorschau tut es jetzt auch.
+- **KaTeX 0.18.9 selbst gehostet** (`static/katex/`, 596 KB, MIT) — die
+  Vorschau setzt LaTeX damit genauso wie Telegram. Über `renderToString`,
+  **nicht** über `auto-render`: das sucht selbst nach `$`-Delimitern und würde
+  den serverseitig markierten TeX-Code ein zweites Mal zerlegen. Fällt KaTeX
+  aus, bleibt der TeX-Code sichtbar und als Formel markiert — ehrlicher als
+  eine leere Fläche.
+- **`scripts/vendor-katex.sh`:** reproduzierbares Vendoring inklusive
+  Provenienz (`VERSION`, `LICENSE`) und dem Schritt, die nie abgerufenen
+  woff-/ttf-Fallbacks aus dem CSS zu kürzen (~1,2 MB weniger in jedem Image
+  und Wheel). Weil das CSS damit vom Original abweicht, prüft
+  `test_katex_assets_are_complete`, dass **jede** verbliebene
+  `url(fonts/…)`-Referenz existiert — erneutes Vendoring ohne das Skript
+  schlägt also an, statt die Formeln still in einer Ersatzschrift zu zeigen.
+- **Sequenzierung der Vorschau-Antworten** (`convertSeq`): bei schnellem Tippen
+  können Antworten in falscher Reihenfolge eintreffen; eine langsame alte darf
+  eine neuere nicht überschreiben.
+- **Pending-Zustand:** die letzte gültige Vorschau bleibt beim Tippen sichtbar
+  und wird gedimmt, statt leer zu werden. Bei 300-ms-Debounce wäre das
+  sonst nach jedem Wort der Fall. **Bei Serverfehler bleibt sie ebenfalls
+  stehen** und der Fehler steht als Text darüber — ein Fehler bei der Vorschau
+  darf nicht den Text verschwinden lassen, den man gerade bearbeitet.
+
+### Changed
+
+- Version `2.13.0` → `2.14.0`.
+- **CSP: genau eine Ausnahme, `style-src-attr 'unsafe-inline'`.** KaTeX braucht
+  `style="…"`-Attribute für die Glyphen-Metrik (`.pstrut`, `margin-right`,
+  `min-width` für Wurzel, Klammern, Bruchstriche); ohne sie wären Formeln
+  sichtbar zerfallen. `style-src` bleibt `'self'` **ohne** `'unsafe-inline'`
+  (Inline-`<style>` weiterhin verboten), `script-src` bleibt strikt, kein
+  `unsafe-eval`, keine Wildcards. Die Ausnahme ist in
+  `test_csp_only_allowance_is_style_src_attr` verankert: die CSP darf genau
+  **eine** `unsafe-inline`-Vorkommen enthalten. Wer ein `style`-Attribut
+  einschleust, kann höchstens Pixel verschieben — keine Skripte, keine Daten.
+  Die eigentliche XSS-Abwehr bleibt die Allowlist in `preview.py`.
+- `docs/DESIGN.md` §5a **„Der Vorschau-Vertrag"** — die wichtigste Regel des
+  Frontends: die Abweichungstabelle, die beiden Dialekte, der Sanitizer, die
+  CSP-Ausnahme und das Vendoring.
+- `pyproject.toml` `package-data` um `static/katex/*` und
+  `static/katex/fonts/*` erweitert. Achtung: das CSS referenziert die Fonts
+  **relativ** (`url(fonts/…)`) — Verzeichnisnamen und Globs müssen
+  zusammenpassen.
+
+### Fixed
+
+- **Der Vorschau fehlten die Emoji-Präfixe der Überschriften** (`#` → `🚀`).
+  Sie stammen aus `utils.markdown_to_html` und stehen im HTML-Pfad bereits im
+  Payload — die zweite JavaScript-Implementierung hat sie nie nachgebildet.
+- **Pipe-Tabellen erschienen als Rohtext** inklusive Trennstrich-Zeile
+  (`|---|---|`). Jetzt echte `<table>` mit `<thead>`/`<tbody>`; ungleich lange
+  Zeilen werden auf die Kopfbreite aufgefüllt bzw. beschnitten.
+- **LaTeX blieb ungesetzt.** Jetzt gesetzt, Block- und Inline-Formeln
+  unterschieden.
+- **Die Nachrichtenteilung war unsichtbar.** Bei 64 000 Zeichen zeigte die
+  Vorschau einen Block, Telegram stellt 17 einzelne Nachrichten zu.
+- **`test_no_orphan_static_files` war untauglich**, sobald ein Verzeichnis mit
+  indirekt geladenen Dateien dazukam (KaTeX-Fonts). Neu: jede Datei ist
+  entweder referenziert **oder** gehört zu `INDIRECT_STATIC_DIRS`, und aus
+  jedem solchen Verzeichnis muss die Seite auch mindestens eine Datei direkt
+  referenzieren — sonst lädt sie den Formel-Renderer nicht und die Prüfung
+  schlägt an.
+- **Eine Falle im jsdom-Harness** (vorbestehend, hier ausgelöst): `replace`
+  bekam den Skriptinhalt als **String** statt als Funktion. `String.replace`
+  wertet darin `$&`, `` $` ``, `$'` und `$1` aus — und ein Kommentar in
+  `app.js` über die `$`-Delimitern von KaTeX enthält exakt `` $` ``. Ergebnis:
+  der halbe HTML-Body wurde in den JavaScript-Quelltext eingesetzt, was sich
+  als `SyntaxError: Unexpected token '<'` äußerte — mit **keinem** Hinweis
+  auf die Ursache. Der Harness nutzt jetzt Funktions-Ersätze, womit `$`
+  wörtlich bleibt.
+
+### Tests
+
+- 60 neue Tests (**669 passed**, 1 jsdom-Smoke übersprungen wie bisher;
+  vorher 609). Schwerpunkte:
+  - `tests/test_preview.py` (52): Parität Vorschau ↔ Payload, zwei Dialekte,
+    Emoji nur im HTML-Pfad, Tabellen als `<table>`, `data-tex` für jede
+    Formel, TeX-Attribut-Escaping (gegen einen echten HTML-Parser geprüft),
+    Formel im Code wird **nicht** markiert, eine Blase je Nachricht, keine
+    leeren/überlangen Nachrichten, Ergebnis ist JSON-serialisierbar.
+  - Sanitizer: 10 Angriffsmuster (`script`, `img onerror`, `iframe`,
+    `svg onload`, `math/mtext`, `style`, `link`, `base`, `object`, `embed`),
+    Event-Handler an erlaubten Tags, `style`/`class`-Attribute,
+    `javascript:`-/`data:`-URLs — und dass vom Nutzer getippte Entities
+    **Text bleiben** (der Sanitizer darf Entities nicht dekodieren).
+  - jsdom: Vorschau aus der Serverantwort (Emoji, `<table>`, 3 Blasen,
+    Nummerierung, KaTeX gesetzt, `hidden`-Umschaltung), Pending-Zustand,
+    Verhalten bei Serverfehler, leerer Editor.
+  - `test_frontend.py`: KaTeX-Assets vollständig (jede CSS-Referenz existiert
+    auf der Platte), nur WOFF2, VERSION+LICENSE, **KaTeX lädt vor app.js** —
+    und ein neuer Test, der **undefinierte CSS-Tokens** in allen Stylesheets
+    aufspürt (fallen sonst still auf den Initialwert zurück).
+- `ruff check .` fehlerfrei, `bandit` ohne Befunde.
+
+### Notes
+
+- **Die Antwort von `/api/convert` ist durch `preview` etwa doppelt so groß**
+  (HTML + Payloads). Bei 64 000 Zeichen sind das einige hundert KB — auf
+  einem lokalen Stack belanglos, auf einer öffentlichen Demo spürbar. Wer es
+  klein braucht, kann `preview` serverseitig optional machen; bewusst nicht
+  getan, weil die Vorschau sonst von einem zweiten Parameter abhinge.
+- **KaTeX sind ~596 KB** im Image und im Wheel. Sie werden nur geladen, wenn
+  die Seite sie braucht — der `<link>`-Tag ist aber immer da (cache-freundlich
+  und einfacher als Nachladen). Für ein reines Textwerkzeug ohne Formeln ist
+  das die einzige nennenswerte Vergrößerung.
+
 ## [2.13.0] - 2026-09-27
 
 Minor-Release: Code-Review über den gesamten Stack (Peer-Review-Bericht:

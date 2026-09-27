@@ -57,6 +57,16 @@ telegram_formatter = [
     "static/favicon.svg",
     "static/css/*.css",
     "static/js/*.js",
+    # KaTeX, selbst gehostet (seit v2.14.0 — die Vorschau setzt LaTeX genauso
+    # wie Telegram). Das CSS referenziert die Fonts RELATIV
+    # (`url(fonts/KaTeX_*.woff2)`), deshalb müssen Verzeichnisnamen und Globs
+    # zusammenpassen: katex.min.css -> static/katex/katex.min.css,
+    # url(fonts/…) -> static/katex/fonts/…
+    "static/katex/*.css",
+    "static/katex/*.js",
+    "static/katex/fonts/*.woff2",
+    "static/katex/LICENSE",
+    "static/katex/VERSION",
 ]
 
 # ---------------------------------------------------------------------------
