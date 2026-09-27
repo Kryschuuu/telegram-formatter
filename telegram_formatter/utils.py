@@ -558,6 +558,26 @@ def _escape_html(text: str) -> str:
 #: Unbekannte Sprachen führen zu leerem Attribut statt Attribut-Injection.
 _FENCE_LANG_RE = re.compile(r"^[A-Za-z0-9_+#.-]{1,40}$")
 
+#: Muster für einen Fenced-Code-Block mit Info-String und Inhalt.
+#:
+#: Die Info-String-Gruppe ist bewusst auf ``[^`\n]{0,64}`` beschränkt:
+#:
+#: 1. **Korrektheit** — laut CommonMark darf die Info-String eines Backtick-
+#:    Fences kein Backtick enthalten; ein ```` ```a`b ```` ist gar kein
+#:    Fence. ``[^\n]*`` hätte solche Blöcke fälschlich mitgeschluckt.
+#: 2. **Sicherheit** — ``[^\n]*`` ist der Auslöser für quadratische
+#:    Backtracking-Zeit: an jeder Stelle mit `````` ``` `````` frisst die
+#:    Gruppe Zeichen für Zeichen bis zum Zeilenende, und da ``[^\n]`` keine
+#:    ``sre``-Literal-Tail-Optimierung bekommt, kostet **jede** Kandidaten-
+#:    position O(n) Fehlversuche. Bei einer Anfrage voller Backticks (gültig,
+#:    unterhalb von ``MAX_INPUT_CHARS``) sind das ~10^9 Regex-Schritte
+#:    in einer einzigen, unauthentifizierten Anfrage.
+#:
+#: Gemessen (v2.12.0, ``markdown_to_html("`" * n)``): 0,02 s / 0,11 s /
+#: 0,39 s für n = 2 000 / 4 000 / 8 000 — exakt quadratisch, also ~60 s beim
+#: 100 000-Zeichen-Limit. Mit ``{0,64}`` ist der Aufwand linear.
+_FENCE_BLOCK_RE = re.compile(r"```([^`\n]{0,64})\n(.*?)```", re.DOTALL)
+
 
 def _safe_fence_lang(raw: str) -> str:
     """Normalisiert die Fence-Sprache auf ein Attribut-sicheres Token."""
@@ -816,7 +836,7 @@ def markdown_to_html(text: str) -> str:
             return store(f'<pre language="{lang}">{_escape_html(content)}</pre>')
         return store(f"<pre>{_escape_html(content)}</pre>")
 
-    text = re.sub(r"```([^\n]*)\n(.*?)```", fenced, text, flags=re.DOTALL)
+    text = _FENCE_BLOCK_RE.sub(fenced, text)
     text = re.sub(
         r"`([^`\n]+)`",
         lambda m: store(f"<code>{_escape_html(m.group(1))}</code>"),
@@ -983,7 +1003,7 @@ def markdown_to_rich_markdown(text: str) -> str:
         content = m.group(2).rstrip("\n")
         return store(f"```{lang}\n{content}\n```")
 
-    text = re.sub(r"```([^\n]*)\n(.*?)```", fenced, text, flags=re.DOTALL)
+    text = _FENCE_BLOCK_RE.sub(fenced, text)
     text = re.sub(r"`([^`\n]+)`", lambda m: store(f"`{m.group(1)}`"), text)
 
     # 2. DeepSeek/Gemini-Delimiter auf Telegram-Syntax normalisieren
@@ -1090,6 +1110,12 @@ def _dangling_tail(chunk: str) -> str:
     Der Chunker kann (bei harten Schnitten) genau vor dem ``>`` eines Tags oder
     mitten in einer Entity ``&amp;`` enden. Solche Fragmente wandern komplett
     in den nächsten Chunk — dort sind sie wieder wohlgeformt.
+
+    Ein Fragment, das den **ganzen** Chunk ausmacht, wird nicht zurückgegeben:
+    Dann bliebe für den aktuellen Chunk kein Inhalt übrig, und
+    ``sendMessage`` beantwortet einen leeren Text mit 400
+    ``message text is empty`` — der gesamte Versand bricht ab. Der Aufrufer
+    behandelt ein leeres Fragment wie ein normales: es verbleibt im Chunk.
     """
     tail_from = -1
     lt = chunk.rfind("<")
@@ -1098,6 +1124,8 @@ def _dangling_tail(chunk: str) -> str:
     ent = re.search(r"&[#A-Za-z0-9]{1,7}$", chunk)
     if ent is not None and (tail_from == -1 or ent.start() < tail_from):
         tail_from = ent.start()
+    if tail_from == 0:
+        return ""  # nichts würde übrig bleiben — lieber hier belassen
     return chunk[tail_from:] if tail_from != -1 else ""
 
 
@@ -1112,6 +1140,14 @@ def _rebalance_html_chunks(chunks: list[str]) -> list[str]:
       (bis auf ``<a>``, s. o.) wird dem nächsten Chunk vorangestellt, sodass
       die Formatierung über Chunk-Grenzen hinweg erhalten bleibt.
     * Dangling-Tag/Entity-Fragmente wandern an den Anfang des nächsten Chunks.
+    * Mehr als :data:`_HTML_MAX_CARRY` tief offene Tags werden weder geschlossen
+      noch getragen — ihr **Öffner wird aus der Ausgabe entfernt**. Grund: das
+      Anhängen aller Schließer sprengte bei tiefer Verschachtlung das 4096-
+      Limit (gemessen: Tiefe 1000 -> 7001 Zeichen), und ein nicht geschlossenes
+      HTML-Tag lehnt Telegram mit 400 ``can't parse entities`` ab. Der Inhalt
+      bleibt als Klartext erhalten — dieselbe Abwägung wie beim Carry.
+    * Leere Chunks werden verworfen: ``sendMessage`` beantwortet einen leeren
+      Text mit 400 ``message text is empty`` und bricht den ganzen Versand ab.
     """
     result: list[str] = []
     prepend = ""
@@ -1125,7 +1161,10 @@ def _rebalance_html_chunks(chunks: list[str]) -> list[str]:
             chunk = chunk[: len(chunk) - len(tail)]
         # 2) Tags scannen: Stack führen, verwaiste Schließungen entfernen.
         parts: list[str] = []
-        stack: list[tuple[str, str]] = []
+        # Je Eintrag: (Tag, Öffner-String, Index in `parts`) — der Index
+        # erlaubt das nachträgliche Entfernen eines Öffners, wenn die
+        # Verschachtelung zu tief für Carry + Schließer ist.
+        stack: list[tuple[str, str, int]] = []
         pos = 0
         for match in _TAG_SCAN_RE.finditer(chunk):
             parts.append(chunk[pos:match.start()])
@@ -1139,23 +1178,32 @@ def _rebalance_html_chunks(chunks: list[str]) -> list[str]:
                         break
                 # else: verwaistes </tag> -> Tag verwerfen, Inhalt behalten
             else:
-                stack.append((tag, match.group(0)))
+                stack.append((tag, match.group(0), len(parts)))
                 parts.append(match.group(0))
         parts.append(chunk[pos:])
+        # 3) Zu tief verschachtelte Öffner verwerfen (s. Docstring). Die
+        #    betroffenen `parts`-Einträge werden geleert und danach wie jeder
+        #    andere Inhalt zusammengefügt.
+        if len(stack) > _HTML_MAX_CARRY:
+            for _tag, _opener, part_index in stack[:-_HTML_MAX_CARRY]:
+                parts[part_index] = ""
+            stack = stack[-_HTML_MAX_CARRY:]
         chunk = "".join(parts)
-        # 3) Offene Tags schließen und (falls sinnvoll) nachtragen.
-        for tag, _opener in reversed(stack):
+        # 4) Verbleibende offene Tags schließen und (falls sinnvoll) nachtragen.
+        for tag, _opener, _part_index in reversed(stack):
             chunk += f"</{tag}>"
         if index < last_index:
             carry = "".join(
                 opener
-                for tag, opener in stack[-_HTML_MAX_CARRY:]
+                for tag, opener, _part_index in stack
                 if tag in _CARRYABLE_TAGS
             )
             prepend = carry + tail  # Öffner zuerst, dann das Tail-Fragment
         else:
             chunk += tail  # letzter Chunk: Fragment verbleibt (defekter Eingangstext)
-        result.append(chunk)
+        # 5) Leere Chunks verwerfen — siehe Docstring.
+        if chunk:
+            result.append(chunk)
     return result
 
 
@@ -1228,7 +1276,19 @@ def _rebalance_markdown_chunks(chunks: list[str]) -> list[str]:
                 continue
             i += 1
 
-        closing = "".join(_CLOSING[typ] for typ, _ in reversed(cur))
+        # Nur die innersten `_RICH_MAX_CARRY` Ebenen schließen (seit v2.13.0).
+        # Vorher wurden ALLE offenen Ebenen geschlossen, während nur
+        # `_RICH_MAX_CARRY` Ebenen in den Folge-Chunk getragen wurden: bei
+        # tiefer Verschachtelichtung wuchs `closing` unbegrenzt und der Chunk
+        # riss das 32768-Limit. Gemessen (v2.12.0): `"**~~" * 8000` ergab einen
+        # 64004-Zeichen-Chunk, `"<u>" * 10900` sogar 76304 — Telegram lehnt
+        # beides mit 400 `MESSAGE_TOO_LONG` ab, es wurde also gar nichts
+        # zugestellt. Äußere, nicht mehr geschlossene Marker rendern im
+        # Rich-Markdown schlicht als Literal — genau die Abwägung, die der
+        # Carry ohnehin schon macht.
+        closing = "".join(
+            _CLOSING[typ] for typ, _ in reversed(cur[-_RICH_MAX_CARRY:])
+        )
         balanced = carry_open + raw + closing
         result.append(balanced)
         # Nur die innersten Ebenen nachtragen (s. Docstring) — der Scan des

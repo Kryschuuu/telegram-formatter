@@ -318,12 +318,117 @@ def test_unclosed_oversized_fence_splits_into_closed_blocks():
 
 
 def test_rich_carry_depth_is_capped_and_chunks_stay_valid():
+    """Die Carry-Tiefe ist gekappt — und die Schließer ebenfalls (v2.13.0).
+
+    v2.12.0 schloss *alle* offenen Ebenen, trug aber nur `_RICH_MAX_CARRY`
+    in den Folge-Chunk. Bei tiefer Verschachtelung wuchs die Zahl der
+    Schließer unbegrenzt und riss das 32768-Limit (gemessen: 76304 Zeichen
+    bei `"<u>" * 10900`) — Telegram lehnte die Nachricht mit
+    ``MESSAGE_TOO_LONG`` ab, es wurde also nichts zugestellt.
+
+    Korrekte Zusage: die Schließerzahl ist gekappt, damit der Chunk gültig
+    bleibt. Äußere, offen bleibende Marker rendern im Rich-Markdown als
+    Literal — dieselbe Abwägung, die der Carry ohnehin macht.
+    """
     depth = 12
     txt = "$x$ " + "<u>" * depth + ("wort " * 8000) + "</u>" * depth
     msgs = _rich_payloads(txt)
     assert len(msgs) >= 2
     for m in msgs:
-        md = _markdown_of(m)
-        assert _utf16_len(md) <= u.RICH_MESSAGE_MAX_CHARS
-        # Nie ungeschlossen (äußere Ebenen dürfen in Folge-Chunks entfallen):
-        assert md.count("<u>") <= md.count("</u>")
+        assert _utf16_len(_markdown_of(m)) <= u.RICH_MESSAGE_MAX_CHARS
+
+
+def test_rebalance_markdown_caps_added_closers():
+    """Regression v2.13.0: der Re-Balancer hing *alle* Schließer an.
+
+    Geprüft wird die von `_rebalance_markdown_chunks` ERGÄNZTE Zahl, nicht die
+    im Quelltext enthaltene — sonst zählt der Test die 12 expliziten `</u>`
+    des Testinputs mit.
+    """
+    for depth in (4, 12, 1000, 8000):
+        out = u._rebalance_markdown_chunks(["<u>" * depth])
+        assert out, depth
+        added = sum(chunk.count("</u>") for chunk in out)
+        assert added <= depth  # nie mehr als offen
+        # Gekappt auf die innersten Ebenen je Chunk.
+        for chunk in out:
+            assert chunk.count("</u>") <= u._RICH_MAX_CARRY, depth
+
+
+def test_rich_deep_nesting_stays_within_limit():
+    """Regression v2.13.0: tiefe Verschachtelung sprengte das Rich-Limit.
+
+    Vorher ergab `"<u>" * 10900` (32 700 Zeichen, klar unterhalb des
+    Eingabelimits) einen einzigen Chunk von 76 304 Zeichen — Telegram
+    antwortet mit 400 ``MESSAGE_TOO_LONG``, der Versand scheitert komplett.
+    """
+    for label, body in (
+        ("html_marker", "<u>" * 10900),
+        ("markdown_markers", "**~~" * 8000),
+        ("interleaved", "**~~" * 4000),
+    ):
+        msgs = _rich_payloads("$x$ " + body)
+        assert msgs, label
+        for m in msgs:
+            md = _markdown_of(m)
+            assert _utf16_len(md) <= u.RICH_MESSAGE_MAX_CHARS, label
+            assert _utf16_len(md) > 0, label
+
+
+def test_no_empty_chunks_ever():
+    """Regression v2.13.0: leere Chunks brechen den ganzen Versand ab.
+
+    `sendMessage` beantwortet einen leeren Text mit 400
+    ``message text is empty``. Auslöser war ein Link mit ~4000 Zeichen URL:
+    der harte Schnitt zerlegte den Chunk in einen 4000-Zeichen-Tail und einen
+    0-Zeichen-Rest.
+    """
+    cases = {
+        "long_link": "[x](https://a/" + "a" * 4000 + ")",
+        "long_link_bold": "**" + "[x](https://a/" + "a" * 4000 + ")" + "**",
+        "rich_long_link": "$x$ [y](https://a/" + "a" * 4000 + ")",
+        "many_long_links": " ".join(
+            "[x](https://example.com/" + "b" * 300 + ")" for _ in range(30)
+        ),
+    }
+    for label, text in cases.items():
+        for m in u.build_messages(text, 1):
+            payload = m.payload
+            if isinstance(payload, str):
+                body = payload
+            else:
+                rich = payload.get("rich_message")
+                body = rich.get("markdown", "") if isinstance(rich, dict) else payload.get("text", "")
+            assert _utf16_len(body) > 0, f"{label}: leerer Chunk {body!r}"
+
+
+def test_html_rebalance_bounds_deep_stacks():
+    """Regression v2.13.0: `_rebalance_html_chunks` war unbeschränkt.
+
+    Ein Chunk mit 1000 offenen `<u>` bekam 1000 Schließer angehängt und wuchs
+    auf 7001 Zeichen — das 4096-Limit gerissen. Da ein nicht geschlossenes
+    HTML-Tag von Telegram mit 400 ``can't parse entities`` abgelehnt wird,
+    kann der Überschuss nicht einfach wegfallen: stattdessen wird der Öffner
+    aus der Ausgabe entfernt, der Inhalt bleibt als Klartext erhalten.
+    """
+    for depth in (500, 1000, 5000):
+        out = u._rebalance_html_chunks(["<u>" * depth + "x"])
+        assert out, depth
+        for chunk in out:
+            assert _utf16_len(chunk) <= 4096, depth
+            assert _utf16_len(chunk) > 0, depth
+            # Wohlgeformt: kein offener <u> ohne passendes </u>.
+            assert chunk.count("<u>") == chunk.count("</u>"), depth
+        assert "x" in out[0], depth  # Inhalt bleibt erhalten
+
+
+def test_dangling_tail_never_consumes_whole_chunk():
+    """Regression v2.13.0: `_dangling_tail` gab den kompletten Chunk zurück.
+
+    Dann blieb für den aktuellen Chunk nichts übrig und ein leerer Chunk
+    entstand — mit 400 ``message text is empty`` als Folge.
+    """
+    for chunk in ('<a href="https://a/' + "a" * 500, "&amp", "<b>x"):
+        assert u._dangling_tail(chunk) != chunk
+    # Ein Fragment, das nicht der ganze Chunk ist, wandert weiterhin.
+    assert u._dangling_tail('x <a href="y') == '<a href="y'

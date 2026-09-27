@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 
 import pytest
 
@@ -1018,3 +1019,66 @@ class TestRedirectLinksInMessages:
         html = markdown_to_html(src)
         assert html.startswith("• Clip: <a href=")
         assert "google.com" not in html
+
+
+# ---------------------------------------------------------------------------
+# Regression v2.13.0 — Code-Review
+# ---------------------------------------------------------------------------
+class TestFenceRegexIsNotQuadratic:
+    """Der Fence-Info-String war unbeschränkt (`[^\\n]*`) — quadratische Zeit.
+
+    ``[^\n]*`` bekommt keine ``sre``-Literal-Tail-Optimierung: an jeder der
+    ~n Kandidatenpositionen frisst die Gruppe Zeichen für Zeichen bis zum
+    Zeilenende. Bei einer Anfrage voller Backticks gibt es kein ``\n``, also
+    scheitern *alle* Positionen nach O(n) Fehlversuchen — ~10^9 Schritte in
+    einer einzigen, unauthentifizierten Anfrage. Gemessen in v2.12.0:
+    0,02 s / 0,11 s / 0,39 s für 2 000 / 4 000 / 8 000 Backticks (quadratisch).
+    """
+
+    @staticmethod
+    def _time(fn, payload):
+        start = time.perf_counter()
+        fn(payload)
+        return time.perf_counter() - start
+
+    def test_backtick_storm_is_linear_not_quadratic(self):
+        # Vergleich gegen das Doppelte: linear ~2x, quadratisch ~4x. Die
+        # Schwelle liegt bewusst locker, damit sie auf langsamen CI nicht
+        # flake-t.
+        small = self._time(markdown_to_html, "`" * 8_000)
+        large = self._time(markdown_to_html, "`" * 16_000)
+        assert large < max(small * 3.5, 0.05), (
+            f"quadratisches Backtracking: {small:.4f}s -> {large:.4f}s"
+        )
+
+    def test_absolute_budget_at_max_input_size(self):
+        # MAX_INPUT_CHARS liegt bei 100 000; in v2.12.0 kostete allein das
+        # Regex ~60 s. Die Schwelle ist um Faktor ~20 gesetzt.
+        elapsed = self._time(markdown_to_html, "`" * 100_000)
+        assert elapsed < 3.0, f"{elapsed:.2f}s fuer 100 000 Backticks"
+
+    def test_both_entry_points_use_the_bounded_pattern(self):
+        # Beide Aufrufstellen (HTML- und Rich-Pfad) teilen dasselbe Muster —
+        # Regression gegen eine neue, unbeschränkte Inline-Variante.
+        from telegram_formatter import utils as u
+
+        assert u._FENCE_BLOCK_RE.pattern == r"```([^`\n]{0,64})\n(.*?)```"
+        assert u._FENCE_BLOCK_RE.flags & re.DOTALL
+
+    def test_backtick_in_info_string_is_not_a_fence(self):
+        """CommonMark: die Info-String eines Backtick-Fences hat kein Backtick.
+
+        ```` ```a`b ```` ist gar kein Fence. Mit `[^`\n]{0,64}` fällt der
+        Block durch, statt faelschlich geschluckt zu werden.
+        """
+        src = "```a`b\ncode\n```"
+        assert "<pre" not in markdown_to_html(src)
+
+    def test_normal_fences_still_work(self):
+        for src, want in (
+            ("```python\na = 1\n```", '<pre language="python">a = 1</pre>'),
+            ("```\nplain\n```", "<pre>plain</pre>"),
+            ("```py\nx\n```", '<pre language="py">x</pre>'),
+        ):
+            assert want in markdown_to_html(src)
+            assert "```" in markdown_to_rich_markdown(src)
