@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import pathlib
 
+import pytest
+
 from telegram_formatter import __version__
 from telegram_formatter import app as app_module
 from telegram_formatter import utils as u
@@ -468,3 +470,72 @@ def test_send_rejects_more_chunks_than_allowed(monkeypatch):
     assert resp.status_code == 400
     assert "Zu viele Teile" in resp.get_json()["error"]
     assert sender.call_count == 0  # kein einziger API-Aufruf
+
+
+# ---------------------------------------------------------------------------
+# Regression v2.13.0 — Leerzeilen beim Splitting
+# ---------------------------------------------------------------------------
+class TestBlankLinesSurviveSplitting:
+    r"""`re.split(r"\n\s*\n", ...)` igte Leerzeilen und Einrückung.
+
+    Zwei Fehler: (1) `\s*` ist gierig und greift über Zeilengrenzen, sodass
+    `"a\n\n\n\nb"` zu `['a', 'b']` und damit zu `"a\n\nb"` wurde; (2)
+    `if p.strip()` verwarf jeden reinen Whitespace-Absatz. Die Oberfläche
+    verspricht in index.html ausdrücklich "Leerzeilen zwischen Absätzen
+    bleiben erhalten".
+    """
+
+    def test_multiple_blank_lines_survive(self):
+        assert u.chunk_text("a\n\n\n\nb", 4096) == ["a\n\n\n\nb"]
+
+    def test_roundtrip_is_lossless(self):
+        text = "para1 text\n\n\npara2 text\n\n\n\npara3"
+        assert "".join(u.chunk_text(text, 20)) == text
+
+    def test_whitespace_only_line_survives(self):
+        assert u.chunk_text("a\n   \nb", 4096) == ["a\n   \nb"]
+
+    @pytest.mark.parametrize("length", [9_000, 40_000])
+    def test_limits_still_hold(self, length):
+        chunks = u.chunk_text("x" * length, 4096)
+        assert chunks
+        for chunk in chunks:
+            assert 0 < u._telegram_len(chunk) <= 4096
+
+    def test_never_produces_empty_chunks(self):
+        for text in ("\n\n\n", "a\n\n\n\n\n\nb", ("z" * 4095 + "\n\n") * 3):
+            for chunk in u.chunk_text(text, 4096):
+                assert chunk.strip() or len(chunk) <= 2
+
+
+def test_formula_split_preserves_blank_lines_and_indent():
+    """Regression v2.13.0: `$$…$$` verlor Leerzeilen **und** Einrückung.
+
+    `for ln in lines if ln != ""` verwarf Leerzeilen, `part.strip()` die
+    führende Einrückung. Bei mehrzeiligen Display-Formeln (`\\begin{aligned}` …)
+    änderte das das Rendering — und zwar nur an der Teilungsgrenze, also
+    scheinbar zufällig. Der Fence-Pfad bewahrt Leerzeilen seit v2.11.0
+    ausdrücklich; der Formel-Pfad war die Ausnahme.
+    """
+    inner = "\\begin{aligned}\na &= b \\\\\n\n  c &= d\n\\end{aligned}"
+    fragments = u._split_guarded_unit("$$" + inner + "$$", 40)
+    assert len(fragments) > 1
+    assert all(f.startswith("$$") and f.endswith("$$") for f in fragments)
+    # Kein Inhalt geht verloren: alle Zeilen der Eingabe sind in den Fragmenten
+    # enthalten. (Die Leerzeile landet am Ende von Fragment 1, weil sie genau
+    # auf der Teilungsgrenze liegt — deshalb wird hier zeilenweise verglichen
+    # und nicht per "\n".join, das eine Leerzeile doppelt zählen würde.)
+    fragment_lines = [line for f in fragments for line in f[2:-2].splitlines()]
+    assert fragment_lines == inner.splitlines()
+    # Die Leerzeile in der Mitte ist erhalten.
+    assert "" in fragment_lines
+    # Die Einrückung vor `c` ist erhalten.
+    assert any(line == "  c &= d" for line in fragment_lines)
+
+
+def test_inline_formula_split_preserves_indent():
+    src = "$" + "x".join(["  y" * 20]) + "$"
+    fragments = u._split_guarded_unit(src, 60)
+    assert len(fragments) > 1
+    assert all(f.startswith("$") and f.endswith("$") for f in fragments)
+    assert all("  " in f[1:-1] for f in fragments)

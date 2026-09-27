@@ -1391,14 +1391,25 @@ def _split_guarded_unit(unit: str, max_chars: int) -> list[str]:
                     head, inner = inner[: nl + 1], inner[nl + 1 :]
                 return _split_fence_block(head, inner, max_chars)
             budget = max(max_chars - 2 * len(delim) - 2, 16)
-            lines = inner.split("\n")
-            parts = _group([ln + "\n" for ln in lines if ln != ""], budget, "") or [""]
+            # v2.13.0: Leerzeilen und Einrückung **erhalten**.
+            #   vorher:  for ln in lines if ln != ""   +   part.strip()
+            # Das verwarf Leerzeilen und die führende Einrückung jeder Zeile —
+            # bei mehrzeiligen Display-Formeln (`\begin{aligned} … \\ …`) änderte
+            # das das Rendering, und zwar nur an der Teilungsgrenze. Der
+            # Fence-Pfad (`_split_fence_block`) bewahrt Leerzeilen seit v2.11.0
+            # ausdrücklich; der Formel-Pfad war die Ausnahme.
+            parts = _group(inner.splitlines(keepends=True), budget, "") or [""]
             fragments: list[str] = []
             for part in parts:
-                if delim == "$$":
-                    fragments.append(f"$${part.strip()}$$")
-                else:
-                    fragments.append(f"${part.strip()}$")
+                # Genau **einen** trennenden Zeilenumbruch entfernen, nicht die
+                # Einrückung und nicht eine Leerzeile. `part` endet entweder
+                # gar nicht auf "\n" (unvollständige letzte Zeile) oder auf
+                # einem Zeilenumbruch je Zeile. `endswith("\n\n")` bedeutet:
+                # die letzte Zeile war leer — der zweite Umbruch gehört zu ihr
+                # und muss bleiben, sonst verschwindet genau die Leerzeile, die
+                # dieser Fix erhalten soll.
+                body = part[:-1] if part.endswith("\n") and not part.endswith("\n\n") else part
+                fragments.append(f"{delim}{body}{delim}")
             return [f for f in fragments if f]
     # Ungeschlossener Fence (atomar bis EOF, s. _atomic_ranges): Inhalt ab der
     # Kopfzeile teilen und jedes Fragment sauber schließen.
@@ -1586,30 +1597,53 @@ def chunk_text(text: str, max_chars: int) -> list[str]:
     if _telegram_len(text) <= max_chars:
         return [text]
 
-    paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+    # v2.13.0: Leerzeilen **zwischen** Absätzen erhalten.
+    #
+    # Das alte `re.split(r"\n\s*\n", text)` hatte zwei Fehler:
+    # 1. `\s*` ist gierig und greift über Zeilengrenzen. `"a\n\n\n\nb"` wurde zu
+    #    `['a', 'b']` und beim Wiederzusammenfügen zu `"a\n\nb"` — die
+    #    ursprüngliche Anzahl der Leerzeilen ging verloren.
+    # 2. `if p.strip()` verwarf jeden Absatz, der nur aus Whitespace bestand.
+    #
+    # Die Oberfläche verspricht in index.html "Leerzeilen zwischen Absätzen
+    # bleiben erhalten"; das Splitting lieferte das Gegenteil. Der Schnitt
+    # ist jetzt auf **genau eine** Leerzeile begrenzt (`\n[ \t]*\n`), und der
+    # Trenner wird als eigenes Listenelement mitgeführt, damit er beim
+    # Zusammenfügen wieder exakt erscheint.
+    paragraphs = re.split(r"(\n[ \t]*\n)", text)
     chunks: list[str] = []
     buf: list[str] = []
     size = 0
 
     for p in paragraphs:
-        plen = _telegram_len(p)
+        # Der Trenner zählt nicht zum Absatzinhalt, wird aber mitgeführt.
+        is_separator = p.strip() == "" and "\n" in p
+        plen = 0 if is_separator else _telegram_len(p)
+        if is_separator:
+            # Führender/trailing-Trenner wird nicht als eigener Chunk-Anfang
+            # aufgenommen — der Chunk beginnt mit Inhalt.
+            if buf:
+                buf.append(p)
+                size += _telegram_len(p)
+            continue
         if plen <= max_chars:
             # Inkrementelles Saldo (wie _group): der frühere
             # len("\\n\\n".join(buf))-Ausdruck je Absatz war O(n^2).
-            add = plen + (2 if buf else 0)
+            # `add` ist nur die **eigene** Zeile, nicht der Puffer — sonst
+            # würde `size` beim zweiten Absatz doppelt gezählt.
+            add = plen
             if buf and size + add > max_chars:
-                chunks.append("\n\n".join(buf))
+                chunks.append("".join(buf))
                 buf, size = [], 0
-                add = plen
             buf.append(p)
             size += add
         else:
             # Absatz allein zu lang -> vorherigen Puffer abschließen.
             if buf:
-                chunks.append("\n\n".join(buf))
+                chunks.append("".join(buf))
                 buf, size = [], 0
             chunks.extend(_split_oversized_paragraph(p, max_chars))
 
     if buf:
-        chunks.append("\n\n".join(buf))
+        chunks.append("".join(buf))
     return chunks
