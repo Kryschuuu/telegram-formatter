@@ -139,6 +139,7 @@ from telegram_formatter.botkit.session import (
 )
 from telegram_formatter.botkit.telegram_api import TelegramAPIError, get_me, get_updates
 from telegram_formatter.botkit.tokens import BotToken, TokenError
+from telegram_formatter.preview import render_preview
 from telegram_formatter.sender import SendError, send_message
 from telegram_formatter.utils import build_messages
 
@@ -861,6 +862,22 @@ def _security_headers(response):
             # tests/test_frontend.py.
             "script-src 'self'",
             "style-src 'self'",
+            # `style-src-attr` (CSP Level 3) fehlte und fiel deshalb auf
+            # `style-src` zurueck — mit der Folge, dass `style="…"`-Attribute
+            # verboten waren. KaTeX setzt genau die: die Glyphen-Metrik
+            # (`.katex .pstrut`, `margin-right`, `min-width` fuer Wurzel,
+            # Klammern und Bruchstriche) laesst sich ohne Inline-Styles nicht
+            # ausdruecken, Formeln zerfallen sichtbar.
+            #
+            # Das ist die **einzige** CSP-Lockerung dieses Releases, und sie
+            # ist auf Style-Attribute beschraenkt: `style-src` bleibt
+            # `'self'` ohne `'unsafe-inline'`, also sind Inline-<style>-Elemente
+            # weiterhin verboten, und `script-src` bleibt strikt. Damit ist die
+            # XSS-Relevanz gering: ein Angreifer, der ein `style`-Attribut
+            # einschleust, kann hoechstens Pixel verschieben — keine Skripte.
+            # `tests/test_app.py::test_csp_only_allowance_is_style_src_attr`
+            # verankert, dass keine weitere Directive gelockert wurde.
+            "style-src-attr 'unsafe-inline'",
             "img-src 'self' data:",
             "connect-src 'self'",
             "object-src 'none'",
@@ -1134,6 +1151,18 @@ def convert():
         {
             "count": len(messages),
             "messages": [{"kind": m.kind, "payload": m.payload} for m in messages],
+            # Seit v2.14.0: dieselben Nachrichten, die Telegram bekommt,
+            # fertig als Anzeige-HTML. Die Live-Vorschau bildete bis hierher
+            # eine **zweite, unabhängige** JavaScript-Implementierung des
+            # Konverters und zeigte deshalb etwas anderes als das, was
+            # zugestellt würde (keine Emoji-Überschriften, keine Tabellen,
+            # ungesetzte Formeln, keine Nachrichtenteilung).
+            #
+            # Es bleibt bei EINEM POST pro Tipppause: `app.js` schickte den Text
+            # für die Payload-Ansicht schon immer an diesen Endpunkt und
+            # ignorierte die Antwort für die Vorschau. Es kommt nichts hinzu —
+            # die Vorschau liest dieselbe Antwort, die schon da war.
+            "preview": render_preview(messages),
         }
     )
 
