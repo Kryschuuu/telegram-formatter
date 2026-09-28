@@ -114,4 +114,7 @@ def test_render_yaml_documents_public_supergroup_setup():
 
 
 def test_version_matches_release():
-    assert __version__ == "2.14.1"
+    """Single Release-Gate: die Version muss mit dem Tag im Solo-Compose
+    übereinstimmen (Vertragstest in test_deployment.py prüft die andere
+    Richtung). Hartkodierte Versionen hier brechen bei jedem Bump."""
+    assert __version__ == "2.15.0"
