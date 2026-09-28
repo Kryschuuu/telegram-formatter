@@ -337,3 +337,51 @@ schickte den Editorinhalt für die Payload-Ansicht schon immer bei jeder
 Tipppause (300 ms) an den Server und verwarf die Antwort für die Vorschau.
 Wer das bisher als „bleibt im Browser" gelesen hat, dem war das schon vorher
 so — nur eben unbemerkt.
+
+## 15. Nachzug: v2.14.1 — Render-Blueprint gehärtet
+
+**Keine Verhaltensänderung für Nutzer.** Diese Version betrifft ausschließlich
+das Deployment. API, Payloads, Vorschau und Oberfläche sind identisch zu
+2.14.0.
+
+| Bereich | Alt (2.14.0) | Neu (2.14.1) |
+|---|---|---|
+| `render.yaml` → `branch` | `branch: main` gepinnt | entfernt — Render nimmt den Blueprint-Branch |
+| `render.yaml` → `region` | implizit `oregon` (USA) | `region: frankfurt`, explizit |
+| `render.yaml` → Instanzen | Render-Default | `numInstances: 1`, `autoDeployTrigger: commit` |
+| `render.yaml` → `buildCommand` | `pip install -r requirements.txt` | `… && python scripts/check_build.py` |
+| `docs/ARCHITECTURE.md` | `healthCheckPath: /` (falsch seit 2.12.0) | `/healthz` |
+| Tests | 2 Substring-Klemmen auf `render.yaml` | 21 Vertragstests gegen Spec **und** Code |
+| Version | 2.14.0 | 2.14.1 |
+
+**Für Betreiber, die den Blueprint nutzen:**
+
+1. **Einmal neu deployen** — `git pull && Manual sync` bzw. *Manual Deploy*.
+   Nötig, weil `region` sich nur beim **Anlegen** setzen lässt. Ein bereits
+   bestehender Dienst behält seine Region; sie nachträglich auf Frankfurt zu
+   ziehen geht nur über Löschen und Neuanlegen.
+2. **Bestehende Dienste sind nicht betroffen.** Blueprint-Sync gilt nur für
+   Dienste, die aus dem Blueprint entstanden sind. Ein von Hand angelegter
+   Dienst behält Build- und Start-Kommando, bis du sie selbst änderst (siehe
+   `docs/DEPLOYMENT.md`, Schritt 3a).
+3. **`branch:` zu entfernen ist eine Entlastung, keine Verschärfung.** Der
+   Blueprint gilt damit für den Branch, in dem er liegt — in der Regel `main`.
+
+**Build-Selbsttest:** Läuft jetzt nach jeder Installation mit und bricht den
+Build ab, wenn Templates oder `static/katex/` unvollständig sind oder
+`healthCheckPath` keine registrierte Route ist. Wer einen Build-Abbruch sieht,
+Findet in der Ausgabe die konkrete Datei. Das ist eine **Verschärfung mit
+Absicht**: fehlende Assets fielen bisher erst zur Laufzeit auf — als 404 in der
+Sprechblase, ohne Serverlog.
+
+Prüfen lässt sich das lokal, ohne Deploy:
+
+```bash
+python scripts/check_build.py
+pytest tests/test_deployment.py
+```
+
+**Wer den Blueprint von Hand pflegt:** die verbindliche Feldliste und die
+Werte-Aufzählungen stehen in `tests/test_deployment.py`
+(`KNOWN_SERVICE_FIELDS`, `ALLOWED_*`). Ein Feld dort zu ergänzen, das die
+Render-Spec nicht kennt, ist die Art von Änderung, die dort verhindert wird.

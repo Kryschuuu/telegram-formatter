@@ -53,7 +53,7 @@ Billig (kein Template), nie ratenlimitiert, ohne Konfigurationsdetails:
 
 ```bash
 curl -k https://192.168.0.10/healthz
-# {"status":"ok","version":"2.14.0"}
+# {"status":"ok","version":"2.14.1"}
 ```
 
 ## POST /api/convert

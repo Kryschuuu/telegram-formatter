@@ -59,26 +59,73 @@ Setze im Formular die folgenden Werte:
 ### Schritt 3a: Alternativ — Blueprint (`render.yaml`) statt Formular
 
 Das Repository enthält einen Render-Blueprint [`render.yaml`](../render.yaml),
-der genau die Werte oben deklariert (Start-Kommando, Health-Check `/`,
-`PYTHON_VERSION`, Env-Vars). **Neue** Dienste legst du damit an:
-**New + → Blueprint** → Repository wählen → die nach `sync: false` gefragten
-Secrets eintragen. Danach gleicht Render die Konfiguration des Dienstes bei
-jedem Push automatisch an die Datei an (Blueprint-Sync).
+der genau die Werte oben deklariert — plus Region, Instanzzahl und
+Auto-Deploy. **Neue** Dienste legst du damit an: **New + → Blueprint** →
+Repository wählen → die nach `sync: false` gefragten Secrets eintragen. Danach
+gleicht Render die Konfiguration des Dienstes bei jedem Push automatisch an
+die Datei an (Blueprint-Sync).
 
-Wichtig: Ein **bestehender**, per Hand angelegter Web Service wird von
-`render.yaml` **nicht** umgestellt — Blueprint-Sync gilt nur für Dienste, die
-aus dem Blueprint entstanden sind. Für den bestehenden Dienst gilt deshalb:
+Was der Blueprint festlegt und **warum**:
 
-* Start-Kommando einmalig im Dashboard auf
-  `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT` setzen
-  (Settings → Service → Start Command → *Manual Deploy*), **oder**
-* Dienst neu aus dem Blueprint anlegen und den alten ersetzen.
+| Feld | Wert | Begründung |
+|---|---|---|
+| `region` | `frankfurt` | **Nach dem Anlegen nicht mehr änderbar.** Ohne diese Zeile würde Render still `oregon` (USA) nehmen. Ein Versäumnis ist erst korrigierbar, wenn der Dienst gelöscht und neu angelegt wird |
+| `plan` | `free` | Gültiger Plan (0.1 CPU / 512 MB) — **nur in persönlichen Workspaces**. Im Team-Workspace ist ein bezahlter Plan nötig |
+| `numInstances` | `1` | Die BYOB-Websessions leben prozesslokal im RAM. Eine zweite Instanz würde eine offene Session „verlieren“ (410 statt Fehlversand) — dieselbe Begründung, die den einzelnen Gunicorn-Worker erzwingt |
+| `autoDeployTrigger` | `commit` | Jeder Commit auf dem Blueprint-Branch löst einen Deploy aus |
+| `buildCommand` | `pip install -r requirements.txt && python scripts/check_build.py` | Der zweite Teil ist der Build-Selbsttest (siehe unten) |
+| `healthCheckPath` | `/healthz` | Billiger als `/` (kein Template-Rendering), nie ratenlimitiert, ohne Konfigurationsdetails in der Antwort |
+
+> **`branch:` ist bewusst nicht gesetzt.** Die Blueprint-Spec: *„Render uses
+> the Blueprint's branch if the service uses the same repo as the Blueprint
+> file."* Gepinnt werden kann der Wert also nur zusätzlich stören — genau
+> dieses Feld liefert in Renders eigenem Beispiel den Fehler
+> `branch prod could not be found`.
 
 > **Warum läuft der alte Befehl `gunicorn app:app` trotzdem wieder?** In der
 > Repository-Wurzel liegt ein veralteter Kompatibilitäts-Shim `app.py`, der
 > ausschließlich auf `telegram_formatter.app:app` weiterleitet (enthält keine
 > Logik, abgesichert durch `tests/test_app.py`). Er ist als Übergang gedacht
 > und entfällt mit **3.0.0** — stelle bis dahin auf den kanonischen Befehl um.
+
+Ein **bestehender**, per Hand angelegter Web Service wird von `render.yaml`
+**nicht** umgestellt — Blueprint-Sync gilt nur für Dienste, die aus dem
+Blueprint entstanden sind. Für einen bestehenden Dienst gilt deshalb:
+
+* Start-Kommando einmalig im Dashboard auf
+  `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT --threads 8` setzen
+  (Settings → Service → Start Command → *Manual Deploy*), **oder**
+* Dienst neu aus dem Blueprint anlegen und den alten ersetzen.
+
+#### Build-Selbsttest (`scripts/check_build.py`)
+
+Der Build-Kommando endet mit einem Selbsttest. Er prüft, bevor der Dienst
+startet: das Paket ist importierbar, `telegram_formatter.app:app` ist ein
+Flask-Objekt, die Health-Check-Route **ist registriert**, und Templates
+samt `static/katex/` (Formel-Renderer, 596 KB) sind vollständig.
+
+Ohne diesen Schritt fällt ein fehlendes Asset erst zur Laufzeit auf: die Seite
+lädt 404, und der einzige Ort, an dem das auffällt, ist die Sprechblase im
+Browser eines Nutzers — ohne Serverlog und ohne Testfehler. Das ist im
+Release 2.14.0 (KaTeX) konkret relevant geworden.
+
+Bei Fehlschlag bricht der Build **ab** und nennt die fehlenden Dateien:
+
+```
+BUILD-SELBSTTEST FEHLGESCHLAGEN
+  - fehlt: static/katex/katex.min.js
+```
+
+Lokal prüfen (ohne Deploy):
+
+```bash
+python scripts/check_build.py
+```
+
+> **Bewusste Grenze:** der Selbsttest prüft nur, was *hier* falsch sein kann.
+> Ob Telegram erreichbar ist, der Bot-Token gültig ist und
+> `TELEGRAM_CHAT_ID` zum gepinnten Kanal gehört, weiß erst der laufende
+> Dienst — siehe Schritt 6.
 
 ## Schritt 4: Umgebungsvariablen setzen
 
@@ -198,12 +245,89 @@ pytest -q                          # Tests ausführen
 
 ## Troubleshooting
 
+### „Create web service" legt nichts an
+
+Das ist das symptomatischste Problem: ein Blueprint ist erkannt (Render zeigt
+eine Blueprint-ID und den Sync-Commit), aber der Klick auf **„Create web
+service"** erzeugt keinen Dienst — und liefert *keine* Fehlermeldung, auch
+nicht über **Details**.
+
+In diesem Zustand ist fast immer eine dieser vier Ursachen schuld — **in dieser
+Reihenfolge prüfen**:
+
+1. **Namenskonflikt im Workspace.** Der Blueprint pinnt
+   `name: telegram-formatter`. Gibt es im Workspace *irgendwo* schon einen
+   Dienst dieses Namens — auch einen Static Site, auch einen gelöschten, auch
+   einen in einem anderen Environment? Render versucht dann nicht zu
+   erstellen, sondern den bestehenden Dienst **umzukonfigurieren**, und der
+   Dialog kommt nicht weiter. *Render → Services: nach `telegram-formatter`
+   suchen, auch in anderen Environments.*
+2. **`plan: free` in einem Team-Workspace.** `free` ist ein gültiger Plan
+   (0.1 CPU / 512 MB), aber Render gibt ihn nur in **persönlichen**
+   Workspaces. Im Team-Workspace den Plan auf einen bezahlten ändern — oder
+   den Blueprint in einen persönlichen Workspace legen.
+3. **Repository nicht verbunden.** *Render → Settings → Repositories:* ist
+   `Kryschuuu/telegram-formatter` aufgeführt, und hat die Render-GitHub-App
+   Zugriff darauf? Ohne Verbindung findet der Blueprint-Instanziierten nichts
+   und zeigt genau diese stille Schaltfläche.
+4. **Die drei Secrets sind nicht eingetragen.** `sync: false` bedeutet: Render
+   fragt `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` und
+   `TELEGRAM_FORMATTER_API_TOKEN` **beim Anlegen** ab. Wird der Dialog
+   abgebrochen, entsteht kein Dienst.
+
+**Bevor du weiter suchst, prüfe den Blueprint lokal** — das ist schneller als
+das Dashboard und sagt mehr:
+
+```bash
+# Feldnamen/Werte gegen die offizielle Blueprint-Spec
+curl -sS -o /tmp/render.yaml.json https://render.com/schema/render.yaml.json
+python - <<'PY'
+import json, yaml, jsonschema
+schema = json.load(open("/tmp/render.yaml.json"))
+doc = yaml.safe_load(open("render.yaml"))
+errs = list(jsonschema.Draft202012Validator(schema).iter_errors(doc))
+print("VALID" if not errs else "\n".join(f"- {e.message}" for e in errs))
+PY
+
+# Build und Start exakt wie in render.yaml, in einem frischen venv
+python3 -m venv /tmp/sim && /tmp/sim/bin/pip install -q -r requirements.txt
+PORT=8899 /tmp/sim/bin/gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:8899 --threads 8 &
+curl -s http://127.0.0.1:8899/healthz          # -> {"status":"ok","version":"2.14.1"}
+
+# Build-Selbsttest
+python scripts/check_build.py
+
+# Vertragstests (decken Blueprint <-> Code ab)
+pytest tests/test_deployment.py
+```
+
+Alles grün? Dann liegt der Fehler **nicht** an der Datei, sondern an einem der
+vier Punkte oben.
+
+### Der Blueprint hängt hinter einem Push zurück
+
+Ein Blueprint gleicht nur bei einem Commit auf dem **Blueprint-Branch** ab
+(hier `main`). Ein Push auf einen anderen Branch — etwa `arena/…` oder `bak` —
+ändert am Dienst nichts. Deshalb: `git push origin main` und danach
+**Manual sync** im Blueprint-Deckblatt.
+
+### Build und Start
+
+- **Build-Selbsttest schlägt fehl** — siehe die Ausgabe; sie nennt die fehlende
+  Datei. Bei `static/katex/…` neu vendorn: `scripts/vendor-katex.sh`
+  (inklusive `VERSION`/`LICENSE`).
 - **`ModuleNotFoundError: No module named 'app'`** — das Start-Kommando zeigt
   auf das alte Root-Modul, während der Shim `app.py` fehlt (z. B. nach seiner
   Entfernung in 3.0.0). Build und Start sind zwei Schritte: Render meldet
   `== Build successful`, crasht aber im `== Running`-Abschnitt. Abhilfe:
-  Start-Kommando auf `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT`
+  Start-Kommando auf
+  `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT --threads 8`
   stellen (siehe Schritt 3/3a) und **Manual Deploy** auslösen.
+- **Container startet endlos neu** — fast immer ein `healthCheckPath`, der
+  keine registrierte Route ist. Der Selbsttest deckt das ab; manuell prüfen:
+  `curl -i http://<dienst>/healthz` muss **200** liefern.
+### Laufzeit
+
 - **„TELEGRAM_BOT_TOKEN nicht konfiguriert"** — Variable in Schritt 4
   fehlt oder ist falsch; nach dem Setzen **Manual Deploy** auslösen.
 - **App startet nicht** — Logs unter **Logs** im Render-Dashboard prüfen.
@@ -211,3 +335,6 @@ pytest -q                          # Tests ausführen
   Nachrichten automatisch auf (4096 bzw. 32768 Zeichen).
 - **Port-Konflikt** — immer `$PORT` aus der Umgebung verwenden (wie im
   Start Command oben).
+- **Free-Instanz schläft** — nach ~15 Min ohne Zugriff fährt Render den
+  Free-Dienst herunter; der erste Aufruf danach dauert entsprechend. Für ein
+  Formular, das ständig offen ist, ist das der Normalfall.

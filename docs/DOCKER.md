@@ -80,7 +80,7 @@ docker compose logs -f app     # Strg+C zum Verlassen
 > Abschnitt 5 ausführen oder die Ausnahme zum Testen einmal bestätigen.
 
 ```bash
-# 1) Liveness-Probe (muss {"status":"ok","version":"2.14.0"} liefern)
+# 1) Liveness-Probe (muss {"status":"ok","version":"2.14.1"} liefern)
 curl -k https://192.168.0.10/healthz
 
 # 2) Editor-Seite im Browser öffnen

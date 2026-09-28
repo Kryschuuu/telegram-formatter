@@ -112,7 +112,9 @@ Parameter ein. `utils.py` importiert weder `flask` noch `requests` noch
 | Datei/Ebene | Inhalt |
 |---|---|
 | `pyproject.toml` | PEP-621-Metadaten, Konsolen-Skripte, Ruff-, pytest- und Bandit-Konfiguration; Deps dynamisch aus `requirements.txt` |
-| `render.yaml` | Render-Blueprint: kanonischer Start `gunicorn "telegram_formatter.app:app"`, `healthCheckPath: /`, `PYTHON_VERSION`, Secrets mit `sync: false`, Offenlegung des geteilten Ziel-Kanals (`TELEGRAM_FORMATTER_SHARED_CHAT_URL`, `…_SHARED_RETENTION_DAYS`) |
+| `render.yaml` | Render-Blueprint (v2.14.1 gehärtet): kanonischer Start `gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT --threads 8`, `healthCheckPath: /healthz`, `region: frankfurt` (nach dem Anlegen unveränderlich), `numInstances: 1` (BYOB-Sessions im RAM), `PYTHON_VERSION`, Secrets mit `sync: false`, Offenlegung des geteilten Ziel-Kanals (`TELEGRAM_FORMATTER_SHARED_CHAT_URL`, `…_SHARED_RETENTION_DAYS`). `branch:` ist bewusst **nicht** gepinnt — Render verwendet ohnehin den Blueprint-Branch. Vertrag: `tests/test_deployment.py` |
+| `scripts/check_build.py` | Build-Selbsttest, Teil des `buildCommand`: prüft Importierbarkeit, Flask-Objekt, ob `healthCheckPath` **eine registrierte Route ist**, und ob Templates + `static/katex/` vollständig sind. Verwandelt einen stillen Runtime-Fehler (404 in der Sprechblase) in einen lauten Build-Abbruch |
+| `scripts/vendor-katex.sh` | Reproduzierbares Vendoring von KaTeX inkl. Provenienz (`VERSION`, `LICENSE`) und dem Kürzen der nie abgerufenen woff-/ttf-Fallbacks |
 | `app.py` (Wurzel) | **Veraltet (entfällt 3.0.0):** reiner Forwarding-Shim für Deployments mit altem Start-Befehl `gunicorn app:app`; keine Logik, erzwungen durch `tests/test_app.py` |
 | `requirements.txt` / `requirements-dev.txt` | gepinnte Laufzeit-/Dev-Abhängigkeiten (Build-Kompatibilität zu Render.com) |
 | `.gitleaks.toml` | Secret-Scan-Freigaben (nur Negativbeispiele, eng begrenzt) |

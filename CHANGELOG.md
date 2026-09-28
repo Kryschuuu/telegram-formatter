@@ -4,6 +4,131 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [2.14.1] - 2026-09-28
+
+Patch-Release: der Render-Blueprint wird gehärtet, und seine Abhängigkeit
+von der Implementierung wird **testbar** — bisher war sie nur dokumentiert.
+
+Auslöser: Der Blueprint wurde auf render.com erkannt (Blueprint-ID vorhanden,
+`Sync: ce2cdfa`), aber **„Create web service telegram-formatter"** legte keinen
+Dienst an — und Render liefert dort *keine* Fehlermeldung, auch nicht über
+**Details**. Eine Fehlersuche über das Dashboard hinweg ist bei dieser
+Eigenschaft unmöglich: Es gibt nichts zu lesen.
+
+Deshalb wurde die Diagnose dorthin verlegt, wo sie hingehört — ins
+Repository. Alles, was vorher eine Vermutung war, ist jetzt eine Aussage:
+
+| Vorher | Nachher |
+|---|---|
+| `pip install -r requirements.txt && gunicorn …` **angenommen** | Build und Start **isoliert nachgestellt** — beide laufen |
+| „sieht valide aus" | gegen `https://render.com/schema/render.yaml.json` **validiert** |
+| `branch: main` gesetzt | entfernt (Spec: Blueprint-Branch wird ohnehin genommen) |
+| Region implizit `oregon` (USA) | `region: frankfurt`, explizit |
+| Health-Check `/healthz` — ungeprüft | **gegen `app.url_map` verifiziert** |
+| `envVars` — Handpflege | jeder Schlüssel **gegen `app.py` verifiziert** |
+| Fehlendes Asset → 404 in der Sprechblase | → **Build bricht mit Dateinamen ab** |
+
+### Added
+
+- **`scripts/check_build.py`** — Build-Selbsttest, Teil des `buildCommand` in
+  `render.yaml`. Prüft: das Paket ist importierbar, `telegram_formatter.app:app`
+  ist ein Flask-Objekt, `healthCheckPath` **ist eine registrierte Route**,
+  `gunicorn` ist im PATH, und Templates + `static/katex/` (13 Pflichtdateien,
+  ≥ 10 WOFF2-Schriften) sind vollständig. Bei Fehlschlag bricht der Build ab
+  und **nennt die fehlende Datei**.
+
+  Warum: ein unvollständiges Asset fiel bisher erst zur Laufzeit auf. Die Seite
+  lädt 404, und der einzige Ort, an dem das auffällt, ist die Sprechblase im
+  Browser eines Nutzers — ohne Serverlog und ohne Testfehler. Konkret relevant
+  geworden ist das durch KaTeX in v2.14.0 (596 KB, `static/katex/`).
+
+  Bewusste Grenze: Telegram-Erreichbarkeit, Token-Gültigkeit und die
+  Übereinstimmung von `TELEGRAM_CHAT_ID` mit dem gepinnten Kanal sind
+  Laufzeitfragen — die kann erst der laufende Dienst beantworten
+  (`docs/DEPLOYMENT.md`, Schritt 6).
+- **`tests/test_deployment.py`: 21 Blueprint-Vertragstests.** Die bisherigen
+  zwei Prüfungen dort waren Substring-Klemmen. Jetzt geprüft wird:
+  - Feldnamen gegen die **bekannten Felder der Blueprint-Spec** (ein
+    Tippfehler wie `healthcheckPath` fällt sonst *nicht* auf — die Spec
+    erlaubt unbekannte Felder still, und Render startet ohne Health-Check)
+  - `type`/`runtime`/`region`/`plan`/`autoDeployTrigger` gegen die Spec-Enums
+    (ein unbekanntes `region` wird still nicht angewendet → oregon)
+  - **`healthCheckPath` ist in `app.url_map` registriert** — die Drift, die
+    Render als endlose Neustarts ohne jede Fehlermeldung zeigt
+  - Blueprint- und Docker-Health-Check prüfen **dieselbe** Route
+  - `startCommand` nennt `telegram_formatter.app:app` (nicht den Shim
+    `app.py`), bindet an `$PORT`, **kein** `--workers` (BYOB-Sessions im RAM)
+  - **jeder `envVars`-Schlüssel wird von `app.py` gelesen** — die
+    Drift-Klasse, bei der eine Variable im Dashboard steht, ohne zu wirken
+  - echte Secrets ausschließlich mit `sync: false`, nie mit `value:`
+  - keine tokenförmigen Geheimnisse im Blueprint (Gitleaks-Vertrag)
+  - `value:` ist ein String (`value: 30` parst als YAML-`int` und Render
+    lehnt den Blueprint ab)
+  - Blueprint und `.env.example` nennen für die Demo dieselben Werte
+  - der Blueprint pinnt ausschließlich die dokumentierte Demo-Konfiguration
+- **`docs/DEPLOYMENT.md`: Abschnitt „Create web service legt nichts an"** —
+  die vier Ursachen in Prüfreihenfolge (Namenskonflikt im Workspace,
+  `plan: free` im Team-Workspace, Repository nicht verbunden, `sync: false`
+  nicht ausgefüllt), dazu vier Kopierfertige Prüfbefehle, mit denen man den
+  Blueprint **lokal** validiert, Build und Start nachstellt und den
+  Selbsttest ausführt — schneller als das Dashboard und aussagekräftiger.
+
+### Changed
+
+- Version `2.13.0` → `2.14.0` → **`2.14.1`**.
+- **`render.yaml`: `branch: main` entfernt.** Die Blueprint-Spec: *„Render uses
+  the Blueprint's branch if the service uses the same repo as the Blueprint
+  file."* Gepinnt werden kann der Wert also nur zusätzlich stören — genau
+  dieses Feld liefert in Renders eigenem Blueprint-Beispiel den Fehler
+  `branch prod could not be found`. Das Entfernen ist damit die einzige
+  Änderung, die eine Fehlerquelle **beseitigt** statt sie nur zu entschärfen.
+- **`render.yaml`: `region: frankfurt` explizit.** Vorher implizit `oregon`
+  (USA). Die Region ist nach dem Anlegen **nicht mehr änderbar** (*„You can't
+  modify this value after creation"*) — ein Versäumnis ist also nur korrigierbar,
+  indem der Dienst gelöscht und neu angelegt wird.
+- **`render.yaml`: `numInstances: 1` und `autoDeployTrigger: commit`.** Die
+  Begründung für die einzelne Instanz (BYOB-Sessions leben prozesslokal im
+  RAM) stand bisher nur in einem Kommentar; sie ist jetzt maschinenlesbar
+  festgehalten.
+- **`render.yaml`: `buildCommand` ruft den Build-Selbsttest auf.**
+- `docs/ARCHITECTURE.md` nennt `healthCheckPath: /` — **seit v2.12.0 ist es
+  `/healthz`**. Die Doku war hier zwei Versionen lang falsch; jetzt korrekt,
+  zusammen mit den beiden neuen `scripts/`-Einträgen.
+
+### Fixed
+
+- **Dokumentations-Drift, der Blueprint und Code nicht verknüpfte.** Genau die
+  Verbindung, an der das Anlegen scheitern kann, war nirgends maschinell
+  geprüft. Jetzt ist sie es (21 Tests).
+
+### Tests
+
+- **21 neue Tests** (690 passed, vorher 669; +21).
+  Mutationstest: **15 von 15** bewusst eingebauten Blueprint-Regressionen
+  werden gefangen — `healthCheckPath: /` (stiller Verlust des Health-Checks),
+  Tippfehler in Pfad und Region, wieder eingefügtes `branch`, entfernte
+  Region, Shim statt kanonischem Modul, fehlendes `$PORT`, `--workers 2`,
+  entfernter Selbsttest, Bot-Token im Klartext, von `.env.example` abweichender
+  Kanal, `value: 30` ohne Anführungszeichen, unbekanntes Feld, entferntes
+  `PYTHON_VERSION`, `TRUSTED_PROXY_HOPS` auf 0. Ebenso vier Negativfälle des
+  Build-Selbsttests direkt ausgeführt (fehlende KaTeX-JS, zu wenige Fonts,
+  `gunicorn` nicht im PATH, Health-Pfad ohne Route).
+- `render.yaml` gegen Renders offizielles JSON-Schema validiert: **VALID**.
+- `ruff check .` fehlerfrei.
+
+### Notes
+
+- **Der Blueprint war nachweislich nicht die Ursache.** Build und Start
+  funktionieren isoliert, das Schema ist erfüllt, `origin/main` enthielt den
+  Sync-Commit, `plan: free` ist gültig, alle neun `envVars` werden gelesen.
+  Der Fehler lag im Create-Dialog. Mit den vier Ursachen in
+  `docs/DEPLOYMENT.md` und den lokalen Prüfbefehlen ist das in Minuten statt
+  in Stunden feststellbar — mehr lässt sich ohne Render-Logs nicht erreichen.
+- **Nicht geändert: `plan: free`.** Ein bezahlter Plan würde das Anlegen
+  vermutlich umgehen, kostet aber Geld und ist keine Konfigurationsfrage.
+  Der Hinweis auf die Einschränkung (nur persönliche Workspaces) steht jetzt
+  im Blueprint und in der Troubleshooting-Sektion.
+
 ## [2.14.0] - 2026-09-27
 
 Minor-Release: **die Live-Vorschau zeigt jetzt 1:1, was Telegram anzeigt.**

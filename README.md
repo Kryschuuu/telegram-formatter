@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.14.0-blue)
+![Version](https://img.shields.io/badge/version-2.14.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -430,7 +430,10 @@ telegram-formatter/
 │       └── telegram_api.py     #     getMe/getUpdates/setWebhook/deleteWebhook
 ├── bots/                       # eigene Nutzer-Bots (reviewpflichtig, CI-Gate)
 ├── examples/own_bot/           # Referenz-Bot (besteht alle Review-Regeln)
-├── tests/                      # Unit-Tests (utils, sender, app, botkit)
+├── scripts/                    # Deployment-Helfer
+│   ├── check_build.py                       # Build-Selbsttest (läuft in render.yaml mit)
+│   └── vendor-katex.sh                      # KaTeX reproduzierbar vendorn (MIT)
+├── tests/                      # Unit-Tests (utils, sender, app, botkit, deployment)
 ├── docs/                       # aktuelle Projekt-Dokumentation
 │   ├── ARCHITECTURE.md                     # Architektur & Datenflüsse
 │   ├── DECENTRAL_BOT_ARCHITECTURE.md       # BYOB-Architektur & Review-Prozess
@@ -478,7 +481,7 @@ Zwei produktionsreife Wege — beide mit TLS und denselben Sicherheitsgrenzen:
 ```bash
 cp .env.example .env   # Pflichtwerte eintragen (Token, Chat-ID)
 docker compose up --build -d
-curl -k https://192.168.0.10/healthz   # {"status":"ok","version":"2.14.0"}
+curl -k https://192.168.0.10/healthz   # {"status":"ok","version":"2.14.1"}
 ```
 
 Caddy terminiert TLS automatisch (interne CA, kein Certbot nötig) und lässt
@@ -490,6 +493,18 @@ Troubleshooting): [docs/DOCKER.md](docs/DOCKER.md).
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Der kanonische Startbefehl ist
 zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 übernimmt dort die Konfiguration neu aus dem Blueprint angelegter Dienste.
+
+> **Blueprint und Implementierung können nicht auseinanderlaufen.** Seit
+> v2.14.1 prüft `tests/test_deployment.py` den Blueprint gegen die
+> Blueprint-Spec *und* gegen den Code: dass `healthCheckPath` eine
+> tatsächlich registrierte Route ist, dass jeder `envVars`-Schlüssel gelesen
+> wird, dass nur ein Gunicorn-Worker läuft (BYOB-Sessions leben im RAM) und
+> dass keine Secrets im Git stehen. Dazu läuft nach der Installation
+> `scripts/check_build.py` mit — es bricht den Build ab, wenn Templates oder
+> `static/katex/` unvollständig sind, statt es erst zur Laufzeit zu zeigen.
+> Scheitert das Anlegen im Dashboard, nennt
+> [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (Abschnitt *„Create web service"
+> legt nichts an*) die vier möglichen Ursachen in Prüfreihenfolge.
 
 > **Gestörter Alt-Start?** Leitet das Dashboard noch `gunicorn app:app` weiter
 > — die Adresse zeigt über den veralteten Root-Shim `app.py` auf dieselbe App.
@@ -526,7 +541,7 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.14.0** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.14.1** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).
 ON.md](MIGRATION.md).
