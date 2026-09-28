@@ -5,11 +5,11 @@
 # Kein Build-Tooling, keine Tests, keine Doku im Image (siehe .dockerignore).
 #
 # Bauen & starten (komfortabel über Compose):
-#   docker compose up --build -d
+#   docker compose -f docker-compose.standalone.yml up --build -d
 #
 # Manuell (nur die App, ohne Caddy — z. B. für Smoke-Tests):
-#   docker build -t telegram-formatter:2.12.0 .
-#   docker run --rm -p 5000:5000 --env-file .env telegram-formatter:2.12.0
+#   docker build -t telegram-formatter:2.15.0 .
+#   docker run --rm -p 5000:5000 --env-file .env telegram-formatter:2.15.0
 #
 # BYOB-Hinweis: Die Web-Sessions leben prozesslokal im RAM (siehe
 # docs/DECENTRAL_BOT_ARCHITECTURE.md). Deshalb läuft Gunicorn mit genau
@@ -37,7 +37,15 @@ COPY telegram_formatter/ ./telegram_formatter/
 
 # Least Privilege: Der Prozess läuft als unprivilegierter Systemnutzer.
 # Port 5000 ist >1024 und damit ohne Capabilities bindbar.
-RUN useradd --system --no-create-home --shell /usr/sbin/nologin appuser \
+#
+# --create-home (seit v2.15.0): Gunicorn 26 legt standardmäßig ein Control-
+# Socket unter $HOME/.gunicorn/gunicorn.ctl an. Ohne beschreibbares Home
+# scheitert der Start mit
+#   [ERROR] Control server error: [Errno 13] Permission denied: '/home/appuser'
+# — in JEDEM Deployment, auch im Solo-Stack. Das Home gehört appuser, der
+# Socket wird mit 0700 angelegt; im Container ist das Interface ohnehin
+# unbenutzbar (Verwaltung läuft über `docker compose restart`).
+RUN useradd --system --create-home --shell /usr/sbin/nologin appuser \
     && chown -R appuser:appuser /srv/app
 USER appuser
 
