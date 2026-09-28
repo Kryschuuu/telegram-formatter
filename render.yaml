@@ -13,15 +13,52 @@
 #     davon *nicht* automatisch umgestellt — siehe den Blueprint-Sync-Hinweis
 #     in docs/DEPLOYMENT.md (Schritt 3a).
 #
-# Secrets gehören nicht ins Git: ``sync: false`` hält die Werte im
+# Geheimnisse gehören nicht ins Git: ``sync: false`` hält die Werte im
 # Dashboard-Store (beim ersten Blueprint-Durchlauf wird danach gefragt).
+#
+# Vertragstest: tests/test_deployment.py (Abschnitt "render.yaml"). Er prüft
+# die Felder gegen die Render-Spec, den Health-Check-Pfad gegen die wirklich
+# registrierte Route und jeden envVar-Schlüssel gegen den Code. Blueprint und
+# Implementierung können deshalb nicht mehr auseinanderlaufen.
+# ============================================================================
 services:
   - type: web
     name: telegram-formatter
     runtime: python
-    plan: free # für mehr Leistung ersetzen, z. B. 0.5c-512mb
-    branch: main
-    buildCommand: pip install -r requirements.txt
+    # Region ist nach dem Anlegen **nicht mehr änderbar** ("You can't modify
+    # this value after creation"). Deshalb wird sie hier ausdrücklich
+    # festgelegt: Frankfurt statt des impliziten Defaults oregon (USA). Ohne
+    # diese Zeile wäre die Entscheidung still gefallen und später nicht mehr
+    # korrigierbar.
+    region: frankfurt
+    # Zu mehr Leistung: 0.5c-512mb (freiwillig, kostenpflichtig).
+    # `free` ist ein gültiger Plan (0.1 CPU / 512 MB), aber nur in
+    # **persönlichen** Workspaces buchbar — im Team-Workspace muss ein
+    # bezahlter Plan gewählt werden (docs/DEPLOYMENT.md, Troubleshooting).
+    plan: free
+    # `branch:` ist bewusst NICHT gesetzt. Die Blueprint-Spec: "Render uses
+    # the Blueprint's branch if the service uses the same repo as the
+    # Blueprint file." Ein Gepinntwert kann also nur zusätzlich stören — genau
+    # dieses Feld liefert in Renders eigenem Beispiel den Fehler
+    # "branch prod could not be found". Ohne Repo-Umweg nimmt Render den
+    # Branch, in dem der Blueprint liegt (hier `main`).
+    #
+    # Genau EIN Instanz, und zwar dokumentiert: die BYOB-Websessions (v2.2.0)
+    # leben prozesslokal im RAM. Eine zweite Instanz würde eine Session
+    # "verlieren" (410 statt Fehlversand) — dieselbe Begründung, die den
+    # einzelnen Gunicorn-Worker erzwingt.
+    numInstances: 1
+    # Ein Commit auf dem Blueprint-Branch löst einen Deploy aus. Beim Ersten
+    # Anlegen startet Render ohnehin einen Deploy, deshalb ist der Wert hier
+    # nur die Festlegung für die Folge-Commits.
+    autoDeployTrigger: commit
+    # Nach der Installation wird scripts/check_build.py ausgeführt: es prüft,
+    # dass das Paket importierbar ist, die Health-Check-Route existiert und
+    # Templates samt static/katex/ (v2.14.0, MIT) vollständig sind. Ohne diesen
+    # Schritt fällt ein fehlendes Asset erst zur Laufzeit auf — die Seite lädt
+    # dann 404 statt Formeln zu setzen, und der einzige Ort, an dem das
+    # auffällt, ist die Sprechblase im Browser eines Nutzers.
+    buildCommand: pip install -r requirements.txt && python scripts/check_build.py
     # Die Anführungszeichen um das Modul bleiben: Render führt den Befehl über
     # eine Shell aus, und das quoting hält "modul:objekt" als ein Argument
     # (identisch zu docs/DEPLOYMENT.md, Schritt 3).
@@ -31,9 +68,13 @@ services:
     startCommand: 'gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:$PORT --threads 8'
     # Liveness-Probe (seit v2.12.0): billiger als "/" (kein Template-Rendering),
     # nie ratenlimitiert und ohne Konfigurationsdetails in der Antwort.
+    # Vertragstest prüft, dass genau diese Route in app.py registriert ist.
     healthCheckPath: /healthz
     envVars:
       # Python-Version der Build-Umgebung (muss zu requires-python >= 3.10 passen).
+      # Einziger Schlüssel, den die Anwendung selbst NICHT liest — er wird von
+      # Renders Build-Umgebung ausgewertet. Der Vertragstest kennt ihn als
+      # bewusste Ausnahme.
       - key: PYTHON_VERSION
         value: "3.11"
       # Secret bleibt im Dashboard-Store, nie im Git.
