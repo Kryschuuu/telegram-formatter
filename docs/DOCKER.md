@@ -2,11 +2,18 @@
 
 Diese Anleitung bringt telegram-formatter als **produktionsreifen Stack** in
 ein lokales Netzwerk — mit TLS, automatischem Zertifikat-Management und
-IP-Zugriffskontrolle. Alle Adressen sind **konkret** (keine Platzhalter):
+IP-Zugriffskontrolle. Alle Adressen sind **konkret** (keine Platzhalter).
+
+> **Hinweis (seit v2.15.0):** Die Compose-Datei heißt
+> `docker-compose.standalone.yml`. Ein `docker compose up` im Repo bricht mit
+> `no configuration file provided: not found` ab — bewusst: der LAN-Betrieb
+> läuft über `/home/kris/nas-server`, und ein versehentlich gestarteter
+> zweiter Stack würde dieselbe Bot-Token-Konfiguration tragen. Alle Kommandos
+> unten tragen daher `-f docker-compose.standalone.yml`.
 
 | Rolle | Adresse | Aufgabe |
 |---|---|---|
-| Server (Docker-Host) | `192.168.0.10` | führt `docker compose up` aus |
+| Server (Docker-Host) | `192.168.0.10` | führt `docker compose -f docker-compose.standalone.yml up` aus |
 | Client (freigegeben) | `192.168.0.20` | einziger erlaubter Browser/Client |
 | Zugriff | `https://192.168.0.10` | TLS via Caddy (interne CA) |
 | Standard-Output-Kanal | `t.me/mdtotxt_bot_web` | öffentlicher Demo-Kanal des geteilten Bots |
@@ -36,7 +43,7 @@ ersetzen — alles andere bleibt gleich (siehe „Anpassen").
 ## 2. Voraussetzungen (Server 192.168.0.10)
 
 1. **Docker Engine + Compose-Plugin** (Compose v2):
-   `docker --version` und `docker compose version` müssen antworten.
+   `docker --version` und `docker compose -f docker-compose.standalone.yml version` müssen antworten.
 2. **Bot-Token** von [@BotFather](https://t.me/BotFather) (`/newbot`).
 3. **Zielchat** für den Demo-Betrieb: öffentliche Supergroup oder öffentlicher
    Kanal (z. B. `t.me/mdtotxt_bot_web`), Bot als Mitglied (im Kanal mit Recht
@@ -66,11 +73,11 @@ TELEGRAM_CHAT_ID=-1001234567890             # PFLICHT (ID deines Demo-Kanals)
 
 ```bash
 # 3) Bauen + starten (im Hintergrund)
-docker compose up --build -d
+docker compose -f docker-compose.standalone.yml up --build -d
 
 # 4) Start verfolgen — gesund, sobald die App "healthy" meldet
-docker compose ps
-docker compose logs -f app     # Strg+C zum Verlassen
+docker compose -f docker-compose.standalone.yml ps
+docker compose -f docker-compose.standalone.yml logs -f app     # Strg+C zum Verlassen
 ```
 
 ## 4. Verifizieren (vom Client 192.168.0.20)
@@ -122,7 +129,7 @@ der Client dieser CA vertrauen, sonst warnt jeder Browser:
 
 ```bash
 # Auf dem SERVER: Wurzelzertifikat exportieren …
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+docker compose -f docker-compose.standalone.yml cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
 
 # … auf den CLIENT übertragen (z. B. scp) und dort importieren:
 #   Linux:   sudo cp caddy-root.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates
@@ -138,19 +145,19 @@ Ohne Import funktioniert alles trotzdem — nur mit Klick-Warnung pro Sitzung.
 ## 6. Betrieb
 
 ```bash
-docker compose ps                  # Status + Gesundheitszustand
-docker compose logs -f             # alle Logs live (app + caddy)
-docker compose logs -f app         # nur App-Logs
-docker compose restart app         # App neu starten (Caddy läuft weiter)
-docker compose down                # alles stoppen (Zertifikate bleiben im Volume)
-docker compose down -v             # ACHTUNG: löscht auch CA + Zertifikate
+docker compose -f docker-compose.standalone.yml ps                  # Status + Gesundheitszustand
+docker compose -f docker-compose.standalone.yml logs -f             # alle Logs live (app + caddy)
+docker compose -f docker-compose.standalone.yml logs -f app         # nur App-Logs
+docker compose -f docker-compose.standalone.yml restart app         # App neu starten (Caddy läuft weiter)
+docker compose -f docker-compose.standalone.yml down                # alles stoppen (Zertifikate bleiben im Volume)
+docker compose -f docker-compose.standalone.yml down -v             # ACHTUNG: löscht auch CA + Zertifikate
 ```
 
 **Update** (neue Version einspielen):
 
 ```bash
 git pull
-docker compose up --build -d
+docker compose -f docker-compose.standalone.yml up --build -d
 curl -k https://192.168.0.10/healthz   # Versionsfeld prüfen
 ```
 
@@ -185,7 +192,7 @@ wichtigsten Entscheidungen für den LAN-Betrieb:
 ### Anpassen (eigenes Netz, mehrere Clients)
 
 * **Andere Adressen:** In `Caddyfile` die Site-Zeile (`https://…`) und die
-  `remote_ip`-Liste ändern, dann `docker compose up -d caddy`.
+  `remote_ip`-Liste ändern, dann `docker compose -f docker-compose.standalone.yml up -d caddy`.
 * **Mehrere Clients / ganzes Subnetz:** Adressen durch Leerzeichen getrennt
   anhängen (`remote_ip 192.168.0.20 192.168.0.21 …`) oder CIDR nutzen
   (`remote_ip 192.168.0.0/24`).
@@ -198,12 +205,12 @@ wichtigsten Entscheidungen für den LAN-Betrieb:
 | Symptom | Ursache & Abhilfe |
 |---|---|
 | Browser: „unsicher / Zertifikat ungültig" | CA noch nicht importiert → Abschnitt 5. Mit `curl -k` testen (überspringt die Prüfung). |
-| `403 Forbidden` vom eigenen Client | Client-IP stimmt nicht mit der ACL überein: tatsächliche IP prüfen (`ip addr`), ggf. `remote_ip` in `Caddyfile` ergänzen + `docker compose up -d caddy`. |
-| `502 Bad Gateway` | App (noch) nicht gesund: `docker compose ps` / `docker compose logs app` — meist fehlende `.env`-Pflichtwerte oder Tippfehler. |
+| `403 Forbidden` vom eigenen Client | Client-IP stimmt nicht mit der ACL überein: tatsächliche IP prüfen (`ip addr`), ggf. `remote_ip` in `Caddyfile` ergänzen + `docker compose -f docker-compose.standalone.yml up -d caddy`. |
+| `502 Bad Gateway` | App (noch) nicht gesund: `docker compose -f docker-compose.standalone.yml ps` / `docker compose -f docker-compose.standalone.yml logs app` — meist fehlende `.env`-Pflichtwerte oder Tippfehler. |
 | Port-Konflikt beim Start (`address already in use`) | Port 80/443 belegt (Apache/nginx/anderer Caddy): Fremddienst stoppen oder dessen Ports umlegen. |
 | Endlosschleife / Login unmöglich | Hier nicht anwendbar — die App hat kein Login; BYOB-Sessions enden beim App-Neustart (RAM), danach einfach neu öffnen. |
 | Telegram antwortet 429/502 | Rate-Limit oder Bot nicht im Kanal: Antwort-`retry_after` abwarten, Bot-Mitgliedschaft + Recht *Nachrichten senden* prüfen. |
-| `docker compose config` meckert | `.env` fehlt oder YAML-Syntaxfehler: `cp .env.example .env` bzw. Einrückung (2 Leerzeichen) prüfen. |
+| `docker compose -f docker-compose.standalone.yml config` meckert | `.env` fehlt oder YAML-Syntaxfehler: `cp .env.example .env` bzw. Einrückung (2 Leerzeichen) prüfen. |
 
 > **Für den Betrieb hinter einem bereits vorhandenen Caddy** (mehrere Dienste
 > hinter einem Proxy) gelten andere Regeln als in Abschnitt 3 dieses Dokuments
@@ -258,14 +265,14 @@ tatsächlich entsteht:
 
 ```bash
 # fish
-docker compose exec proxy sh -c 'nc -z -w3 telegram-formatter 5000; and echo OPEN; or echo CLOSED'
-docker compose exec proxy curl -s -o /dev/null -w "%{http_code}\n" http://telegram-formatter:5000/healthz
+docker compose -f docker-compose.standalone.yml exec caddy sh -c 'nc -z -w3 telegram-formatter 5000; and echo OPEN; or echo CLOSED'
+docker compose -f docker-compose.standalone.yml exec caddy curl -s -o /dev/null -w "%{http_code}\n" http://telegram-formatter:5000/healthz
 ```
 
 ```bash
 # bash
-docker compose exec proxy sh -c 'nc -z -w3 telegram-formatter 5000 && echo OPEN || echo CLOSED'
-docker compose exec proxy curl -s -o /dev/null -w "%{http_code}\n" http://telegram-formatter:5000/healthz
+docker compose -f docker-compose.standalone.yml exec caddy sh -c 'nc -z -w3 telegram-formatter 5000 && echo OPEN || echo CLOSED'
+docker compose -f docker-compose.standalone.yml exec caddy curl -s -o /dev/null -w "%{http_code}\n" http://telegram-formatter:5000/healthz
 ```
 
 Erwartet: `OPEN` und `200`. `CLOSED` heißt: der Dienstname stimmt nicht, das
@@ -299,17 +306,17 @@ Nachweis:
 ```bash
 # fish
 md5sum ./caddy/Caddyfile
-docker compose exec proxy md5sum /etc/caddy/Caddyfile
+docker compose -f docker-compose.standalone.yml exec caddy md5sum /etc/caddy/Caddyfile
 ```
 
 ```bash
 # bash
 md5sum ./caddy/Caddyfile
-docker compose exec proxy md5sum /etc/caddy/Caddyfile
+docker compose -f docker-compose.standalone.yml exec caddy md5sum /etc/caddy/Caddyfile
 ```
 
 Gleiche Prüfsumme = ok. Verschiedene = veralteter Mount (Fix: Verzeichnis-Mount
-oder `docker compose up -d --force-recreate proxy`).
+oder `docker compose -f docker-compose.standalone.yml up -d --force-recreate caddy`).
 
 Ausführliche Diagnose-Anleitung: [RUNBOOK.md](RUNBOOK.md), Kurzantworten:
 [FAQ.md](FAQ.md).
@@ -326,4 +333,4 @@ Ausführliche Diagnose-Anleitung: [RUNBOOK.md](RUNBOOK.md), Kurzantworten:
 - [ ] `TELEGRAM_FORMATTER_API_TOKEN` gesetzt, sobald Dritte die API direkt
       nutzen dürfen (Browser-Weg bleibt davon unberührt).
 - [ ] Backup von `caddy_data`-Volume + `.env` eingerichtet (Abschnitt 6).
-- [ ] Updates: `git pull && docker compose up --build -d` + `/healthz`-Check.
+- [ ] Updates: `git pull && docker compose -f docker-compose.standalone.yml up --build -d` + `/healthz`-Check.

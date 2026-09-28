@@ -32,7 +32,11 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-COMPOSE_PATH = REPO_ROOT / "docker-compose.yml"
+# Seit v2.15.0 heißt die Datei docker-compose.standalone.yml: ein `docker
+# compose up` im Repo soll einen klaren Fehler liefern statt still einen
+# zweiten Stack neben dem NAS-Betrieb zu starten (Befund: 2026-09-28, zwei
+# Instanzen mit demselben Bot-Token liefen parallel).
+COMPOSE_PATH = REPO_ROOT / "docker-compose.standalone.yml"
 DOCKERFILE_PATH = REPO_ROOT / "Dockerfile"
 CADDYFILE_PATH = REPO_ROOT / "Caddyfile"
 ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
@@ -161,6 +165,19 @@ def test_compose_caddy_mounts_config_readonly_and_persists_certs(compose):
 def test_compose_services_restart_automatically(compose):
     for name in ("app", "caddy"):
         assert compose["services"][name].get("restart") == "unless-stopped"
+
+
+def test_compose_image_tag_matches_version(compose):
+    """Das Image-Tag im Solo-Compose muss der Paketversion entsprechen.
+
+    Befund v2.15.0: Das Tag war auf 2.12.0 hartkodiert, während die Quelle
+    2.14.1 war — ein `docker compose up` im Repo baute und startete still
+    eine veraltete Version. Dieser Test macht die Drift unmöglich.
+    """
+    from telegram_formatter import __version__
+
+    image = compose["services"]["app"]["image"]
+    assert image == f"telegram-formatter:{__version__}"
 
 
 # --------------------------------------------------------------------------- #

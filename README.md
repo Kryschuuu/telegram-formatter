@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.14.1-blue)
+![Version](https://img.shields.io/badge/version-2.15.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -455,7 +455,7 @@ telegram-formatter/
 ├── pyproject.toml              # Paketierung + Ruff/pytest/Bandit-Konfiguration
 ├── render.yaml                 # Render-Blueprint: kanonischer Start, Health-Check, Env-Vars
 ├── Dockerfile                  # Produktions-Image (Non-Root, 1 Worker, /healthz)
-├── docker-compose.yml          # lokaler Stack: App (intern) + Caddy (TLS + ACL)
+├── docker-compose.standalone.yml # Solo-Stack: App (intern) + Caddy (TLS + ACL)
 ├── Caddyfile                   # Reverse-Proxy: tls internal, remote_ip-ACL (LAN)
 ├── .env.example                # Umgebungsvorlage (→ .env kopieren, nie committen)
 ├── requirements.txt            # Laufzeit-Deps (gepinnt; pyproject liest sie dynamisch)
