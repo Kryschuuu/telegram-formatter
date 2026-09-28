@@ -121,10 +121,11 @@ def _read_error_body(response) -> dict | None:
     return body if isinstance(body, dict) else None
 
 
-def _error_detail(body: dict | None) -> tuple[str, float | None]:
+def error_detail(body: dict | None) -> tuple[str, float | None]:
     """Holt (gekürzte Description, retry_after) aus einem Fehler-Body — sicher.
 
     Nimmt den **bereits dekodierten** Body entgegen (siehe :func:`_read_error_body`).
+    Öffentlich, damit ``botkit.telegram_api`` dieselbe Logik nutzt (DRY).
     """
     if not isinstance(body, dict):
         return "", None
@@ -181,7 +182,7 @@ def send_message(
         ) from None
 
     if response.status_code != 200:
-        detail, retry_after = _error_detail(_read_error_body(response))
+        detail, retry_after = error_detail(_read_error_body(response))
         suffix = f": {detail}" if detail else ""
         raise SendError(f"Telegram-API-Fehler {response.status_code}{suffix}.", retry_after=retry_after)
 
@@ -197,7 +198,7 @@ def send_message(
         raise SendError("Telegram-API: ungültige JSON-Antwort erhalten.") from None
 
     if body.get("ok") is not True:
-        detail, retry_after = _error_detail(body)
+        detail, retry_after = error_detail(body)
         raise SendError(
             f"Telegram-API: {detail or 'Anfrage abgelehnt.'}",
             retry_after=retry_after,

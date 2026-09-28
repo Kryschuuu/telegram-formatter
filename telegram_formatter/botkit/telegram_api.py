@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from telegram_formatter.sender import validate_api_base
+from telegram_formatter.sender import error_detail, validate_api_base
 
 __all__ = ["API_BASE", "TelegramAPIError", "delete_webhook", "get_me", "get_updates", "set_webhook"]
 
@@ -46,26 +46,6 @@ class TelegramAPIError(RuntimeError):
     def __init__(self, message: str, *, retry_after: float | None = None) -> None:
         super().__init__(message)
         self.retry_after = retry_after
-
-
-def _error_detail(response) -> tuple[str, float | None]:
-    """Gekürzte Description + ``retry_after`` aus einem Fehler-Body — sicher.
-
-    Nennt bewusst nur ``description`` (max. 200 Zeichen), nie ``response.text``:
-    der Rohtext könnte Inhalte oder das Token enthalten.
-    """
-    try:
-        body = response.json()
-    except (ValueError, AttributeError):
-        return "", None
-    if not isinstance(body, dict):
-        return "", None
-    description = str(body.get("description", ""))[:200]
-    params = body.get("parameters")
-    retry_after = None
-    if isinstance(params, dict) and isinstance(params.get("retry_after"), (int, float)):
-        retry_after = float(params["retry_after"])
-    return description, retry_after
 
 
 def _post(secret: str, method: str, payload: Mapping[str, Any], *, timeout: float, api_base: str) -> dict:
@@ -99,7 +79,11 @@ def _post(secret: str, method: str, payload: Mapping[str, Any], *, timeout: floa
         # v2.13.0: `retry_after` mitgeben (wie `sender.py`). Sonst erfährt der
         # Aufruher bei 429 nur "HTTP 429" und wartet nicht — der
         # Session-Betrieb lief dadurch in wiederholte 429er.
-        detail, retry_after = _error_detail(response)
+        try:
+            body = response.json()
+        except (ValueError, AttributeError):
+            body = None
+        detail, retry_after = error_detail(body if isinstance(body, dict) else None)
         message = f"Telegram-API {method} → HTTP {response.status_code}"
         if detail:
             message += f": {detail}"
