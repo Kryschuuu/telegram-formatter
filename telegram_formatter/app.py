@@ -1093,7 +1093,10 @@ def _resolve_target_chat(data: dict, *, require_chat: bool) -> tuple[str | None,
             )
         if require_chat:
             return None, (jsonify({"error": "Keine Chat-ID angegeben."}), 400)
-        chat = "0"
+        # Selbstbetrieb ohne ENV-Chat und ohne Body-chat_id: Konvertierung
+        # ohne Zielchat ist möglich (z. B. /api/convert), aber nicht der Versand.
+        # "0" ist ein Platzhalter, der von build_messages ignoriert wird.
+        return "0", None
     return chat, None
 
 

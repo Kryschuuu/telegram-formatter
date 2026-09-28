@@ -78,7 +78,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FEHLER: Eingabe nicht lesbar ({exc.__class__.__name__}).")
         return 2
 
-    messages = build_messages(text, chat_id or 0)
+    # Dry-Run ohne chat_id ist erlaubt (Platzhalter "0"), aber nicht der
+    # echte Versand — dann muss eine Zielchat-ID angegeben sein.
+    if not chat_id and args.send:
+        print("FEHLER: --chat-id bzw. TELEGRAM_CHAT_ID fehlt.")
+        return 1
+    messages = build_messages(text, chat_id or "0")
 
     if not messages:
         print("Keine (nicht leere) Eingabe zum Senden.")
