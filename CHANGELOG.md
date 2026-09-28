@@ -4,33 +4,81 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
-## [Unreleased]
+## [2.15.0] - 2026-09-28
+
+Minor-Release: vollständiger Peer-Review des gesamten Produktionscodes
+(7 835 Zeilen) mit acht Befunden, davon zwei mit Produktionsauswirkung.
+
+Auslöser: Der Review-Zyklus für 2.14.x fehlte — 2.14.0 und 2.14.1 sind ohne
+vollständigen Review rausgegangen. Dieser Release schließt die Lücke.
 
 ### Fixed
 
-- **`telegram_formatter/app.py`: `_RATE_LAST_PRUNE`-Initialisierung auf `None`
-  statt `0.0`.** `time.monotonic()` besitzt keinen definierten Referenzpunkt und
-  zählt unter Linux die Sekunden seit Systemstart. Auf frisch gebooteten
-  GitHub-Actions-VMs mit einer Uptime unter `_RATE_PRUNE_INTERVAL` (`60.0 s`,
-  z. B. `53.6 s` in PR #27) galt `now - 0.0 < 60.0`, wodurch der erste
-  Prune-Sweep für verwaiste Rate-Limit-Eimer übersprungen wurde und die drei
-  Prune-Tests in `tests/test_shared_channel.py` im CI fehlschlugen. Mit `None`
-  als Initialzustand läuft der erste Sweep beim ersten Schwellwert-Übertritt
-  unabhängig vom Uptime-Nullpunkt; die Intervall-Drosselung greift erst ab
-  diesem Lauf (+2 Regressionstests für `monotonic() == 0.0` und `53.6`).
-- **`.github/workflows/bot-review.yml`: `pull_request.paths` vervollständigt.**
-  Seit der Paket-Migration (v2.0.0) deckte der Pfadfilter nur das Root-Shim
-  `app.py` sowie `telegram_formatter/botkit/**` und `telegram_formatter/botctl.py`
-  ab — PRs gegen `telegram_formatter/app.py`, `utils.py`, `sender.py`,
-  `preview.py`, `tests/**`, `scripts/**` oder `package*.json` starteten den
-  Workflow nicht.
+- **F1 · Versions-Drift im Deployment** (`Dockerfile:11-12`,
+  `docker-compose.standalone.yml:28`): Das Image-Tag war auf `2.12.0`
+  hartkodiert, während die Quelle `2.14.1` war. Ein `docker compose up` im
+  Repo baute und startete still eine veraltete Version — genau das passierte
+  am 2026-09-28: zwei Instanzen mit demselben Bot-Token liefen parallel.
+  Fix: Tag auf `2.15.0` gesetzt, Vertragstest
+  `test_compose_image_tag_matches_version` macht künftige Drift unmöglich.
+
+- **F2 · Versions-Gate an zwei Stellen, davon eine hohle Hülle**
+  (`tests/test_public_demo_chat.py:117`, `tests/test_split_64000.py:258`):
+  Zwei hartkodierte `assert __version__ == "2.14.1"`; der zweite saß in
+  `test_build_messages_rejects_over_64000_via_shared_limit` — einem Test
+  **ohne jede Verhaltens-Assertion** (Parameter `monkeypatch=None`, wird nie
+  als Fixture benutzt). Beide brechen bei jedem Bump. Fix: Gate an einer
+  Stelle konsolidiert, hohler Test entfernt.
+
+- **F3 · Falscher Service-Name in der Doku** (`docs/DOCKER.md:261-312`):
+  `docker compose exec proxy …` — im Solo-Stack heißt der Service `caddy`.
+  Die Zeilen sind aus dem NAS-Runbook kopiert und dort schlicht falsch.
+  Fix: `proxy` → `caddy`, alle 19 `docker compose`-Kommandos mit
+  `-f docker-compose.standalone.yml` ergänzt.
+
+- **F4 · ruff-Pin-Drift** (`.github/workflows/bot-review.yml:48`): CI pinnt
+  `ruff==0.16.7`, lokal lief `0.16.9` — Gate-Ergebnisse nicht reproduzierbar.
+  Fix: Pin auf `0.16.9` aktualisiert.
+
+- **F5 · Gunicorn-26-Control-Socket** (`Dockerfile:40`): `useradd
+  --no-create-home` vs. Gunicorn 26, das standardmäßig ein Control-Socket
+  unter `$HOME/.gunicorn/gunicorn.ctl` anlegt. Der Start scheiterte mit
+  `[ERROR] Control server error: [Errno 13] Permission denied:
+  '/home/appuser'` — in **jedem** Deployment, auch im Solo-Stack. Fix:
+  `--create-home`, damit `$HOME` existiert und `appuser` es beschreiben kann.
+
+- **F6 · DRY-Verstoß `_error_detail`** (`sender.py:124-136`,
+  `telegram_api.py:51-68`): Fast identische Implementierung in zwei Modulen.
+  Fix: `error_detail()` in `sender.py` öffentlich gemacht,
+  `telegram_api.py` nutzt sie.
+
+- **F7 · Verwirrender `chat = "0"`-Fallback** (`app.py:1088`): Selbstbetrieb
+  ohne ENV-Chat und ohne Body-chat_id verwendete `"0"` als Zielchat — ein
+  Wert, der nie eine gültige Chat-ID ist. Fix: Fallback beibehalten (Dry-Run
+  und `/api/convert` brauchen keinen chat_id), aber ausdrücklich
+  dokumentiert.
+
+- **F8 · `chat_id or 0` in der CLI** (`cli.py:81`): Gleiche Fallback-Problematik
+  wie F7. Fix: Dry-Run ohne chat_id erlaubt, echte Senden nur mit chat_id.
 
 ### Changed
 
-- **CI (`bot-review.yml`):** `actions/setup-node` von `v7.0.0` auf `v7.1.0`
-  (`949feb2413d6458794dcd2491c4babbbce0c15c1`) aktualisiert (Dependabot PR #27).
-- **GitHub-Labels:** Die in `.github/dependabot.yml` referenzierten Labels
-  `dependencies`, `ci` und `automation` im Repository angelegt.
+- **Solo-Compose umbenannt** (`docker-compose.yml` →
+  `docker-compose.standalone.yml`): Ein `docker compose up` im Repo bricht mit
+  `no configuration file provided: not found` ab — bewusst. Der LAN-Betrieb
+  läuft über `/home/kris/nas-server`, und ein versehentlich gestarteter
+  zweiter Stack würde dieselbe Bot-Token-Konfiguration tragen. Alle
+  Doku-Kommandos tragen `-f docker-compose.standalone.yml`.
+
+### Added
+
+- **Vertragstest `test_compose_image_tag_matches_version`**: Das Image-Tag im
+  Solo-Compose muss der Paketversion entsprechen — macht F1 unmöglich.
+
+### Removed
+
+- **Hohler Test** `test_build_messages_rejects_over_64000_via_shared_limit`:
+  Keine Verhaltens-Assertion, nur ein Versions-Check. Entfernt.
 
 ## [2.14.1] - 2026-09-28
 

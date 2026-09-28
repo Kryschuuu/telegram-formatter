@@ -1,5 +1,12 @@
 # Code-Peer-Review
 
+> **Stand 2026-09-28:** Der letzte vollständige Review ist
+> [`2026-09_CODE-REVIEW-V2.15.0.md`](2026-09_CODE-REVIEW-V2.15.0.md)
+> (v2.15.0, 8 Befunde). Vorheriger Review:
+> [`2026-09_CODE-REVIEW-V2.13.0.md`](2026-09_CODE-REVIEW-V2.13.0.md)
+> (v2.13.0). 2.14.0/2.14.1 sind ohne vollständigen Review rausgegangen —
+> der Review-Zyklus für 2.14.x wurde mit 2.15.0 nachgeholt.
+
 > **Hinweis (Stand 2026-09-11):** Dieser Bericht wurde nach
 > `peer-review/CODE_REVIEW.md` überführt (vorher `docs/CODE_REVIEW.md`).
 > Datums- und Dateiangaben im Text beschreiben den **Damals-Zustand** der
