@@ -15,7 +15,6 @@ import pathlib
 
 import pytest
 
-
 from telegram_formatter import app as app_module
 from telegram_formatter import utils as u
 
