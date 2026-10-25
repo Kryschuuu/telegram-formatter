@@ -53,7 +53,7 @@ darin ist ein eigenständiger Sub-Layer für das dezentrale BYOB-Modell.
 | Modul | Verantwortung |
 |---|---|
 | `telegram_formatter/__init__.py` | Fassade: `__version__`, Re-Exports (`build_messages`, `send_message`) |
-| `telegram_formatter/utils.py` | Reine, I/O-freie Konvertierungs- und Aufteilungslogik. Enthält `normalize_text`, `iter_math_spans`/`MathSpan` (der **einzige** Formel-Scanner: `split_formulas`, `convert_deepseek_latex_syntax`, `_protect_math` und `_atomic_ranges` sind dünne Aufrufer — seit v2.10.0, Audit O-3), `validate_latex_braces`, `parse_pipe_table`, `markdown_to_html`, `markdown_to_rich_markdown`, `build_messages`, `chunk_text` sowie seit v2.7.0 `unwrap_redirect_url`/`_normalize_links` (Redirect-URLs → Ziel-URL, Link-Artefakt-Glättung; Regelwerk und Vergleich: [FORMATTING.md](FORMATTING.md)). |
+| `telegram_formatter/utils.py` | Reine, I/O-freie Konvertierungs- und Aufteilungslogik. Enthält `normalize_text`, `iter_math_spans`/`MathSpan` (der **einzige** Formel-Scanner: `split_formulas`, `convert_deepseek_latex_syntax`, `_protect_math` und `_atomic_ranges` sind dünne Aufrufer — seit v2.10.0, Audit O-3), `validate_latex_braces`, `parse_pipe_table`, `markdown_to_html`, `markdown_to_rich_markdown`, `build_messages`, `chunk_text` sowie seit v2.7.0 `unwrap_redirect_url`/`_normalize_links` (Redirect-URLs → Ziel-URL, Link-Artefakt-Glättung) und seit v2.15.0 `clean_url`/`clean_gemini_links` (reine URLs: `&amp;`-Dekodierung + Redirect + Tracking-Parameter-Entfernung, Gemini-Artefakte; Regelwerk und Vergleich: [FORMATTING.md](FORMATTING.md) §4). |
 | `telegram_formatter/sender.py` | Versand einzelner `TelegramMessage`-Objekte via HTTP (`sendMessage`/`sendRichMessage`). Lazy-Import von `requests`. |
 | `telegram_formatter/cli.py` | Kommandozeilen-Einstieg (Datei/STDIN → Payloads anzeigen oder senden). |
 | `telegram_formatter/app.py` | Flask-Weboberfläche mit Editor, Live-Vorschau und den Routen `/api/convert`, `/api/send` (geteilter Bot, gepinnter Chat; aus dem Browser nur mit `TELEGRAM_FORMATTER_SHARED_WEB_SEND` + `confirm_public`) sowie `/api/byob/*` (eigene Bot-Sessions: `session`, `discover`, `send`, `status`, `close` — botkit-Betriebsmodus B, seit v2.2.0). Hält außerdem die ENV-Konfiguration der Instanz (`_env_flag`/`_env_int` mit lautem Fallback) und seit v2.9.0 die Offenlegung des geteilten Ziel-Kanals (`normalize_public_chat_url`, `_shared_channel` — eine Quelle für Template, `app.js` und das `via`-Feld von `/api/send`). Templates liegen in `telegram_formatter/templates/`. |
@@ -92,7 +92,11 @@ Parameter ein. `utils.py` importiert weder `flask` noch `requests` noch
      (`_normalize_links`, v2.7.0): bekannte Redirect-URLs
      (`google.com/url?q=…`, `youtube.com/redirect?q=…`, …) werden über
      `unwrap_redirect_url` auf ihre Ziel-URL entpackt, Such-KI-Artefakte
-     (`[text]([label](url))`) geglättet. Code und Formeln sind dabei über
+     (`[text]([label](url))`) geglättet. Seit v2.15.0 läuft jedes Ziel
+     zusätzlich durch `clean_url` (`&amp;` → `&`, Tracking-Parameter wie
+     Geminis `ra`/`xstg` entfernt) und Geminis doppelte/duplizierte
+     Zitat-Hüllen werden bis zum Fixpunkt geglättet — nur reine URLs
+     erreichen die Payloads. Code und Formeln sind dabei über
      Platzhalter geschützt.
 3. **Versand** (`telegram_formatter/sender.py::send_message`): wählt
    `sendRichMessage` bzw. `sendMessage` anhand von `message.kind`.

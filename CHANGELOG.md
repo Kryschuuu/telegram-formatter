@@ -6,8 +6,71 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-10-25
+
+Minor-Release: **Gemini-Link-Bereinigung — nur noch reine URLs.** Gemini
+hängt jetzt an jeden zitierten Link die Tracking-IDs `&ra=gemini` und
+`&xstg=<Token>` (das Token allein ~1 500 Zeichen) und wickelt Zeitstempel-
+Zitate doppelt (`[[00:05]([url&amp;…](url&…))]`). Im gemeldeten Beispiel
+(Fußbad-Anleitung mit ~20 Video-Zitaten) wurden die Nachrichten dadurch
+unübersichtlich lang und unnötig oft geteilt. Der Formatter entfernt die
+Gemini-Tags jetzt automatisch auf beiden Pfaden und lässt nur die reine
+URL stehen: `[00:05](https://www.youtube.com/watch?v=…&t=5)`. Gemessen am
+Beispiel-Ausschnitt (drei Zitate + Video-Zeile) schrumpft die HTML-Payload
+von 5 007 auf 452 Zeichen; derselbe Text in voller Länge passt statt in
+16 Nachrichten zerteilt wieder in **eine**. Review:
+[`peer-review/2026-10_GEMINI-LINK-CLEANUP.md`](peer-review/2026-10_GEMINI-LINK-CLEANUP.md).
+
+### Added
+
+- **`telegram_formatter.utils.clean_url(url)` — reduziert eine URL auf
+  ihre reine Form, in dieser Reihenfolge:** (1) HTML-escapte `&`
+  (`&amp;`, `&#38;`, `&#x26;`) dekodieren, (2) bekannten Redirect
+  entpacken (`unwrap_redirect_url`, seit v2.7.0), (3) Tracking-Parameter
+  entfernen: Geminis `ra=gemini` und `xstg=…`, `utm_*` sowie die Klick-/
+  Kampagnen-IDs `fbclid`, `gclid`, `dclid`, `gbraid`, `wbraid`,
+  `msclkid`, `mc_cid`, `mc_eid`, `igshid`. Funktionale Parameter (`v`,
+  `t`, `list`, `index`, `q`, `search_query`, `id`, …) bleiben inklusive
+  Reihenfolge und Prozent-Kodierung byte-genau erhalten — die Query wird
+  roh an `&` zerlegt, ohne Treffer gibt es kein Re-Encoding. Bewusste
+  Grenzen: `ra` wird nur mit dem Wert `gemini` entfernt (generischer
+  Name), und generische Parameter wie `si`/`ref` bleiben, weil sie auf
+  manchen Seiten funktional sein können — lieber ein Parameter zu viel
+  als ein kaputter Link (Regelwerk: `docs/FORMATTING.md` §4).
+- **`telegram_formatter.utils.clean_gemini_links(text)` — die vom Nutzer
+  gewünschte Säuberungsfunktion für ganzen Markdown-Text:** glättet
+  doppelt gewickelte Gemini-Zitate (`[[00:05]([u](u))]` → `[00:05](u)`)
+  und duplizierte Links (`[[text](w)](u](w))` → `[text](u)`), dekodiert
+  `&amp;` und führt jedes Linkziel, jeden URL-förmigen Linktext und jede
+  nackte URL durch `clean_url()`. Codeblöcke/Inline-Code bleiben 1:1
+  unverändert. Beide Funktionen sind aus dem Paket-Root exportiert
+  (`from telegram_formatter import clean_gemini_links, clean_url`) und
+  eigenständig nutzbar; `build_messages()` und die Konverter wenden
+  dieselbe Bereinigung automatisch an (`_normalize_links`).
+- **Doku:** `docs/FORMATTING.md` §4 (Regelwerk + Garantien/Grenzen),
+  README (Feature + Bibliotheksbeispiel), `docs/API.md` (`/api/convert`),
+  FAQ-Satz in der Web-UI, Peer-Review
+  `peer-review/2026-10_GEMINI-LINK-CLEANUP.md`, `MIGRATION.md` §16.
+
 ### Fixed
 
+- **Gemini-Tracking-URLs standen 1:1 in den Payloads** — `ra=gemini` und
+  das ~1 500 Zeichen lange `xstg`-Token blieben je Zitat erhalten
+  (Reproduktion: 9 625 Zeichen Eingabe → 5 007 Zeichen HTML statt 452;
+  16 Nachrichten statt 1). Jetzt: nur die reine URL (s. Added).
+- **Die duplizierte „Video Link“-Zeile hinterließ Link-Müll in der
+  Nachricht.** Aus `[[https://…](https://www.google.com/search?q=…)](https://…](…))`
+  wurde `…</a>(https://…](https://…))` (HTML) bzw. derselbe Anhang in
+  Rich Markdown. Das neue Artefakt-Muster glättet sie zu einem Link auf
+  die reine Shorts-URL.
+- **`&amp;` aus LLM-Web-Exporten wurde doppelt escaped bzw. zerstörte
+  Parameter:** In `[00:00](…&amp;t=7)` entstand im HTML-Pfad
+  `href="…&amp;amp;t=7"` (Parameter hieß `amp;t`, der Zeitstempel ging
+  verloren), im Rich-Pfad blieb `&amp;` stehen; Prosa wie „Wirkungen
+  &amp; Vorteile“ wurde wörtlich mit „&amp;“ zugestellt. `&amp;` wird
+  jetzt vor der Link-Normalisierung zu `&` dekodiert (Code ist zu diesem
+  Zeitpunkt platzhaltergeschützt). Nebeneffekt: Ein `&amp;` als
+  Zeilentrenner in exportierten Formeln wird wieder zum LaTeX-`&`.
 - **`telegram_formatter/app.py`: `_RATE_LAST_PRUNE`-Initialisierung auf `None`
   statt `0.0`.** `time.monotonic()` besitzt keinen definierten Referenzpunkt und
   zählt unter Linux die Sekunden seit Systemstart. Auf frisch gebooteten
@@ -27,10 +90,54 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 
 ### Changed
 
+- Version `2.14.1` → **`2.15.0`**.
+- **`utils._normalize_links` läuft jetzt über einen einzigen
+  Reinigungs-Einstieg (`clean_url`) statt direkt über
+  `unwrap_redirect_url`** (Linkziele, URL-Labels und nackte URLs); die
+  Artefakt-Glättung iteriert bis zum Fixpunkt (Kappe:
+  `_LINK_CLEANUP_PASSES = 5`, jede Ersetzung entfernt mindestens eine
+  Klammer-Ebene). Interne Umbenennungen ohne API-Wirkung:
+  `_clean_redirect_label` → `_clean_link_label`,
+  `_unwrap_bare_url` → `_clean_bare_url`. `unwrap_redirect_url` selbst
+  bleibt unverändert (nur Redirects, keine Parameter-Politik).
 - **CI (`bot-review.yml`):** `actions/setup-node` von `v7.0.0` auf `v7.1.0`
   (`949feb2413d6458794dcd2491c4babbbce0c15c1`) aktualisiert (Dependabot PR #27).
 - **GitHub-Labels:** Die in `.github/dependabot.yml` referenzierten Labels
   `dependencies`, `ci` und `automation` im Repository angelegt.
+
+### Tests
+
+- **58 neue Tests** (750 gesamt, vorher 692; davon 55 in
+  `tests/test_utils.py`): `TestCleanUrl` (Tracking-Set inkl.
+  Wert-Bedingung für `ra`, Kodierungs-/Reihenfolgen-Treue, Fragment,
+  Nicht-http(s)-Grenzen, Redirect+Tracking-Kombination, Idempotenz),
+  `TestCleanGeminiLinks` (Zeitstempel-/Text-Labels, fremde Hosts,
+  duplizierte Video-Zeile, Dreifach-Wicklung, Code-Schutz, Längen-
+  Kollaps), `TestGeminiLinksInMessages` (das Nutzerbeispiel auf beiden
+  Pfaden exakt, 20-Zitate-Regession → 1 Nachricht, Zitat in
+  Tabellen-Zelle, `&amp;` in Formel), `TestGeminiCleanupPerformance`
+  (30 Zitate ≈ 88 000 Zeichen und 50 000-Klammern-Sturm je < 3 s —
+  kein quadratisches Backtracking durch die neue Fixpunkt-Schleife),
+  dazu Vorschau-Parität (`tests/test_preview.py`, +2) und
+  `POST /api/convert` End-to-End (`tests/test_app.py`, +1). Versions-
+  Pins in `test_public_demo_chat.py`/`test_split_64000.py` auf `2.15.0`
+  nachgezogen. `ruff check` fehlerfrei, `scripts/check_build.py` grün.
+
+### Notes
+
+- **Zeitstempel-Zitate bleiben Links.** Entfernt werden die Tags, nicht
+  die Zitate: `[00:05]` bleibt klickbar und springt per `t=5` an die
+  richtige Stelle. Wiederholt der Linktext die URL, steht dort die reine
+  URL (bisherige Konvention seit v2.7.0).
+- **Kein Raten bei unbekannten Deformationen:** Geglättet werden nur die
+  belegten Artefakt-Formen; verwaiste `](url)`-Fragmente fremder Herkunft
+  werden nicht gelöscht (kein stiller Textverlust).
+- **Follow-up (nicht in diesem Release):** Ein älterer, von dieser
+  Änderung unberührter Befund wurde beim Messen sichtbar — 50 000
+  eckige Klammern kosten die Konverter ~10 s (vorher wie nachher
+  identisch; die neue Stufe selbst braucht 0,003 s). Ursache ist das
+  unbeschränkte `[^\]]+` in den Link-Schritten von HTML-/Rich-Pfad;
+  Fundstelle und Reproduktion stehen im Peer-Review als Follow-up.
 
 ## [2.14.1] - 2026-09-28
 
