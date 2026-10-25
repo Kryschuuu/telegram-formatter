@@ -68,7 +68,7 @@ import re
 import unicodedata
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, unquote_plus, urlsplit, urlunsplit
 
 # ---------------------------------------------------------------------------
 # Konstanten (Telegram-Limits)
@@ -586,7 +586,7 @@ def _safe_fence_lang(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Redirect-URLs: Entpacken auf die eigentliche Ziel-URL
+# Redirect-URLs entpacken & reine URLs (Link-Bereinigung)
 # ---------------------------------------------------------------------------
 # Suchmaschinen, Videoplattformen und soziale Netzwerke leiten externe Links
 # über eigene Redirect-Adressen (google.com/url?q=…, youtube.com/redirect?q=…,
@@ -594,6 +594,15 @@ def _safe_fence_lang(raw: str) -> str:
 # wodurch die eigentliche Ziel-URL nur percent-kodiert in einem
 # Query-Parameter sichtbar ist. unwrap_redirect_url() holt das Ziel heraus,
 # damit in Telegram-Nachrichten lesbare Links statt Tracking-Adressen stehen.
+#
+# Seit v2.15.0 kommt mit clean_url() der zweite Schritt dazu: Gemini hängt
+# an jeden zitierten Link Tracking-IDs (`&ra=gemini&xstg=<Token>`, das
+# Token allein ~1 500 Zeichen) und verpackt Zeitstempel-Zitate doppelt
+# (`[[00:00]([url&amp;…](url&…))]`). clean_url() entfernt die Tags und
+# lässt nur die reine URL stehen; clean_gemini_links() wendet die ganze
+# Bereinigung (Artefakte glätten, `&amp;` dekodieren, Ziele reinigen) auf
+# einen Markdown-Text an — die Konverter tun das über _normalize_links()
+# automatisch.
 
 
 def _looks_like_http_url(value: str) -> bool:
@@ -744,19 +753,145 @@ def unwrap_redirect_url(url: str) -> str:
     return current
 
 
-def _clean_redirect_label(label: str, url: str, target: str) -> str:
-    """Linktext, der nur die (Redirect-)URL wiederholt, wird durch die
-    Ziel-URL ersetzt — die Nachricht zeigt dann das echte Ziel."""
+# ---------------------------------------------------------------------------
+# Reine URLs: HTML-Entitäten dekodieren + Tracking-Parameter entfernen
+# ---------------------------------------------------------------------------
+# Seit v2.15.0: Gemini hängt an jeden zitierten Link zwei Tracking-Anhänge —
+# ``ra=gemini`` (Referrer-Attribution) und ``xstg=<Token>`` (ein ~1 500
+# Zeichen langes Klick-Token). Beides ist für das Ziel bedeutungslos, bläht
+# aber jede Payload auf (20 Zitate ≈ 30 000 Zeichen Ballast — mehr als eine
+# ganze Rich Message) und sprengt im Rohtext jede Übersicht. clean_url()
+# entfernt solche Parameter und lässt nur die reine URL stehen; funktionale
+# Parameter (``v``, ``t``, ``list``, ``q``, …) bleiben unangetastet.
+
+#: HTML-escaptes Kaufmanns-Und (``&amp;``, ``&#38;``, ``&#x26;``).
+#: LLM-Exporte (Gemini kopiert aus der Web-UI) liefern Query-Strings wie
+#: ``?v=…&amp;t=5`` — undekodiert hieße der zweite Parameter ``amp;t`` und
+#: ginge verloren; im HTML-Pfad entstünde obendrein ``&amp;amp;``.
+_AMP_RE = re.compile(r"&(?:amp|#0*38|#x0*26);", re.IGNORECASE)
+
+
+def _decode_amp(text: str) -> str:
+    """Dekodiert HTML-escapte ``&``-Zeichen (``&amp;`` u. Ä.) zu ``&``."""
+    return _AMP_RE.sub("&", text)
+
+
+#: Query-Parameter, die ausschließlich Tracking/Attribution dienen und nie
+#: Inhalt adressieren (Auswahl wie bei ClearURLs & Co., bewusst konservativ:
+#: generische Namen wie ``si`` oder ``ref`` fehlen, weil sie auf manchen
+#: Seiten funktional sein können).
+_TRACKING_PARAMS = frozenset(
+    {
+        "xstg",  # Gemini/Google-KI-Klicktoken (~1 500 Zeichen)
+        "fbclid",  # Facebook Click-ID
+        "gclid",  # Google Ads Click-ID
+        "dclid",  # Google Display Click-ID
+        "gbraid",  # Google Ads (iOS)
+        "wbraid",  # Google Ads (Web→App)
+        "msclkid",  # Microsoft Ads Click-ID
+        "mc_cid",  # Mailchimp Kampagnen-ID
+        "mc_eid",  # Mailchimp Empfänger-ID
+        "igshid",  # Instagram Share-ID
+    }
+)
+
+#: Präfixe reiner Tracking-Parameter (``utm_source``, ``utm_medium``, …).
+_TRACKING_PARAM_PREFIXES = ("utm_",)
+
+#: Parameter, die nur bei bestimmten Werten Tracking sind: ``ra`` ist ein
+#: generischer Name — entfernt wird er ausschließlich als Gemini-Attribution
+#: (``ra=gemini``), nicht bei fremden Werten.
+_TRACKING_PARAM_VALUES: dict[str, frozenset[str]] = {"ra": frozenset({"gemini"})}
+
+
+def _is_tracking_param(name: str, value: str) -> bool:
+    """True, wenn der Query-Parameter reines Tracking ist (s. o.)."""
+    lowered = name.lower()
+    if lowered in _TRACKING_PARAMS or lowered.startswith(_TRACKING_PARAM_PREFIXES):
+        return True
+    tracked_values = _TRACKING_PARAM_VALUES.get(lowered)
+    return tracked_values is not None and value.lower() in tracked_values
+
+
+def _strip_tracking_params(url: str) -> str:
+    """Entfernt Tracking-Parameter aus dem Query-String von ``url``.
+
+    Verlustfrei: Die Query wird roh an ``&`` zerlegt, nur verworfene
+    Segmente fallen weg — Reihenfolge, Percent-Kodierung und ``+`` der
+    übrigen Parameter bleiben byte-genau erhalten. Ohne Treffer wird die
+    Eingabe unverändert zurückgegeben (kein Re-Encoding).
+    """
+    if not _looks_like_http_url(url):
+        return url
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if not parts.query:
+        return url
+    kept: list[str] = []
+    dropped = False
+    for segment in parts.query.split("&"):
+        raw_name, _, raw_value = segment.partition("=")
+        if _is_tracking_param(unquote_plus(raw_name), unquote_plus(raw_value)):
+            dropped = True
+            continue
+        kept.append(segment)
+    if not dropped:
+        return url
+    return urlunsplit(parts._replace(query="&".join(kept)))
+
+
+def clean_url(url: str) -> str:
+    """
+    Reduziert ``url`` auf die reine Ziel-URL (seit v2.15.0).
+
+    Drei Schritte, in dieser Reihenfolge:
+
+    1. **HTML-Entitäten dekodieren** — ``&amp;``/``&#38;``/``&#x26;`` werden
+       zu ``&`` (Gemini-Exporte liefern escapete Query-Strings).
+    2. **Redirect entpacken** — :func:`unwrap_redirect_url`.
+    3. **Tracking-Parameter entfernen** — Gemini-Anhänge (``ra=gemini``,
+       ``xstg=…``), ``utm_*`` und gängige Klick-IDs (``fbclid``, ``gclid``,
+       …) fallen weg; funktionale Parameter (``v``, ``t``, ``list``, ``q``,
+       ``id``, …) bleiben inklusive Reihenfolge und Kodierung erhalten::
+
+           clean_url("https://www.youtube.com/watch?v=abc&ra=gemini&xstg=TOKEN&t=5")
+           -> "https://www.youtube.com/watch?v=abc&t=5"
+
+    Keine http(s)-URL oder nichts zu bereinigen -> Eingabe unverändert
+    (bis auf ``strip()``). Die Funktion ist idempotent.
+    """
+    return _strip_tracking_params(unwrap_redirect_url(_decode_amp(url.strip())))
+
+
+def _clean_link_label(label: str, url: str, target: str) -> str:
+    """Linktext bereinigen: Wiederholt er nur die (Wrapper-/Tracking-)URL,
+    wird die reine Ziel-URL angezeigt; ist er selbst eine URL, wird er wie
+    ein Linkziel gereinigt (:func:`clean_url`)."""
     stripped = label.strip()
     if stripped == url:
         return target
     if stripped.lower().startswith(("http://", "https://")):
-        unwrapped = unwrap_redirect_url(stripped)
-        if unwrapped != stripped:
-            return unwrapped
+        cleaned = clean_url(stripped)
+        if cleaned != stripped:
+            return cleaned
     return label
 
 
+#: Gemini-Zitat (seit v2.15.0): doppelt verschachtelter Zeitstempel-Link
+#: ``[[00:00]([<url mit &amp;>](<url>))]`` — wird zu ``[00:00](<url>)``;
+#: die innere Label-URL ist nur die (HTML-escapte) Wiederholung des Ziels.
+_GEMINI_DOUBLE_NESTED_RE = re.compile(
+    r"\[\[([^\[\]]+)\]\(\[[^\[\]]*\]\((https?://[^)\s]+)\)\)\]"
+)
+#: Gemini-Artefakt (seit v2.15.0): duplizierter Link
+#: ``[[<text>](<wrapper>)](<url>](<wrapper>))`` — derselbe Link zweimal,
+#: ineinander kopiert; wird zu ``[<text>](<wrapper>)`` (der Wrapper wird
+#: im Link-Durchlauf danach aufgelöst).
+_GEMINI_DUPLICATED_LINK_RE = re.compile(
+    r"\[\[([^\[\]]+)\]\((https?://[^)\s]+)\)\]\([^)\]]*\]\((https?://[^)\s]+)\)\)"
+)
 #: Verschachtelter Link ``[text]([label](url))`` — ungültiges Markdown,
 #: typisches Artefakt von Such-KI-Zitaten; wird zu ``[text](url)``.
 _NESTED_LINK_RE = re.compile(r"\[([^\[\]]+)\]\(\[[^\[\]]*\]\((https?://[^)\s]+)\)\)")
@@ -769,15 +904,21 @@ _BARE_URL_RE = re.compile(r"https?://[^\s\[\]()<>\"'|`]+")
 #: Satzzeichen, die im Fließtext direkt an einer URL kleben können.
 _TRAILING_PUNCT = ".,;:!?…"
 
+#: Obergrenze der Glättungsdurchläufe in :func:`_normalize_links`. Jede
+#: Ersetzung entfernt mindestens eine Klammer-Ebene, der Prozess endet
+#: also von selbst; die Kappe schützt nur vor pathologischen Eingaben.
+_LINK_CLEANUP_PASSES = 5
 
-def _unwrap_bare_url(m: re.Match) -> str:
-    """Ersetzt nackte Redirect-URLs im Fließtext durch ihre Ziel-URL."""
+
+def _clean_bare_url(m: re.Match) -> str:
+    """Ersetzt nackte URLs im Fließtext durch ihre reine Form
+    (:func:`clean_url`); anhaftende Satzzeichen bleiben Satzzeichen."""
     url = m.group(0)
     trail = ""
     while url and url[-1] in _TRAILING_PUNCT:
         trail = url[-1] + trail
         url = url[:-1]
-    target = unwrap_redirect_url(url)
+    target = clean_url(url)
     return target + trail if target != url else m.group(0)
 
 
@@ -785,26 +926,77 @@ def _normalize_links(text: str) -> str:
     """
     Bereinigt Links vor der eigentlichen Konvertierung.
 
-    1. Link-Artefakte von Such-KIs werden geglättet: verschachtelte Links
-       ``[text]([label](url))`` und Klammer-Wicklungen ``[[text](url)]``
-       werden zu ``[text](url)``.
-    2. Redirect-URLs (:func:`unwrap_redirect_url`) werden in Link-Zielen,
-       Link-Texten und nackten URLs auf die Ziel-URL entpackt.
+    1. HTML-escapte ``&`` (``&amp;`` aus LLM-Web-Exporten) werden
+       dekodiert — in URLs (sonst hieße ein Parameter ``amp;t``) wie in
+       Prosa (sonst stünde dort wörtlich „&amp;“). Code ist zu diesem
+       Zeitpunkt bereits per Platzhalter geschützt und bleibt unberührt.
+    2. Link-Artefakte von Such-/Chat-KIs werden bis zum Fixpunkt
+       geglättet: Gemini-Zitate ``[[00:00]([url](url))]`` und duplizierte
+       Links ``[[text](w)](url](w))`` (seit v2.15.0) sowie verschachtelte
+       Links ``[text]([label](url))`` und Klammer-Wicklungen
+       ``[[text](url)]`` werden zu ``[text](url)``.
+    3. Jedes Linkziel, jeder URL-förmige Linktext und jede nackte URL
+       wird über :func:`clean_url` auf die reine URL reduziert
+       (Redirect entpackt, Tracking-Parameter wie Geminis ``ra``/``xstg``
+       entfernt).
 
     Muss **vor** dem HTML-Escaping laufen (damit ``&`` in Query-Strings
     noch als Trenner lesbar ist) und **nach** dem Schutz von Code/Formeln
     (URLs in Codeblöcken bleiben 1:1 stehen).
     """
-    text = _NESTED_LINK_RE.sub(lambda m: f"[{m.group(1)}]({m.group(2)})", text)
-    text = _WRAPPED_LINK_RE.sub(lambda m: m.group(1), text)
+    text = _decode_amp(text)
+    for _ in range(_LINK_CLEANUP_PASSES):
+        cleaned = _GEMINI_DUPLICATED_LINK_RE.sub(
+            lambda m: f"[{m.group(1)}]({m.group(2)})", text
+        )
+        cleaned = _GEMINI_DOUBLE_NESTED_RE.sub(
+            lambda m: f"[{m.group(1)}]({m.group(2)})", cleaned
+        )
+        cleaned = _NESTED_LINK_RE.sub(lambda m: f"[{m.group(1)}]({m.group(2)})", cleaned)
+        cleaned = _WRAPPED_LINK_RE.sub(lambda m: m.group(1), cleaned)
+        if cleaned == text:
+            break
+        text = cleaned
 
     def _link_repl(m: re.Match) -> str:
         label, url = m.group(1), m.group(2)
-        target = unwrap_redirect_url(url)
-        return f"[{_clean_redirect_label(label, url, target)}]({target})"
+        target = clean_url(url)
+        return f"[{_clean_link_label(label, url, target)}]({target})"
 
     text = _MARKDOWN_LINK_RE.sub(_link_repl, text)
-    return _BARE_URL_RE.sub(_unwrap_bare_url, text)
+    return _BARE_URL_RE.sub(_clean_bare_url, text)
+
+
+def clean_gemini_links(text: str) -> str:
+    """
+    Entfernt Gemini-/LLM-Link-Artefakte aus Markdown-Text und lässt nur
+    reine URLs stehen (seit v2.15.0).
+
+    Gemini hängt an jeden zitierten Link Tracking-IDs
+    (``…&ra=gemini&xstg=<~1 500 Zeichen Token>``) und wickelt Zeitstempel-
+    Zitate doppelt. Aus ::
+
+        [[00:05]([https://…/watch?v=…&amp;ra=gemini&amp;xstg=…&amp;t=5](https://…/watch?v=…&ra=gemini&xstg=…&t=5))]
+
+    wird ``[00:05](https://…/watch?v=…&t=5)`` — Zeitstempel und Ziel
+    bleiben, der Ballast (doppelte Hüllen, ``&amp;``, Tracking) fällt weg.
+
+    Im Einzelnen: doppelt/dupliziert verschachtelte Links werden
+    geglättet, ``&amp;`` wird zu ``&``, jedes Linkziel und jede nackte
+    URL läuft durch :func:`clean_url` (Redirect-Entpacken inklusive).
+    Codeblöcke und Inline-Code bleiben — wie in den Konvertern —
+    unverändert. Die Funktion ist eigenständig nutzbar (reine
+    Textbereinigung ohne Telegram-Konvertierung); :func:`build_messages`
+    und die Konverter wenden dieselbe Bereinigung automatisch an
+    (:func:`_normalize_links`).
+    """
+    text = normalize_text(text)
+    store = _PlaceholderStore()
+    # Code 1:1 schützen (URLs/Tokens darin sind Inhalt, keine Links) —
+    # dieselben Muster wie in den Konvertern, hier ohne Übersetzung.
+    text = _FENCE_BLOCK_RE.sub(lambda m: store(m.group(0)), text)
+    text = re.sub(r"`[^`\n]+`", lambda m: store(m.group(0)), text)
+    return store.restore(_normalize_links(text))
 
 
 # ---------------------------------------------------------------------------
@@ -821,7 +1013,9 @@ def markdown_to_html(text: str) -> str:
     wiederhergestellt.
 
     Bekannte Redirect-/Tracking-URLs (z. B. ``google.com/url?q=…``) werden
-    über :func:`_normalize_links` auf ihre Ziel-URL entpackt.
+    über :func:`_normalize_links`/:func:`clean_url` auf die reine Ziel-URL
+    reduziert (Redirect entpackt, Tracking-Parameter — z. B. Geminis
+    ``ra``/``xstg`` — entfernt, Gemini-Link-Artefakte geglättet).
     """
     text = normalize_text(text)
     store = _PlaceholderStore()
@@ -851,9 +1045,9 @@ def markdown_to_html(text: str) -> str:
     #    Inhalt darf durch die folgenden Regexes nicht zerstört werden).
     text = _protect_math(text, store)
 
-    # 3b. Links normalisieren: Redirect-URLs auf die Ziel-URL entpacken und
-    #     Such-KI-Link-Artefakte glätten. Läuft vor dem Escapen, damit "&"
-    #     in Query-Strings noch als Trenner lesbar ist.
+    # 3b. Links normalisieren: Redirect-URLs entpacken, Tracking-Parameter
+    #     entfernen und KI-Link-Artefakte (Gemini & Co.) glätten. Läuft vor
+    #     dem Escapen, damit "&" in Query-Strings noch als Trenner lesbar ist.
     text = _normalize_links(text)
 
     # 4. Verbleibenden Text escapen.
@@ -989,7 +1183,9 @@ def markdown_to_rich_markdown(text: str) -> str:
     bedeutet. Tabellen werden zusätzlich in gültige GFM-Form normalisiert.
 
     Bekannte Redirect-/Tracking-URLs (z. B. ``youtube.com/redirect?q=…``)
-    werden über :func:`_normalize_links` auf ihre Ziel-URL entpackt.
+    werden über :func:`_normalize_links`/:func:`clean_url` auf die reine
+    Ziel-URL reduziert (Redirect entpackt, Tracking-Parameter — z. B.
+    Geminis ``ra``/``xstg`` — entfernt, Gemini-Link-Artefakte geglättet).
     """
     text = normalize_text(text)
     store = _PlaceholderStore()
@@ -1010,8 +1206,9 @@ def markdown_to_rich_markdown(text: str) -> str:
     #    (\(...\) -> $...$, \[...\] -> $$...$$). Code ist bereits geschützt.
     text = convert_deepseek_latex_syntax(text)
 
-    # 2b. Links normalisieren: Redirect-URLs auf die Ziel-URL entpacken und
-    #     Such-KI-Link-Artefakte glätten (vor Unterstreichungs-/Link-Schutz).
+    # 2b. Links normalisieren: Redirect-URLs entpacken, Tracking-Parameter
+    #     entfernen und KI-Link-Artefakte (Gemini & Co.) glätten (vor
+    #     Unterstreichungs-/Link-Schutz).
     text = _normalize_links(text)
 
     # 3. Unterstreichen __x__ -> <u>x</u> — URLs dürfen dabei nicht

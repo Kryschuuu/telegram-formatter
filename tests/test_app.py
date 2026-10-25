@@ -164,6 +164,22 @@ def test_convert_rich_math(client):
     assert "markdown" in data["messages"][0]["payload"]["rich_message"]
 
 
+def test_convert_cleans_gemini_tracking_links(client):
+    """v2.15.0: Gemini-Zitate kommen als reine URLs aus der API —
+    Tracking (`ra=gemini`, `xstg=…`) und doppelte Link-Hülle sind weg."""
+    xstg = "CAMSiA0VhArM" + "A" * 1400
+    raw = f"https://www.youtube.com/watch?v=72P-zstEqps&ra=gemini&xstg={xstg}&t=5"
+    cite = f"[[00:05]([{raw.replace('&', '&amp;')}]({raw}))]"
+    resp = client.post("/api/convert", json={"text": f"Fußbad {cite}."})
+    data = resp.get_json()
+    assert data["count"] == 1
+    text = data["messages"][0]["payload"]["text"]
+    assert '<a href="https://www.youtube.com/watch?v=72P-zstEqps&amp;t=5">' in text
+    assert "xstg" not in text and "ra=" not in text
+    # Auch die Vorschau (dieselbe Payload) ist frei vom Token.
+    assert "xstg" not in str(data.get("preview", ""))
+
+
 def test_convert_empty_text(client):
     resp = client.post("/api/convert", json={"text": "   "})
     assert resp.get_json()["count"] == 0

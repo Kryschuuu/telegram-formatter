@@ -27,14 +27,21 @@ Bibliotheksnutzung::
 from __future__ import annotations
 
 from telegram_formatter.sender import SendError, send_message
-from telegram_formatter.utils import TelegramMessage, build_messages
+from telegram_formatter.utils import (
+    TelegramMessage,
+    build_messages,
+    clean_gemini_links,
+    clean_url,
+)
 
-__version__ = "2.14.1"
+__version__ = "2.15.0"
 
 __all__ = [
     "SendError",
     "TelegramMessage",
     "__version__",
     "build_messages",
+    "clean_gemini_links",
+    "clean_url",
     "send_message",
 ]
