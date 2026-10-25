@@ -4,6 +4,34 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 [Semantic Versioning](https://semver.org/) und
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`telegram_formatter/app.py`: `_RATE_LAST_PRUNE`-Initialisierung auf `None`
+  statt `0.0`.** `time.monotonic()` besitzt keinen definierten Referenzpunkt und
+  zählt unter Linux die Sekunden seit Systemstart. Auf frisch gebooteten
+  GitHub-Actions-VMs mit einer Uptime unter `_RATE_PRUNE_INTERVAL` (`60.0 s`,
+  z. B. `53.6 s` in PR #27) galt `now - 0.0 < 60.0`, wodurch der erste
+  Prune-Sweep für verwaiste Rate-Limit-Eimer übersprungen wurde und die drei
+  Prune-Tests in `tests/test_shared_channel.py` im CI fehlschlugen. Mit `None`
+  als Initialzustand läuft der erste Sweep beim ersten Schwellwert-Übertritt
+  unabhängig vom Uptime-Nullpunkt; die Intervall-Drosselung greift erst ab
+  diesem Lauf (+2 Regressionstests für `monotonic() == 0.0` und `53.6`).
+- **`.github/workflows/bot-review.yml`: `pull_request.paths` vervollständigt.**
+  Seit der Paket-Migration (v2.0.0) deckte der Pfadfilter nur das Root-Shim
+  `app.py` sowie `telegram_formatter/botkit/**` und `telegram_formatter/botctl.py`
+  ab — PRs gegen `telegram_formatter/app.py`, `utils.py`, `sender.py`,
+  `preview.py`, `tests/**`, `scripts/**` oder `package*.json` starteten den
+  Workflow nicht.
+
+### Changed
+
+- **CI (`bot-review.yml`):** `actions/setup-node` von `v7.0.0` auf `v7.1.0`
+  (`949feb2413d6458794dcd2491c4babbbce0c15c1`) aktualisiert (Dependabot PR #27).
+- **GitHub-Labels:** Die in `.github/dependabot.yml` referenzierten Labels
+  `dependencies`, `ci` und `automation` im Repository angelegt.
+
 ## [2.14.1] - 2026-09-28
 
 Patch-Release: der Render-Blueprint wird gehärtet, und seine Abhängigkeit

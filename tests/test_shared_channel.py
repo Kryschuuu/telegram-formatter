@@ -39,7 +39,7 @@ def client(monkeypatch):
     monkeypatch.setattr(app_module, "SENDS_PER_MINUTE", 0)
     monkeypatch.setattr(app_module, "CONVERTS_PER_MINUTE", 0)
     app_module._RATE_HITS.clear()
-    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", 0.0)
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", None)
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as c:
         yield c
@@ -427,7 +427,7 @@ def test_rate_limited_prunes_when_buckets_pile_up(client, monkeypatch):
     unbegrenztes Speicherwachstum.
     """
     monkeypatch.setattr(app_module, "CONVERTS_PER_MINUTE", 60)
-    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", 0.0)
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", None)
     now = time.monotonic()
     for i in range(app_module._RATE_PRUNE_THRESHOLD + 10):
         # Verwaist: leer ODER älter als jedes benutzte Fenster.
@@ -466,7 +466,7 @@ def test_prune_sweep_is_rate_limited(client, monkeypatch):
     Iterieren unter dem globalen Lock — ein Serialisierungspunkt ueber alle
     Threads. Der Sweep darf hoechstens einmal je `_RATE_PRUNE_INTERVAL` laufen.
     """
-    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", 0.0)
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", None)
     now = time.monotonic()
     for i in range(app_module._RATE_PRUNE_THRESHOLD + 10):
         app_module._RATE_HITS[("convert", f"10.1.{i // 250}.{i % 250}")] = deque()
@@ -484,4 +484,46 @@ def test_prune_sweep_is_rate_limited(client, monkeypatch):
         now + app_module._RATE_PRUNE_INTERVAL + 1.0, window_seconds=60.0
     )
     assert len(app_module._RATE_HITS) < app_module._RATE_PRUNE_THRESHOLD
+    app_module._RATE_HITS.clear()
+
+
+@pytest.mark.parametrize("boot_monotonic", [0.0, 53.6])
+def test_prune_sweep_works_on_freshly_booted_host(client, monkeypatch, boot_monotonic):
+    """Regression CI (PR #27): ``_RATE_LAST_PRUNE = 0.0`` versagte bei ``uptime < 60 s``.
+
+    Auf frisch gestarteten GitHub-Actions-VMs liegt ``time.monotonic()`` beim
+    Testlauf oft unter ``_RATE_PRUNE_INTERVAL`` (im fehlgeschlagenen Lauf:
+    ``53.6189 s``). Mit ``0.0`` als Sentinel galt ``53.6 - 0.0 < 60.0``, sodass
+    der erste Sweep komplett übersprungen wurde. ``None`` als Initialwert räumt
+    beim ersten Schwellwert-Übertritt unabhängig vom Uptime-Nullpunkt auf und
+    drosselt erst danach relativ zu diesem ersten Lauf.
+    """
+    monkeypatch.setattr(app_module, "CONVERTS_PER_MINUTE", 60)
+    monkeypatch.setattr(app_module, "_RATE_PRUNE_THRESHOLD", 10)
+    monkeypatch.setattr(app_module, "_RATE_LAST_PRUNE", None)
+    monkeypatch.setattr(app_module.time, "monotonic", lambda: boot_monotonic)
+
+    for i in range(25):
+        hits = deque() if i % 2 else deque([boot_monotonic - 3600.0])
+        app_module._RATE_HITS[("convert", f"10.9.0.{i}")] = hits
+
+    resp = client.post("/api/convert", json={"text": "hi"})
+    assert resp.status_code == 200
+    assert app_module._RATE_LAST_PRUNE == boot_monotonic
+    # Alle 25 verwaisten Eimer entfernt; nur der aktuelle Request bleibt.
+    assert len(app_module._RATE_HITS) == 1
+
+    # Direkt danach (innerhalb des Intervalls) greift die Drosselung weiterhin.
+    for i in range(25):
+        app_module._RATE_HITS[("convert", f"10.10.0.{i}")] = deque()
+    app_module._maybe_prune_rate_buckets(boot_monotonic + 1.0, window_seconds=60.0)
+    assert len(app_module._RATE_HITS) > 10
+
+    # Nach Ablauf von _RATE_PRUNE_INTERVAL (60 s + 1 s > window_seconds=60 s)
+    # räumt der nächste Sweep wieder auf — inklusive des nun ebenfalls
+    # abgelaufenen Requests von t=boot_monotonic.
+    app_module._maybe_prune_rate_buckets(
+        boot_monotonic + app_module._RATE_PRUNE_INTERVAL + 1.0, window_seconds=60.0
+    )
+    assert app_module._RATE_HITS == {}
     app_module._RATE_HITS.clear()

@@ -504,7 +504,13 @@ _RATE_PRUNE_THRESHOLD = 4096
 #: der Schwellwert ueberschritten ist, sondern nur noch ausgefuehrt, wenn
 #: tatsaechlich Zeit vergangen ist.
 _RATE_PRUNE_INTERVAL = 60.0
-_RATE_LAST_PRUNE = 0.0
+#: Zeitstempel des letzten Sweeps (``time.monotonic``) oder ``None`` vor dem
+#: ersten Lauf. **Kein** ``0.0``-Sentinel: ``time.monotonic()`` hat laut
+#: Sprachspezifikation keinen definierten Referenzpunkt und liefert unter Linux
+#: Sekunden seit Systemstart — auf frisch gebooteten CI-Runnern oder VMs mit
+#: ``uptime < _RATE_PRUNE_INTERVAL`` (z. B. 53 s) wäre ``now - 0.0 < 60.0``
+#: wahr und würde den ersten Sweep fälschlich unterdrücken.
+_RATE_LAST_PRUNE: float | None = None
 
 
 def _prune_rate_buckets(now: float, window_seconds: float) -> int:
@@ -533,10 +539,12 @@ def _maybe_prune_rate_buckets(now: float, window_seconds: float) -> None:
     global _RATE_LAST_PRUNE
     if len(_RATE_HITS) <= _RATE_PRUNE_THRESHOLD:
         return
-    if now - _RATE_LAST_PRUNE < _RATE_PRUNE_INTERVAL:
+    if _RATE_LAST_PRUNE is not None and now - _RATE_LAST_PRUNE < _RATE_PRUNE_INTERVAL:
         return
     with _RATE_LOCK:
-        if now - _RATE_LAST_PRUNE < _RATE_PRUNE_INTERVAL:
+        if len(_RATE_HITS) <= _RATE_PRUNE_THRESHOLD:
+            return
+        if _RATE_LAST_PRUNE is not None and now - _RATE_LAST_PRUNE < _RATE_PRUNE_INTERVAL:
             return
         _RATE_LAST_PRUNE = now
         _prune_rate_buckets(now, window_seconds)
