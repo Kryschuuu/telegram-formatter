@@ -883,22 +883,47 @@ def _clean_link_label(label: str, url: str, target: str) -> str:
 #: ``[[00:00]([<url mit &amp;>](<url>))]`` — wird zu ``[00:00](<url>)``;
 #: die innere Label-URL ist nur die (HTML-escapte) Wiederholung des Ziels.
 _GEMINI_DOUBLE_NESTED_RE = re.compile(
-    r"\[\[([^\[\]]+)\]\(\[[^\[\]]*\]\((https?://[^)\s]+)\)\)\]"
+    r"\[\[([^\[\]\n]+)\]\(\[[^\[\]\n]*\]\((https?://[^)\s\[\]]+)\)\)\]"
 )
 #: Gemini-Artefakt (seit v2.15.0): duplizierter Link
 #: ``[[<text>](<wrapper>)](<url>](<wrapper>))`` — derselbe Link zweimal,
 #: ineinander kopiert; wird zu ``[<text>](<wrapper>)`` (der Wrapper wird
 #: im Link-Durchlauf danach aufgelöst).
 _GEMINI_DUPLICATED_LINK_RE = re.compile(
-    r"\[\[([^\[\]]+)\]\((https?://[^)\s]+)\)\]\([^)\]]*\]\((https?://[^)\s]+)\)\)"
+    r"\[\[([^\[\]\n]+)\]\((https?://[^)\s\[\]]+)\)\]\([^)\]\n]*\]\((https?://[^)\s\[\]]+)\)\)"
 )
 #: Verschachtelter Link ``[text]([label](url))`` — ungültiges Markdown,
 #: typisches Artefakt von Such-KI-Zitaten; wird zu ``[text](url)``.
-_NESTED_LINK_RE = re.compile(r"\[([^\[\]]+)\]\(\[[^\[\]]*\]\((https?://[^)\s]+)\)\)")
+_NESTED_LINK_RE = re.compile(r"\[([^\[\]\n]+)\]\(\[[^\[\]\n]*\]\((https?://[^)\s\[\]]+)\)\)")
 #: Einzelner, in eckige Klammern gewickelter Link ``[[text](url)]``.
-_WRAPPED_LINK_RE = re.compile(r"\[(\[[^\[\]]+\]\(https?://[^)\s]+\))\]")
-#: Gewöhnlicher Markdown-Link.
-_MARKDOWN_LINK_RE = re.compile(r"\[([^\[\]]+)\]\((https?://[^)\s]+)\)")
+_WRAPPED_LINK_RE = re.compile(r"\[(\[[^\[\]\n]+\]\(https?://[^)\s\[\]]+\))\]")
+#: Gewöhnlicher Markdown-Link in der Vorbereinigung (:func:`_normalize_links`).
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\[\]\n]+)\]\((https?://[^)\s\[\]]+)\)")
+#: Maximale Zeichenlänge eines Link-Labels ``[label](url)`` in den Konvertern
+#: und der Vorschau (seit v2.15.1).
+#:
+#: Wie bei :data:`_FENCE_BLOCK_RE` verhindert die feste Obergrenze zusammen mit
+#: dem Zeilenumbruch-Ausschluss ``[^\]\n]`` quadratisches Backtracking (ReDoS):
+#:
+#: 1. **Sicherheit (Längenkappe)** — ein unbeschränktes ``[^\]]+`` scannt bei
+#:    einer Eingabe voller ``[`` ohne schließendes ``]`` (z. B. ``"[" * 50_000``)
+#:    von **jeder** ``[``-Position bis zum Textende → O(n²), gemessen ~10,2 s
+#:    bei 50 000 und ~41 s bei 100 000 Klammern (``MAX_INPUT_CHARS``). Mit
+#:    ``{1,256}`` prüft jede Position höchstens 256 Zeichen (O(n), < 0,1 s bei
+#:    50 000 Klammern). Ebenso schließt ``[^)\s\[\]]+`` im Ziel eckige Klammern
+#:    aus, sodass wiederholte ungeschlossene ``[a](https://x`` nicht über
+#:    Folgelinks hinweg bis zum Textende scannen.
+#: 2. **Korrektheit** — ``[`` im Linktext bleibt weiterhin erlaubt (z. B.
+#:    ``[Intervall [0, 1)](https://…)``), während ``\n`` ausgeschlossen ist:
+#:    eine verwaiste ``[`` in einem früheren Absatz verschluckt dadurch keine
+#:    nachfolgenden Überschriften oder Tabellen mehr in den Link.
+#:
+#: Gemeinsames Muster für :func:`markdown_to_html`,
+#: :func:`markdown_to_rich_markdown` und :mod:`telegram_formatter.preview`.
+_LINK_LABEL_MAX_CHARS = 256
+_LINK_RE = re.compile(
+    rf"\[([^\]\n]{{1,{_LINK_LABEL_MAX_CHARS}}})\]\((https?://[^)\s\[\]]+)\)"
+)
 #: Nackte URL im Fließtext (Telegram verlinkt sie automatisch).
 _BARE_URL_RE = re.compile(r"https?://[^\s\[\]()<>\"'|`]+")
 #: Satzzeichen, die im Fließtext direkt an einer URL kleben können.
@@ -1093,7 +1118,7 @@ def markdown_to_html(text: str) -> str:
         formatted = _apply_inline_html(raw_text)
         return store(f'<a href="{url}">{formatted}</a>')
 
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", _link_repl, text)
+    text = _LINK_RE.sub(_link_repl, text)
     text = _apply_inline_html(text)
 
     return store.restore(text)
@@ -1146,6 +1171,13 @@ def _wrap_blockquotes(text: str) -> str:
     return "\n".join(out)
 
 
+#: Fallback-Muster für mehrzeilige Pipe-Tabellen im HTML-Pfad.
+#: ``^[^\n|]*\|.*$`` stoppt am ersten ``|`` der Zeile — ein gieriges
+#: ``^.*\|.*$`` würde bei einer Einzelzeile voller ``|`` (wenn ``{2,}``
+#: scheitert) über alle ``|``-Positionen quadratisch backtracken (seit v2.15.1).
+_TABLE_FALLBACK_RE = re.compile(r"(?m)(^[^\n|]*\|.*$\n?){2,}")
+
+
 def _tables_to_lines(text: str) -> str:
     """Wandelt Pipe-Tabellen in lesbare ``Header: Wert``-Zeilen um (Fallback)."""
 
@@ -1160,7 +1192,7 @@ def _tables_to_lines(text: str) -> str:
             lines.append("🔸 " + " • ".join(parts))
         return "\n".join(lines)
 
-    return re.sub(r"(?m)(^.*\|.*$\n?){2,}", repl, text)
+    return _TABLE_FALLBACK_RE.sub(repl, text)
 
 
 # ---------------------------------------------------------------------------
@@ -1224,7 +1256,7 @@ def markdown_to_rich_markdown(text: str) -> str:
         formatted = _apply_underline_rich(raw_text)
         return store(f"[{formatted}]({url})")
 
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", _rich_link_repl, text)
+    text = _LINK_RE.sub(_rich_link_repl, text)
     text = _apply_underline_rich(text)
 
     # 4. Tabellen blockweise normalisieren; alles andere bleibt GFM.

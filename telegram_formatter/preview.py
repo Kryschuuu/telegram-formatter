@@ -75,6 +75,7 @@ from html.parser import HTMLParser
 from typing import Any
 
 from telegram_formatter.utils import (
+    _LINK_RE,
     REGULAR_MESSAGE_MAX_CHARS,
     RICH_MESSAGE_MAX_CHARS,
     TelegramMessage,
@@ -123,11 +124,6 @@ _ALLOWED_ATTRS: dict[str, frozenset[str]] = {
 #: Void-Elemente (kein schließendes Tag). Alle anderen bekommen ein
 #: ``</tag>`` gesetzt, auch unbekannte — damit entsteht kein offenes Markup.
 _VOID_TAGS: frozenset[str] = frozenset({"br"})
-
-#: HTML-CSS-Entity, die Telegram als Smiley darstellt. Bewusst *nicht* in der
-#: Allowlist: der Konverter erzeugt sie nicht, und eine zukünftige
-#: Unterstützung soll eine bewusste Entscheidung sein.
-_TELEGRAM_SMILEY = re.compile(r"&#(\d+);")
 
 #: URL-Schemata, die ein ``href`` tragen darf. Alles andere — insbesondere
 #: ``javascript:`` und ``data:`` — wird verworfen und der Link als reiner Text
@@ -267,8 +263,12 @@ _FENCE_RE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*([^\n`]*)\n(.*?)\n?\1\2[ \t
 #: Inline-Code mit höherer Priorität als jeder andere Marker.
 _INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
 #: GFM-Tabelle: Kopfzeile, Trennzeile mit `:?-+:?`, dann Datenzeilen.
+#: Das spaltentrennende ``\|`` in ``head`` ist Pflicht (wie in ``sep``): ein
+#: optionales ``\|?`` ließe ``[^\n|]+`` und ``[^\n]*`` auf jeder Zeile ohne
+#: Pipe an allen L Teilungspunkten gegeneinander backtracken (O(L²), seit
+#: v2.15.1 behoben).
 _TABLE_RE = re.compile(
-    r"^ {0,3}(?P<head>\|?[^\n|]+\|?[^\n]*)\n"
+    r"^ {0,3}(?P<head>\|?[^\n|]+\|[^\n]*)\n"
     r" {0,3}(?P<sep>\|?[ \t]*:?-{1,}:?[ \t]*(\|[ \t]*:?-{1,}:?[ \t]*)+\|?)[ \t]*\n"
     r"(?P<rows>(?:[ \t]*\|[^\n]*\n?)*)",
     re.M,
@@ -277,29 +277,22 @@ _TABLE_RE = re.compile(
 _QUOTE_RE = re.compile(r"(?:^[ \t]*>[^\n]*(?:\n|$))+", re.M)
 #: Ungeordnete und geordnete Listen. Verschachtelung wird bewusst flach
 #: gerendert — Telegram zeigt sie ebenfalls flach, wenn auch eingerückt.
-_ULI_RE = re.compile(r"^[ \t]*[-*+][ \t]+(.*)$", re.M)
 _OLI_RE = re.compile(r"^[ \t]*(\d{1,9})[.)][ \t]+(.*)$", re.M)
 _LIST_ITEM_RE = re.compile(r"^[ \t]*(?:[-*+][ \t]+|\d{1,9}[.)][ \t]+)(.*)$")
-#: Link: `[text](url)` — der Konverter hat Redirect-URLen bereits entpackt.
-_LINK_RE = re.compile(r"\[([^\]\n]*)\]\((https?://[^)\s]+)\)")
 #: Emoji-Smiley wie `:tada:` → Telegram ersetzt das durch das echte Emoji.
 _SMILERY_RE = re.compile(r"(?<![\w:]):([a-z0-9_+-]{2,32}):(?![\w:])")
 
-#: Inline-Marker in **fester Reihenfolge**. Reihenfolge ist nicht beliebig:
-#: Code zuerst (sonst zerlegt `*` den Code), dann `$`-Math (enthält
-#: Backslashes und Klammern, die spätere Muster stören könnten), dann
-#: Unterstreichung/Fett vor den einfachen Italic-Varianten, zuletzt ~~strike~~.
-_INLINE_ORDER: tuple[tuple[str, re.Pattern[str], str], ...] = (
-    ("code", _INLINE_CODE_RE, "code"),
-    ("math-display", re.compile(r"\$\$(.+?)\$\$", re.S), "math-block"),
-    ("math-inline", re.compile(r"(?<![\$\\])\$([^\$\n]+?)(?<![\$\\])\$(?!\$)"), "math-inline"),
-    ("u", re.compile(r"<u>(.*?)</u>", re.S), "u"),
-    ("b", re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", re.S), "b"),
-    ("i-star", re.compile(r"(?<![\*\w])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\*\w])"), "i"),
-    ("i-us", re.compile(r"(?<![_\w])_(?=\S)([^_\n]+?)(?<=\S)_(?![_\w])"), "i"),
-    ("s", re.compile(r"~~(?=\S)(.+?)(?<=\S)~~", re.S), "s"),
-    ("smiley", _SMILERY_RE, "smiley"),
-)
+#: Vorkompilierte Inline-Muster für :func:`_render_inline` (in fester
+#: Reihenfolge angewandt: Code → Math → Escaping → Unterstreichen →
+#: Fett/Kursiv/Durchgestrichen → Links (:data:`telegram_formatter.utils._LINK_RE`)
+#: → Smiley).
+_DISPLAY_MATH_RE = re.compile(r"\$\$(.+?)\$\$", re.S)
+_INLINE_MATH_RE = re.compile(r"(?<![\$\\])\$([^\$\n]+?)(?<![\$\\])\$(?!\$)")
+_UNDERLINE_RE = re.compile(r"&lt;u&gt;(.*?)&lt;/u&gt;", re.S)
+_BOLD_RE = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", re.S)
+_ITALIC_STAR_RE = re.compile(r"(?<![\*\w])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\*\w])")
+_ITALIC_US_RE = re.compile(r"(?<![_\w])_(?=\S)([^_\n]+?)(?<=\S)_(?![_\w])")
+_STRIKE_RE = re.compile(r"~~(?=\S)(.+?)(?<=\S)~~", re.S)
 
 #: Platzhalter-Marker. Bewusst ein Steuerzeichen, das im Nutzertext praktisch
 #: nie vorkommt und im Gegensatz zu ``\u0000`` (das ``utils.py`` benutzt) nicht
@@ -355,8 +348,8 @@ def _render_inline(text: str) -> str:
             f'data-tex="{html.escape(match.group(1), quote=True)}"></span>'
         )
 
-    text = re.sub(r"\$\$(.+?)\$\$", math_block, text, flags=re.S)
-    text = re.sub(r"(?<![\$\\])\$([^\$\n]+?)(?<![\$\\])\$(?!\$)", math_inline, text)
+    text = _DISPLAY_MATH_RE.sub(math_block, text)
+    text = _INLINE_MATH_RE.sub(math_inline, text)
 
     # 3) Der Rest des Textes wird jetzt escaped — die folgenden Muster arbeiten
     #    nur noch auf Markup, das garantiert keine Nutzer-Zeichenkette mehr
@@ -365,13 +358,13 @@ def _render_inline(text: str) -> str:
 
     # 4) Unterstreichung zuerst: der Konverter erzeugt sie als echtes `<u>`,
     #    und `__` bedeutet in Rich Markdown *fett*.
-    text = re.sub(r"&lt;u&gt;(.*?)&lt;/u&gt;", lambda m: f"<u>{m.group(1)}</u>", text, flags=re.S)
+    text = _UNDERLINE_RE.sub(lambda m: f"<u>{m.group(1)}</u>", text)
 
     # 5) Fett / kursiv / durchgestrichen.
-    text = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", lambda m: f"<b>{m.group(1)}</b>", text, flags=re.S)
-    text = re.sub(r"(?<![\*\w])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\*\w])", lambda m: f"<i>{m.group(1)}</i>", text)
-    text = re.sub(r"(?<![_\w])_(?=\S)([^_\n]+?)(?<=\S)_(?![_\w])", lambda m: f"<i>{m.group(1)}</i>", text)
-    text = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", lambda m: f"<s>{m.group(1)}</s>", text, flags=re.S)
+    text = _BOLD_RE.sub(lambda m: f"<b>{m.group(1)}</b>", text)
+    text = _ITALIC_STAR_RE.sub(lambda m: f"<i>{m.group(1)}</i>", text)
+    text = _ITALIC_US_RE.sub(lambda m: f"<i>{m.group(1)}</i>", text)
+    text = _STRIKE_RE.sub(lambda m: f"<s>{m.group(1)}</s>", text)
 
     # 6) Links. `html.escape` hat die Anführungszeichen im Text nicht berührt
     #    (`quote=False`), Attribute hier aber schon — deshalb `&amp;` zurück.
