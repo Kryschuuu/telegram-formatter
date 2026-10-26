@@ -20,7 +20,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 RENDER_YAML = REPO_ROOT / "render.yaml"
 
 
-@pytestfixture()
+@pytest.fixture()
 def client(monkeypatch):
     """Isolierte App: Modulglobals zurückgesetzt, Limits aus, Rate-Buckets leer."""
     monkeypatch.setattr(app_module, "BOT_TOKEN", "")
@@ -37,7 +37,7 @@ def client(monkeypatch):
     app_module._RATE_HITS.clear()
 
 
-@pytestfixture()
+@pytest.fixture()
 def public_demo_client(monkeypatch):
     """Demo-Instanz: geteilter Bot + gepinnter Chat, Browser-Versand an."""
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:secretsecretsecretsecretsecretsec")
@@ -117,4 +117,4 @@ def test_version_matches_release():
     """Single Release-Gate: die Version muss mit dem Tag im Solo-Compose
     übereinstimmen (Vertragstest in test_deployment.py prüft die andere
     Richtung). Hartkodierte Versionen hier brechen bei jedem Bump."""
-    assert __version__ == "2.15.0"
+    assert __version__ == "2.15.1"

@@ -1308,10 +1308,9 @@ class TestGeminiCleanupPerformance:
         assert "xstg" not in out
 
     def test_bracket_storm_is_linear(self):
-        # Nur die neue Stufe (clean_gemini_links): Der übrige Konverter
-        # hat einen eigenen, älteren Klammer-Sturm-Befund (Peer-Review
-        # 2026-10_GEMINI-LINK-CLEANUP, Follow-up) — hier geht es darum,
-        # dass die Fixpunkt-Schleife selbst nicht quadratisch wird.
+        # Fixpunkt-Schleife (clean_gemini_links) und beide Konverterpfade
+        # (Follow-up aus 2026-10_GEMINI-LINK-CLEANUP in v2.15.1 behoben)
+        # müssen bei 50 000 offenen Klammern linear durchlaufen.
         start = time.perf_counter()
         clean_gemini_links("[" * 50_000)
         elapsed = time.perf_counter() - start
@@ -1388,3 +1387,155 @@ class TestFenceRegexIsNotQuadratic:
         ):
             assert want in markdown_to_html(src)
             assert "```" in markdown_to_rich_markdown(src)
+
+
+# ---------------------------------------------------------------------------
+# Regression v2.15.1 — Follow-up aus 2026-10_GEMINI-LINK-CLEANUP
+# ---------------------------------------------------------------------------
+class TestLinkRegexIsNotQuadratic:
+    """Link-Ersetzung im HTML-/Rich-Konverter und in der Vorschau war O(n²).
+
+    ``r"\\[([^\\]]+)\\]\\((https?://[^)\\s]+)\\)"`` scannte bei einer Eingabe
+    voller ``[`` ohne schließendes ``]`` (z. B. ``"[" * 50_000``) von *jeder*
+    ``[``-Position bis zum Textende (~10,2 s für 50 000 Klammern, ~41 s bei
+    ``MAX_INPUT_CHARS = 100_000``). Ebenso verschluckte ``[^\\]]+`` ohne
+    Zeilenumbruch-Ausschluss Absätze, Überschriften und Tabellen zwischen
+    einer verwaisten ``[`` und einem späteren Link.
+
+    Mit :data:`telegram_formatter.utils._LINK_RE`
+    (``r"\\[([^\\]\\n]{1,256})\\]\\((https?://[^)\\s\\[\\]]+)\\)"``) ist der
+    Aufwand linear (O(n)), während ``[`` im Linktext (z. B.
+    ``[Intervall [0, 1)](https://…)``) weiterhin erlaubt bleibt.
+    """
+
+    @staticmethod
+    def _time(fn, payload):
+        start = time.perf_counter()
+        fn(payload)
+        return time.perf_counter() - start
+
+    @pytest.mark.parametrize("converter", [markdown_to_html, markdown_to_rich_markdown])
+    def test_bracket_storm_scales_linearly(self, converter):
+        small = self._time(converter, "[" * 8_000)
+        large = self._time(converter, "[" * 16_000)
+        assert large < max(small * 3.5, 0.08), (
+            f"quadratisches Backtracking in {converter.__name__}: "
+            f"{small:.4f}s -> {large:.4f}s"
+        )
+
+    @pytest.mark.parametrize("converter", [markdown_to_html, markdown_to_rich_markdown])
+    def test_bracket_storm_50k_and_max_input_budget(self, converter):
+        # Vor v2.15.1: ~10,2 s bei 50 000 und ~41 s bei 100 000 Klammern.
+        elapsed_50k = self._time(converter, "[" * 50_000)
+        assert elapsed_50k < 3.0, (
+            f"{elapsed_50k:.2f}s fuer 50 000 '[' in {converter.__name__}"
+        )
+        elapsed_100k = self._time(converter, "[" * 100_000)
+        assert elapsed_100k < 3.0, (
+            f"{elapsed_100k:.2f}s fuer 100 000 '[' in {converter.__name__}"
+        )
+
+    def test_build_messages_bracket_storm_both_paths(self):
+        # Regular-Pfad und Rich-Pfad (mit LaTeX-Trigger) samt Chunking.
+        assert self._time(lambda s: build_messages(s, "1"), "[" * 50_000) < 3.0
+        assert self._time(lambda s: build_messages(s, "1"), "$x$ " + "[" * 50_000) < 3.0
+
+    @pytest.mark.parametrize(
+        "converter",
+        [clean_gemini_links, markdown_to_html, markdown_to_rich_markdown],
+    )
+    def test_unclosed_link_target_storm_is_fast(self, converter):
+        # Wiederholte ungeschlossene Link-Ziele `[a](https://x` ohne `)`:
+        # `[^)\s\[\]]+` stoppt am nächsten `[` statt bis zum Textende zu laufen.
+        payload = "[a](https://x" * 5_000
+        elapsed = self._time(converter, payload)
+        assert elapsed < 3.0, (
+            f"{elapsed:.2f}s fuer ungeschlossene Link-Ziele in {converter.__name__}"
+        )
+
+    def test_pipe_storm_in_table_fallback_is_fast(self):
+        # Einzelzeile voller `|` ohne zweite Zeile: `_TABLE_FALLBACK_RE`
+        # (`^[^\n|]*\|.*$`) darf nicht über alle `|`-Positionen backtracken.
+        elapsed = self._time(markdown_to_html, "|" * 50_000)
+        assert elapsed < 3.0, f"{elapsed:.2f}s fuer 50 000 '|'"
+
+    def test_all_entry_points_share_bounded_link_pattern(self):
+        from telegram_formatter import preview as p
+        from telegram_formatter import utils as u
+
+        assert u._LINK_LABEL_MAX_CHARS == 256
+        assert (
+            u._LINK_RE.pattern
+            == r"\[([^\]\n]{1,256})\]\((https?://[^)\s\[\]]+)\)"
+        )
+        assert p._LINK_RE is u._LINK_RE
+
+    @pytest.mark.parametrize(
+        ("src", "expected_html", "expected_rich"),
+        [
+            (
+                "[Intervall [0, 1)](https://example.com)",
+                '<a href="https://example.com">Intervall [0, 1)</a>',
+                "[Intervall [0, 1)](https://example.com)",
+            ),
+            (
+                "[Abschnitt [A](https://example.com/path)",
+                '<a href="https://example.com/path">Abschnitt [A</a>',
+                "[Abschnitt [A](https://example.com/path)",
+            ),
+            (
+                "[Intervall [0, 1) mit **fett** und __unter__](https://example.com/a_b)",
+                '<a href="https://example.com/a_b">Intervall [0, 1) mit <b>fett</b> und <u>unter</u></a>',
+                "[Intervall [0, 1) mit **fett** und <u>unter</u>](https://example.com/a_b)",
+            ),
+            (
+                "[Intervall [0, 1)](https://www.youtube.com/watch?v=72P-zstEqps&ra=gemini&xstg=TOKEN&t=5)",
+                '<a href="https://www.youtube.com/watch?v=72P-zstEqps&amp;t=5">Intervall [0, 1)</a>',
+                "[Intervall [0, 1)](https://www.youtube.com/watch?v=72P-zstEqps&t=5)",
+            ),
+        ],
+    )
+    def test_labels_with_open_bracket_still_work(
+        self, src, expected_html, expected_rich
+    ):
+        assert markdown_to_html(src) == expected_html
+        assert markdown_to_rich_markdown(src) == expected_rich
+
+    def test_stray_bracket_does_not_swallow_across_newlines_html(self):
+        src = (
+            "Absatz 1 mit [offener Klammer\n\n"
+            "# Titel\n\n"
+            "Absatz 2 mit [Quelle](https://example.com)"
+        )
+        out = markdown_to_html(src)
+        assert "Absatz 1 mit [offener Klammer" in out
+        assert "<b>🚀 Titel</b>" in out
+        assert '<a href="https://example.com">Quelle</a>' in out
+
+    def test_stray_bracket_does_not_swallow_table_in_rich_path(self):
+        src = (
+            "Intervall [0, 1)\n\n"
+            "A | B\n1 | 2\n\n"
+            "Siehe [Quelle](https://example.com)"
+        )
+        out = markdown_to_rich_markdown(src)
+        assert "Intervall [0, 1)" in out
+        assert "| A | B |\n|---|---|\n| 1 | 2 |" in out
+        assert "[Quelle](https://example.com)" in out
+
+    def test_label_at_and_above_length_cap(self):
+        from telegram_formatter import utils as u
+
+        cap = u._LINK_LABEL_MAX_CHARS
+        exact_label = "a" * cap
+        over_label = "a" * (cap + 1)
+
+        exact_src = f"[{exact_label}](https://example.com)"
+        over_src = f"[{over_label}](https://example.com)"
+
+        assert f'<a href="https://example.com">{exact_label}</a>' == markdown_to_html(
+            exact_src
+        )
+        assert "<a " not in markdown_to_html(over_src)
+        assert over_src == markdown_to_rich_markdown(over_src)
+
