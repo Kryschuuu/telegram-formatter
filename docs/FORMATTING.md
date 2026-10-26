@@ -157,6 +157,15 @@ Garantien und bewusste Grenzen:
   belegten Artefakt-Formen (iterativ bis zum Fixpunkt).
 - Code (Fences/Inline) bleibt wie überall 1:1 geschützt — Tracking-Tokens
   in Codebeispielen überleben absichtlich.
+- **Lineare Laufzeit & einzeilige Link-Labels (seit v2.15.1):** Die
+  abschließende Link-Übersetzung im HTML- und Rich-Pfad sowie in der
+  Vorschau teilt das vorkompilierte Muster
+  `_LINK_RE = r"\[([^\]\n]{1,256})\]\((https?://[^)\s\[\]]+)\)"`
+  (`_LINK_LABEL_MAX_CHARS = 256`). Offene `[` im Linktext (etwa
+  `[Intervall [0, 1)](https://example.com)`) bleiben erlaubt, während
+  Zeilenumbrüche ausgeschlossen sind und Eingaben voller ungeschlossener
+  `[` (`"[" * 50_000`) ohne quadratisches Backtracking in linearer Zeit
+  (< 0,15 s statt ~10 s) durchlaufen.
 
 ## 5. LaTeX-Normalisierung (v2.10.0)
 

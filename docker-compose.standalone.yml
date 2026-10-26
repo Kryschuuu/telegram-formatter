@@ -27,7 +27,7 @@ services:
       dockerfile: Dockerfile
     # Version muss mit telegram_formatter.__version__ übereinstimmen —
     # Vertragstest: tests/test_deployment.py::test_compose_image_tag_matches_version
-    image: telegram-formatter:2.15.0
+    image: telegram-formatter:2.15.1
     restart: unless-stopped
     # Geheimnisse + Betriebskonfiguration aus der (git-ignorierten) .env-Datei.
     # Vorlage mit allen Variablen: .env.example

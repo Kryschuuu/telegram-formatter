@@ -8,8 +8,8 @@
 #   docker compose -f docker-compose.standalone.yml up --build -d
 #
 # Manuell (nur die App, ohne Caddy — z. B. für Smoke-Tests):
-#   docker build -t telegram-formatter:2.15.0 .
-#   docker run --rm -p 5000:5000 --env-file .env telegram-formatter:2.15.0
+#   docker build -t telegram-formatter:2.15.1 .
+#   docker run --rm -p 5000:5000 --env-file .env telegram-formatter:2.15.1
 #
 # BYOB-Hinweis: Die Web-Sessions leben prozesslokal im RAM (siehe
 # docs/DECENTRAL_BOT_ARCHITECTURE.md). Deshalb läuft Gunicorn mit genau

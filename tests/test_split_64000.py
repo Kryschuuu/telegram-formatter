@@ -15,7 +15,6 @@ import pathlib
 
 import pytest
 
-
 from telegram_formatter import app as app_module
 from telegram_formatter import utils as u
 
@@ -91,7 +90,7 @@ def test_rich_64000_splits_within_32768():
     assert sum(len(_markdown_of(m)) for m in msgs) >= 64000 - 512  # Reserve
 
 
-def test_rich_64000_many_chunks_are_all_rich:
+def test_rich_64000_many_chunks_are_all_rich():
     txt = "$y$ " + ("b " * 20000)  # long rich
     txt = txt[:64000]
     msgs = u.build_messages(txt, chat_id="-1")
@@ -437,7 +436,7 @@ def test_chunks_per_request_cap_does_not_shrink_documented_limit():
     `SHARED_WEB_MAX_INPUT_CHARS` (64 000) erzeugt 17 Chunks, das BYOB-Limit
     (100 000) erzeugt 23. Der Default der Kappung (25) liegt ueber beiden —
     ein Absenken wuerde gueltige Eingaben ablehnen, ohne dass die Eingabegrenze
-    das erklaraeren wuerde.
+    das erklaeren wuerde.
     """
     assert len(u.build_messages("x" * app_module.SHARED_WEB_MAX_INPUT_CHARS, "-100999")) <= (
         app_module.MAX_CHUNKS_PER_REQUEST

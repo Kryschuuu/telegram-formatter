@@ -732,3 +732,37 @@ def test_healthz_rejects_post_with_json_error(client):
     resp = client.post("/healthz", json={})
     assert resp.status_code == 405
     assert resp.is_json
+
+
+# --------------------------------------------------------------------------- #
+# Regression v2.15.1 — /api/convert End-to-End bei Klammer-Sturm & Link-Labels
+# --------------------------------------------------------------------------- #
+def test_convert_endpoint_bracket_storm_is_fast(client):
+    """50 000 '[' durchlaufen build_messages + render_preview linear (< 3 s)."""
+    import time
+
+    start = time.perf_counter()
+    resp = client.post("/api/convert", json={"text": "[" * 50_000})
+    elapsed = time.perf_counter() - start
+    assert resp.status_code == 200
+    assert elapsed < 3.0, f"{elapsed:.2f}s fuer /api/convert mit 50 000 '['"
+    data = resp.get_json()
+    assert data["count"] >= 1
+    assert data["preview"]["count"] == data["count"]
+
+
+def test_convert_endpoint_preserves_open_bracket_in_link_label(client):
+    """Link-Labels mit '[' (z. B. Intervalle) funktionieren in Payload und Vorschau."""
+    resp = client.post(
+        "/api/convert",
+        json={"text": "[Intervall [0, 1)](https://example.com)"},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert (
+        data["messages"][0]["payload"]["text"]
+        == '<a href="https://example.com">Intervall [0, 1)</a>'
+    )
+    assert 'href="https://example.com"' in data["preview"]["messages"][0]["html"]
+    assert "Intervall [0, 1)" in data["preview"]["messages"][0]["html"]
+

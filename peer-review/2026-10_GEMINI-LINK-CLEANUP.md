@@ -128,13 +128,26 @@ zerteilt statt in eine.
 
 ## Follow-ups
 
-- [ ] **Älterer Klammer-Sturm-Befund (unabhängig von v2.15.0):**
-      `"[" * 50_000` kostet `markdown_to_html`/`markdown_to_rich_markdown`
-      ~10 s — **vor und nach dieser Änderung identisch** (gemessen:
-      10,209 s auf 2.14.1 vs. 10,219 s auf 2.15.0; die neue Stufe selbst:
-      0,003 s). Ursache ist das unbeschränkte `[^\]]+` in den späteren
-      Link-Schritten der Konverter (`utils.py:1094` HTML,
-      `utils.py:1225` Rich): ohne ein einziges `]` im Text scannt jede
-      `[`-Position bis zum Dateiende → O(n²). Ein Fix muss Labels mit `[`
-      im Text weiter erlauben und gehört — wie der Fence-Fix in v2.13.0 —
-      in ein eigenes, getestetes Thema (z. B. Längenkappe für Labels).
+- [x] **Älterer Klammer-Sturm-Befund (unabhängig von v2.15.0) — behoben in v2.15.1:**
+      `"[" * 50_000` kostete `markdown_to_html`/`markdown_to_rich_markdown`
+      ~10 s (gemessen: 10,209 s auf 2.14.1 vs. 10,219 s auf 2.15.0; die
+      Vorbereinigungsstufe selbst: 0,003 s) und `render_rich_markdown`
+      ~15,5 s. Ursache war das unbeschränkte `[^\]]+` in den späteren
+      Link-Schritten der Konverter (`utils.py` HTML- und Rich-Pfad) sowie
+      `[^\]\n]*` in `preview.py`: ohne ein einziges `]` im Text scannte
+      jede `[`-Position bis zum Dateiende → O(n²).
+      **Lösung in v2.15.1:** Gemeinsames vorkompiliertes Muster
+      `_LINK_RE = re.compile(r"\[([^\]\n]{1,256})\]\((https?://[^)\s\[\]]+)\)")`
+      (`_LINK_LABEL_MAX_CHARS = 256`) in `telegram_formatter/utils.py`,
+      mitbenutzt von `telegram_formatter/preview.py` (analog zu
+      `_FENCE_BLOCK_RE` aus v2.13.0). Labels mit `[` im Text
+      (z. B. `[Intervall [0, 1)](https://example.com)`) bleiben weiterhin
+      erlaubt; `\n` ist ausgeschlossen, sodass verwaiste `[` keine
+      nachfolgenden Überschriften oder Pipe-Tabellen mehr verschlucken;
+      Laufzeit für `"[" * 50_000` sinkt von ~10,2 s auf ~0,12 s (> 80×
+      schneller, bei `MAX_INPUT_CHARS = 100 000` von ~41 s auf ~0,24 s).
+      Zugleich wurden die O(n²)-Tabellen-Muster in `preview._TABLE_RE`
+      (Pflicht-`\|` im Tabellenkopf) und `utils._tables_to_lines`
+      (`_TABLE_FALLBACK_RE` mit `^[^\n|]*\|`) gehärtet (+24 Regressionstests
+      in `tests/test_utils.py`, `tests/test_preview.py` und `tests/test_app.py`).
+

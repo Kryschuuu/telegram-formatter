@@ -34,7 +34,7 @@ from telegram_formatter.utils import (
     clean_url,
 )
 
-__version__ = "2.15.0"
+__version__ = "2.15.1"
 
 __all__ = [
     "SendError",

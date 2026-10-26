@@ -1,8 +1,15 @@
 # Code-Peer-Review
 
-> **Stand 2026-09-28:** Der letzte vollständige Review ist
+> **Stand 2026-10-26 (v2.15.1):** Das Follow-up aus
+> [`2026-10_GEMINI-LINK-CLEANUP.md`](2026-10_GEMINI-LINK-CLEANUP.md)
+> (quadratisches Backtracking `[^\]]+` bei Klammer-Stürmen in den
+> Link-Schritten von HTML-/Rich-Konverter und Vorschau) sowie zwei verwandte
+> O(n²)-Tabellen-Regexes (`preview._TABLE_RE`, `utils._tables_to_lines`) sind
+> in **v2.15.1** über das gemeinsame längenbeschränkte Muster `_LINK_RE`
+> (`_LINK_LABEL_MAX_CHARS = 256`) behoben. Vollständige vorherige Reviews:
+> [`2026-10_GEMINI-LINK-CLEANUP.md`](2026-10_GEMINI-LINK-CLEANUP.md) und
 > [`2026-09_CODE-REVIEW-V2.15.0.md`](2026-09_CODE-REVIEW-V2.15.0.md)
-> (v2.15.0, 8 Befunde). Vorheriger Review:
+> (v2.15.0, 8 Befunde) sowie
 > [`2026-09_CODE-REVIEW-V2.13.0.md`](2026-09_CODE-REVIEW-V2.13.0.md)
 > (v2.13.0). 2.14.0/2.14.1 sind ohne vollständigen Review rausgegangen —
 > der Review-Zyklus für 2.14.x wurde mit 2.15.0 nachgeholt.

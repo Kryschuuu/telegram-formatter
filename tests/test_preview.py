@@ -400,3 +400,66 @@ class TestPreviewMatchesPayload:
         import json
 
         json.dumps(preview_of("$x$ **f** | a |\n|---|\n| 1 |"))
+
+
+# --------------------------------------------------------------------------- #
+# Regression v2.15.1 — Lineare Laufzeit & Link-Parität in der Vorschau
+# --------------------------------------------------------------------------- #
+class TestPreviewPerformanceAndLinkParity:
+    """Die Vorschau teilt `_LINK_RE` mit `utils.py` und vermeidet O(n²)-Tabellen-Scans."""
+
+    def test_preview_shares_bounded_link_regex_with_utils(self):
+        from telegram_formatter import preview as p
+        from telegram_formatter import utils as u
+
+        assert p._LINK_RE is u._LINK_RE
+
+    def test_preview_bracket_storm_is_fast_on_both_paths(self):
+        import time
+
+        start_reg = time.perf_counter()
+        reg = preview_of("[" * 50_000)
+        elapsed_reg = time.perf_counter() - start_reg
+        assert elapsed_reg < 3.0, f"{elapsed_reg:.2f}s fuer Regular-Preview (50k '[')"
+        assert reg["path"] == "regular"
+        assert reg["count"] >= 1
+
+        start_rich = time.perf_counter()
+        rich = preview_of("$x$ " + "[" * 50_000)
+        elapsed_rich = time.perf_counter() - start_rich
+        assert elapsed_rich < 3.0, f"{elapsed_rich:.2f}s fuer Rich-Preview (50k '[')"
+        assert rich["path"] == "rich"
+        assert rich["count"] >= 1
+
+    def test_preview_long_paragraph_without_pipes_is_fast(self):
+        """`_TABLE_RE` verlangt ein spaltentrennendes `|` im Tabellenkopf.
+
+        Ein optionales `\\|?` zwischen `[^\\n|]+` und `[^\\n]*` führte vor
+        v2.15.1 auf langen Zeilen ohne Pipe zu quadratischem Backtracking
+        (~6,6 s für 50 000 Zeichen).
+        """
+        import time
+
+        start = time.perf_counter()
+        html_out = render_rich_markdown("Wort " * 10_000)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.5, f"{elapsed:.2f}s fuer 50 000 Zeichen Fließtext"
+        assert "Wort" in html_out
+
+    def test_preview_link_with_open_bracket_in_label(self):
+        reg = preview_of("[Intervall [0, 1)](https://example.com)")
+        rich = preview_of("$x$ [Intervall [0, 1)](https://example.com)")
+        for rendered in (reg, rich):
+            bubble_html = rendered["messages"][0]["html"]
+            assert 'href="https://example.com"' in bubble_html
+            assert "Intervall [0, 1)" in bubble_html
+
+    def test_preview_stray_bracket_on_previous_line_does_not_swallow_link(self):
+        src_reg = "Zeile 1 [offen\nZeile 2 [Quelle](https://example.com)"
+        src_rich = "$x$ Zeile 1 [offen\nZeile 2 [Quelle](https://example.com)"
+        for src in (src_reg, src_rich):
+            bubble_html = preview_of(src)["messages"][0]["html"]
+            assert "Zeile 1 [offen" in bubble_html
+            assert '<a href="https://example.com"' in bubble_html
+            assert ">Quelle</a>" in bubble_html
+
