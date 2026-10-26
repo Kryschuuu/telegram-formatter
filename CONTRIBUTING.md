@@ -18,6 +18,7 @@ pip install -e .
 |---|---|
 | Tests | `pytest -q` |
 | UI-Design-Verträge | `pytest tests/test_frontend.py` (Struktur) — für funktionale DOM-Tests zusätzlich `npm install` (jsdom gepinnt in `package.json`), dann `pytest tests/test_jsdom_smoke.py` (skippt ohne Node/jsdom sauber) |
+| Syntax-Gate (ohne deps, ~0,1 s) | `python scripts/check_syntax.py` |
 | Lint | `ruff check .` |
 | Sicherheits-Scan | `bandit -c pyproject.toml -r telegram_formatter examples/own_bot -ll` |
 | Alle Prüfungen wie CI | siehe [`audit/README.md`](audit/README.md) |
@@ -36,6 +37,25 @@ pip install -e .
 - Abhängigkeiten werden in `requirements*.txt` gepinnt (PEP 668-kompatible
   Reproduzierbarkeit); `pyproject.toml` leitet die Laufzeit-Abhängigkeiten
   dynamisch daraus ab — **keine Pin-Liste duplizieren**.
+
+## Merge-Konflikte
+
+Konflikte werden **nie** von Hand „zusammengeschrieben“, sondern immer durch
+vollständiges Übernehmen einer Seite — sonst gehen Zeichen verloren, und zwar
+unbemerkt:
+
+```bash
+git checkout --ours <datei>     # bzw. --theirs
+# danach die eigene Änderung erneut anwenden (klein, nachvollziehbar)
+python scripts/check_syntax.py  # Gate: parst jede *.py, sucht Konfliktmarker
+```
+
+Der Hintergrund ist konkret: Am 2026-10-26 scheiterte ein Dependabot-PR, weil
+eine handgelöste Konfliktdatei `@pytest.fixture()` zu `@pytestfixture()` und
+`def test_…():` zu `def test_…:` gemacht hatte — der Fehler sah im CI-Log nach
+einem Testfehler aus. Solche Schäden fängt `scripts/check_syntax.py` in
+Sekunden ab; inhaltliche Verfälschungen (einzelne Wörter in Fließtext)
+erkennt kein Werkzeug, deshalb gilt: nicht abtippen, Seite übernehmen.
 
 ## Änderungen dokumentieren
 

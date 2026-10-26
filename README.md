@@ -414,10 +414,16 @@ Review-Checkliste: `python -m telegram_formatter.botctl checklist`
 
 ```bash
 pip install -r requirements-dev.txt
+python scripts/check_syntax.py             # Syntax-Gate: parst jede *.py (~0,1 s, ohne deps)
 pytest -q                                  # 490+ Tests (+ jsdom-Frontend-Smoke via npm install)
 ruff check .                               # Stil & offensichtliche Fehler
 bandit -c pyproject.toml -r telegram_formatter -ll   # Sicherheits-Scan
 ```
+
+Das **Syntax-Gate** läuft in der CI *vor* jedem `pip install`. Es fängt
+Merge-Schäden (fehlende Klammern, `@pytestfixture()` statt
+`@pytest.fixture()`, committete Konfliktmarker), die sonst erst mitten im
+Testlauf als vermeintlicher Testfehler auftauchen.
 
 Der komplette Prüf-Matrix (inkl. Secret-Scan, pip-audit, Review-Gate) ist in
 [audit/README.md](audit/README.md) dokumentiert und als CI-Workflow

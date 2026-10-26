@@ -8,6 +8,7 @@ sind. Er ist der Startpunkt für interne und externe Audits.
 
 | Prüfung | Werkzeug | Kommando (lokal) | Automatisierung (CI) | Ergebnis liegt in |
 |---|---|---|---|---|
+| Syntax-Gate (Merge-Schäden) | `scripts/check_syntax.py` | `python scripts/check_syntax.py` | Jobs `code-quality` + `bot-gate` (vor `pip install`) | CI-Log |
 | Stil & offensichtliche Fehler | Ruff | `ruff check .` | Job `code-quality` | CI-Log |
 | Sicherheitsstatik (Python) | Bandit | `bandit -c pyproject.toml -r telegram_formatter examples/own_bot -ll` | Job `code-quality` | CI-Log / SARIF |
 | Secret-Scan | gitleaks | `gitleaks detect --config .gitleaks.toml` | Job `secrets` | PR-Kommentar / SARIF |

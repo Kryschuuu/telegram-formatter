@@ -50,6 +50,7 @@ python -m telegram_formatter.botctl verify <bot-datei> --bot-id <id>        # To
 
 ## Tests
 
+- [ ] `python scripts/check_syntax.py` grün (läuft in der CI vor allem anderen)
 - [ ] `pytest -q` grün
 - [ ] Neue Tests für das neue Verhalten (inkl. Negativfall)
 

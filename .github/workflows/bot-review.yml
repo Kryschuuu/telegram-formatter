@@ -39,10 +39,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
           cache: pip
+
+      # Erstes Tor, absichtlich VOR jedem `pip install`: ein schlecht
+      # aufgelöster Merge (PR #30, 2026-10-26) liefert Dateien ohne Klammern
+      # oder ohne Punkt im Dekorator. `pytest`/`ruff` finden das erst nach dem
+      # Installieren und zeigen dann auf die Testdatei statt auf die Ursache.
+      # Dieses Skript braucht nur die Standardbibliothek (~0,1 s).
+      - name: Syntax-Gate (Merge-Schäden, ohne Abhängigkeiten)
+        run: python scripts/check_syntax.py
 
       - name: Werkzeuge installieren
         run: |
@@ -53,7 +61,7 @@ jobs:
       - name: Ruff (Stil & Fehler)
         # app.py (Wurzel) explizit mitprüfen: der veraltete Deploy-Shim soll
         # stets ein reiner Weiterleiter bleiben (siehe tests/test_app.py).
-        run: ruff check app.py telegram_formatter examples tests
+        run: ruff check app.py telegram_formatter examples tests scripts bots
 
       - name: Bandit (Sicherheits-Scan)
         # Volles Niveau (kein -ll): LOW-Funde müssen begründet nosec-getaggt
@@ -94,9 +102,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
+
+      # Dasselbe Tor wie im Lint-Job: greift, bevor überhaupt etwas
+      # installiert wird — auch wenn `pip install` selbst scheitert.
+      - name: Syntax-Gate (Merge-Schäden, ohne Abhängigkeiten)
+        run: python scripts/check_syntax.py
 
       - name: Abhängigkeiten installieren
         run: |
