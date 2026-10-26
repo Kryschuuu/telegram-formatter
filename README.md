@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.14.1-blue)
+![Version](https://img.shields.io/badge/version-2.15.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -33,6 +33,17 @@ Nachrichten.
   `l.facebook.com/l.php?u=…`, …). Der Parser extrahiert die eigentliche
   Ziel-URL (rekursiv, schema-geschützt); Link-Artefakte wie
   `[text]([url](url))` werden geglättet.
+- **Nur reine URLs: Gemini-Tracking wird entfernt (seit v2.15.0)** —
+  Gemini hängt an jeden zitierten Link die Tracking-IDs `&ra=gemini` und
+  `&xstg=<~1 500 Zeichen Token>` und wickelt Zeitstempel-Zitate doppelt
+  (`[[00:05]([url&amp;…](url&…))]`). Der Formatter glättet die Hüllen,
+  dekodiert `&amp;` und entfernt die Tags — übrig bleibt die reine URL
+  (`[00:05](https://www.youtube.com/watch?v=…&t=5)`); auch `utm_*` und
+  gängige Klick-IDs (`fbclid`, `gclid`, …) fallen weg, funktionale
+  Parameter (`v`, `t`, `list`, `q`, …) bleiben. Als Bibliothek:
+  `clean_url(url)` für eine URL, `clean_gemini_links(text)` für ganzen
+  Markdown-Text; beide Konvertierungspfade wenden die Bereinigung
+  automatisch an. Details: [docs/FORMATTING.md §4](docs/FORMATTING.md).
 - **Tabellen** — Pipe-Tabellen werden in native Rich-Markdown-Tabellen
   übersetzt (GFM).
 - **Automatisches Splitting** — Nachrichten bis **64000 Zeichen** werden
@@ -297,6 +308,19 @@ for msg in build_messages("**fett** und $x^2$", chat_id="-100123456789"):
     send_message(msg, bot_token="123456:ABC")
 ```
 
+Nur die Link-Bereinigung (ohne Telegram-Konvertierung, seit v2.15.0) —
+entfernt Gemini-/Tracking-Tags und glättet KI-Link-Artefakte:
+
+```python
+from telegram_formatter import clean_gemini_links, clean_url
+
+clean_url("https://www.youtube.com/watch?v=abc&ra=gemini&xstg=TOKEN&t=5")
+# -> "https://www.youtube.com/watch?v=abc&t=5"
+
+clean_gemini_links("Siehe [[00:05]([https://…&amp;t=5](https://…&t=5))].")
+# -> "Siehe [00:05](https://…&t=5)."  (Code bleibt unverändert)
+```
+
 
 ## Versand-Wege auf der Website (ab v2.2.0)
 
@@ -481,7 +505,7 @@ Zwei produktionsreife Wege — beide mit TLS und denselben Sicherheitsgrenzen:
 ```bash
 cp .env.example .env   # Pflichtwerte eintragen (Token, Chat-ID)
 docker compose up --build -d
-curl -k https://192.168.0.10/healthz   # {"status":"ok","version":"2.14.1"}
+curl -k https://192.168.0.10/healthz   # {"status":"ok","version":"2.15.0"}
 ```
 
 Caddy terminiert TLS automatisch (interne CA, kein Certbot nötig) und lässt
@@ -541,7 +565,7 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.14.1** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.15.0** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).
 ON.md](MIGRATION.md).

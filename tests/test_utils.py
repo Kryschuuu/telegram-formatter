@@ -14,6 +14,8 @@ from telegram_formatter.utils import (
     _safe_chunk,
     build_messages,
     chunk_text,
+    clean_gemini_links,
+    clean_url,
     convert_deepseek_latex_syntax,
     has_latex,
     has_table,
@@ -1019,6 +1021,310 @@ class TestRedirectLinksInMessages:
         html = markdown_to_html(src)
         assert html.startswith("• Clip: <a href=")
         assert "google.com" not in html
+
+
+# ---------------------------------------------------------------------------
+# Reine URLs & Gemini-Link-Bereinigung (v2.15.0)
+# ---------------------------------------------------------------------------
+# Auslöser (Nutzerbeispiel): Gemini hängt an jeden zitierten Link die
+# Tracking-IDs `ra=gemini` und `xstg=<~1 500 Zeichen Token>` und wickelt
+# Zeitstempel-Zitate doppelt: [[00:00]([url&amp;…](url&…))]. Vor v2.15.0
+# standen die Monster-URLs 1:1 in den Payloads — ein Text mit ~20 Zitaten
+# wurde dadurch unübersichtlich lang und in viele Nachrichten zerteilt.
+
+#: Repräsentatives Gemini-Klicktoken (Alphabet/Länge wie im Original).
+_GEMINI_XSTG = (
+    "CAMSiA0VhArM2swNqASJ0YMFoMpV0QbnLL4GuwbEBuUCxQW5BYEEoA9OsgSuA8iVng" + "A" * 1400
+)
+_GEMINI_VIDEO = "https://www.youtube.com/watch?v=72P-zstEqps"
+
+
+def _gemini_cite(label: str, seconds: int) -> str:
+    """Baut das doppelt gewickelte Gemini-Zitat aus dem Nutzerbeispiel nach."""
+    amp = f"{_GEMINI_VIDEO}&amp;ra=gemini&amp;xstg={_GEMINI_XSTG}&amp;t={seconds}"
+    raw = f"{_GEMINI_VIDEO}&ra=gemini&xstg={_GEMINI_XSTG}&t={seconds}"
+    return f"[[{label}]([{amp}]({raw}))]"
+
+
+#: Die (defekte) Video-Zeile aus dem Nutzerbeispiel: derselbe Link zweimal,
+#: ineinander kopiert.
+_GEMINI_VIDEO_LINE = (
+    "🔗 **Video Link:** [[https://youtube.com/shorts/72P-zstEqps]"
+    "(https://www.google.com/search?q=https://youtube.com/shorts/72P-zstEqps)]"
+    "(https://youtube.com/shorts/72P-zstEqps]"
+    "(https://www.google.com/search?q=https://youtube.com/shorts/72P-zstEqps))"
+)
+
+
+class TestCleanUrl:
+    """Unit-Tests für :func:`clean_url` (reine URL: Redirect + Tracking)."""
+
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            # Das Gemini-Original: ra/xstg weg, v und t (funktional) bleiben.
+            (
+                f"{_GEMINI_VIDEO}&ra=gemini&xstg={_GEMINI_XSTG}&t=5",
+                f"{_GEMINI_VIDEO}&t=5",
+            ),
+            # HTML-escapter Export (&amp;) wird zuerst dekodiert.
+            (
+                f"{_GEMINI_VIDEO}&amp;ra=gemini&amp;xstg=TOKEN&amp;t=7",
+                f"{_GEMINI_VIDEO}&t=7",
+            ),
+            ("https://ex.com/?a=1&#38;utm_source=x", "https://ex.com/?a=1"),
+            ("https://ex.com/?a=1&#x26;utm_source=x", "https://ex.com/?a=1"),
+            ("https://ex.com/?a=1&AMP;utm_source=x", "https://ex.com/?a=1"),
+            # utm_* und gängige Klick-IDs
+            (
+                "https://ex.com/artikel?utm_source=nl&utm_medium=mail&id=9",
+                "https://ex.com/artikel?id=9",
+            ),
+            ("https://ex.com/?fbclid=ABC&seite=2", "https://ex.com/?seite=2"),
+            ("https://ex.com/?gclid=ABC&seite=2", "https://ex.com/?seite=2"),
+            ("https://ex.com/?msclkid=ABC&seite=2", "https://ex.com/?seite=2"),
+            ("https://ex.com/?mc_cid=ABC&mc_eid=DEF&x=1", "https://ex.com/?x=1"),
+            # Nur Tracking -> Query fällt ganz weg (kein "?" übrig).
+            ("https://ex.com/x?utm_source=a&fbclid=b", "https://ex.com/x"),
+            # Reihenfolge + Kodierung der übrigen Parameter bleiben byte-genau.
+            (
+                "https://ex.com/?b=%2Fweg&utm_m=x&a=hallo+welt",
+                "https://ex.com/?b=%2Fweg&a=hallo+welt",
+            ),
+            # Fragment bleibt erhalten.
+            ("https://ex.com/p?utm_x=1&a=2#anker", "https://ex.com/p?a=2#anker"),
+            # Parameter ohne Wert bleibt.
+            ("https://ex.com/?flag&utm_x=1", "https://ex.com/?flag"),
+            # Percent-kodierter Parametername wird erkannt.
+            ("https://ex.com/?utm%5Fsource=x&a=1", "https://ex.com/?a=1"),
+            # Groß-/Kleinschreibung bei Namen und beim Gemini-Wert.
+            ("https://ex.com/?RA=GEMINI&a=1", "https://ex.com/?a=1"),
+            ("https://ex.com/?UTM_SOURCE=x&a=1", "https://ex.com/?a=1"),
+            # Funktionale YouTube-Parameter bleiben alle.
+            (
+                "https://www.youtube.com/watch?v=abc&list=PL1&index=3&t=9",
+                "https://www.youtube.com/watch?v=abc&list=PL1&index=3&t=9",
+            ),
+            # Suchparameter sind funktional, kein Tracking.
+            (
+                "https://www.youtube.com/results?search_query=katze",
+                "https://www.youtube.com/results?search_query=katze",
+            ),
+        ],
+    )
+    def test_tracking_params_removed(self, url, expected):
+        assert clean_url(url) == expected
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            # ra nur als Gemini-Attribution entfernen, fremde Werte bleiben.
+            "https://ex.com/?ra=partner&a=1",
+            "https://ex.com/?ra=&a=1",
+            # Bewusste Grenze: generische Namen (si, ref) werden NICHT
+            # entfernt — sie können auf anderen Seiten funktional sein.
+            "https://youtu.be/abc123?si=xyz",
+            "https://ex.com/?ref=start",
+            # Normale Suche: q ist keine URL und kein Tracking.
+            "https://www.google.com/search?q=hallo+welt",
+            # Keine Query / keine URL / kein http(s) -> unverändert.
+            "https://example.com/ohne-query",
+            "https://example.com/mit?frage=ohne-tracking",
+            "kein-link",
+            "",
+            "javascript:alert(1)?utm_x=1",
+            "ftp://ex.com/x?utm_a=1",
+            "https://t.co/abc123",
+        ],
+    )
+    def test_untouched(self, url):
+        assert clean_url(url) == url
+
+    def test_redirect_then_tracking(self):
+        """Wrapper-Ziel mit Tracking-Anhang: erst entpacken, dann reinigen."""
+        from urllib.parse import quote
+
+        wrapped = "https://www.google.com/url?q=" + quote(
+            "https://example.com/x?utm_source=g&a=1", safe=""
+        )
+        assert clean_url(wrapped) == "https://example.com/x?a=1"
+
+    def test_strips_surrounding_whitespace(self):
+        assert clean_url("  https://ex.com/?utm_a=1  ") == "https://ex.com/"
+
+    def test_idempotent(self):
+        url = f"{_GEMINI_VIDEO}&amp;ra=gemini&amp;xstg={_GEMINI_XSTG}&amp;t=3"
+        once = clean_url(url)
+        assert clean_url(once) == once == f"{_GEMINI_VIDEO}&t=3"
+
+
+class TestCleanGeminiLinks:
+    """Die eigenständige Textbereinigung :func:`clean_gemini_links`."""
+
+    def test_timestamp_citation_becomes_pure_link(self):
+        src = f"Entgiftung über die Fußsohlen {_gemini_cite('00:00', 0)}."
+        out = clean_gemini_links(src)
+        assert out == f"Entgiftung über die Fußsohlen [00:00]({_GEMINI_VIDEO}&t=0)."
+        assert "xstg" not in out and "ra=gemini" not in out and "&amp;" not in out
+
+    def test_citation_for_any_host(self):
+        src = (
+            "[[1]([https://example.com/a?x=1&amp;ra=gemini&amp;xstg=TOKEN]"
+            "(https://example.com/a?x=1&ra=gemini&xstg=TOKEN))]"
+        )
+        assert clean_gemini_links(src) == "[1](https://example.com/a?x=1)"
+
+    def test_text_label_is_preserved(self):
+        src = (
+            "[[Quelle]([https://ex.com/s?a=1&amp;xstg=T]"
+            "(https://ex.com/s?a=1&xstg=T))]"
+        )
+        assert clean_gemini_links(src) == "[Quelle](https://ex.com/s?a=1)"
+
+    def test_duplicated_video_link_line(self):
+        out = clean_gemini_links(_GEMINI_VIDEO_LINE)
+        assert out == (
+            "🔗 **Video Link:** [https://youtube.com/shorts/72P-zstEqps]"
+            "(https://youtube.com/shorts/72P-zstEqps)"
+        )
+        assert "google.com" not in out
+
+    def test_single_amp_escaped_link(self):
+        src = f"[00:00]({_GEMINI_VIDEO}&amp;ra=gemini&amp;xstg=TOKEN&amp;t=7)"
+        assert clean_gemini_links(src) == f"[00:00]({_GEMINI_VIDEO}&t=7)"
+
+    def test_bare_gemini_url_with_trailing_period(self):
+        src = f"Siehe {_GEMINI_VIDEO}&ra=gemini&xstg={_GEMINI_XSTG}&t=3. Ende."
+        assert clean_gemini_links(src) == f"Siehe {_GEMINI_VIDEO}&t=3. Ende."
+
+    def test_amp_in_prose_becomes_ampersand(self):
+        assert clean_gemini_links("Wirkungen &amp; Vorteile") == "Wirkungen & Vorteile"
+
+    def test_triple_wrapped_citation(self):
+        src = "[" + _gemini_cite("00:05", 5) + "]"
+        assert clean_gemini_links(src) == f"[00:05]({_GEMINI_VIDEO}&t=5)"
+
+    def test_code_is_never_rewritten(self):
+        url = f"{_GEMINI_VIDEO}&amp;ra=gemini&amp;xstg={_GEMINI_XSTG}&amp;t=1"
+        assert clean_gemini_links(f"`{url}`") == f"`{url}`"
+        fence = f"```\n{url}\n```"
+        assert clean_gemini_links(fence) == fence
+
+    def test_length_collapses_and_is_idempotent(self):
+        src = " ".join(_gemini_cite(f"00:{i:02d}", i) for i in range(20))
+        once = clean_gemini_links(src)
+        assert len(once) < len(src) / 20  # ~60 000 -> ~1 200 Zeichen
+        assert clean_gemini_links(once) == once
+        assert "xstg" not in once
+
+    def test_normal_markdown_untouched(self):
+        src = "**fett** [Suche](https://www.google.com/search?q=hallo+welt) $x^2$"
+        assert clean_gemini_links(src) == src
+
+
+class TestGeminiLinksInMessages:
+    """Integration: Gemini-Bereinigung in HTML- und Rich-Pfad."""
+
+    # Ausschnitt des gemeldeten Fußbad-Beispiels (Struktur 1:1).
+    EXAMPLE = (
+        "Das Video erklärt ein Fußbad " + _gemini_cite("00:00", 0) + ". "
+        "Die Füße besitzen über 7.000 Nervenenden " + _gemini_cite("00:05", 5) + ".\n\n"
+        "**Wirkungen &amp; Vorteile laut Video:**\n\n"
+        "* 🧠 Klarerer Kopf " + _gemini_cite("00:54", 54) + "\n\n"
+        + _GEMINI_VIDEO_LINE
+    )
+
+    def test_user_example_regular_path(self):
+        html = markdown_to_html(self.EXAMPLE)
+        assert f'<a href="{_GEMINI_VIDEO}&amp;t=0">00:00</a>' in html
+        assert f'<a href="{_GEMINI_VIDEO}&amp;t=5">00:05</a>' in html
+        assert f'<a href="{_GEMINI_VIDEO}&amp;t=54">00:54</a>' in html
+        assert (
+            '<a href="https://youtube.com/shorts/72P-zstEqps">'
+            "https://youtube.com/shorts/72P-zstEqps</a>" in html
+        )
+        # Kein Tracking, kein doppelt escaptes &amp;, kein Link-Müll.
+        assert "xstg" not in html and "ra=" not in html
+        assert "&amp;amp;" not in html
+        assert "<b>Wirkungen &amp; Vorteile laut Video:</b>" in html
+        assert "](" not in html and "google.com" not in html
+
+    def test_user_example_rich_path(self):
+        messages = build_messages(self.EXAMPLE + "\n\n$x^2$", "1")
+        assert len(messages) == 1 and messages[0].kind == "rich"
+        md = messages[0].payload["rich_message"]["markdown"]
+        assert f"[00:00]({_GEMINI_VIDEO}&t=0)" in md
+        assert f"[00:54]({_GEMINI_VIDEO}&t=54)" in md
+        assert "**Wirkungen & Vorteile laut Video:**" in md
+        assert "xstg" not in md and "ra=" not in md and "&amp;" not in md
+
+    def test_many_citations_stay_one_message(self):
+        """Vor v2.15.0 zerteilten die Token-URLs denselben Text in viele
+        Nachrichten; mit reinen URLs passt er in eine."""
+        src = "\n\n".join(
+            f"Absatz {i} mit Zitat {_gemini_cite(f'00:{i:02d}', i)}."
+            for i in range(20)
+        )
+        messages = build_messages(src, "1")
+        assert len(messages) == 1
+        assert "xstg" not in messages[0].payload["text"]
+
+    def test_citation_inside_table_cell(self):
+        src = (
+            "| Zutat | Stelle |\n|---|---|\n"
+            f"| Bittersalz | {_gemini_cite('00:26', 26)} |\n\n$x$"
+        )
+        md = markdown_to_rich_markdown(src)
+        assert f"[00:26]({_GEMINI_VIDEO}&t=26)" in md
+        assert "| Bittersalz |" in md and "xstg" not in md
+
+    def test_amp_escaped_formula_separator_is_fixed(self):
+        # `&amp;` in einer Formel (HTML-Export) wird zum LaTeX-Trenner `&`.
+        md = markdown_to_rich_markdown(r"\(a &amp;= b\)")
+        assert md == "$a &= b$"
+
+    def test_urls_inside_code_keep_tracking_token(self):
+        url = f"{_GEMINI_VIDEO}&ra=gemini&xstg={_GEMINI_XSTG}&t=1"
+        assert "xstg=" in markdown_to_html(f"`{url}`")
+        assert "xstg=" in markdown_to_html(f"```\n{url}\n```")
+        assert "xstg=" in markdown_to_rich_markdown(f"`{url}`")
+
+    def test_label_repeating_tracking_url_shows_pure_url(self):
+        url = f"{_GEMINI_VIDEO}&xstg={_GEMINI_XSTG}&t=9"
+        html = markdown_to_html(f"[{url}]({url})")
+        pure = f"{_GEMINI_VIDEO}&amp;t=9"
+        assert f'<a href="{pure}">{pure}</a>' in html
+
+
+class TestGeminiCleanupPerformance:
+    """Die Bereinigung darf kein quadratisches Backtracking einführen."""
+
+    def test_citation_heavy_input_is_fast(self):
+        src = " ".join(_gemini_cite("00:01", 1) for _ in range(30))  # ~88 000 Z.
+        start = time.perf_counter()
+        out = markdown_to_html(src)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 3.0, f"{elapsed:.2f}s für 30 Gemini-Zitate"
+        assert "xstg" not in out
+
+    def test_bracket_storm_is_linear(self):
+        # Nur die neue Stufe (clean_gemini_links): Der übrige Konverter
+        # hat einen eigenen, älteren Klammer-Sturm-Befund (Peer-Review
+        # 2026-10_GEMINI-LINK-CLEANUP, Follow-up) — hier geht es darum,
+        # dass die Fixpunkt-Schleife selbst nicht quadratisch wird.
+        start = time.perf_counter()
+        clean_gemini_links("[" * 50_000)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 3.0, f"{elapsed:.2f}s für 50 000 Klammern"
+
+
+def test_public_api_exports_cleaning_functions():
+    import telegram_formatter
+
+    assert telegram_formatter.clean_url is clean_url
+    assert telegram_formatter.clean_gemini_links is clean_gemini_links
+    assert "clean_url" in telegram_formatter.__all__
+    assert "clean_gemini_links" in telegram_formatter.__all__
 
 
 # ---------------------------------------------------------------------------

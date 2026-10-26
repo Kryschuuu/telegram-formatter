@@ -41,7 +41,7 @@ liegen bei LaTeX-Delimitern, Tabellen und Zitaten/Links:
 |---|---|---|---|---|
 | **ChatGPT** (OpenAI) | GFM (Headings, fett/kursiv, Listen, Code, Tabellen) | meist `$$…$$` und `\[…\]`/`\(…\)` | ja (GFM-Pipes) | nackte URLs + `[text](url)`; Deep Research erzeugt intern kodierte Zitatmarker |
 | **Claude** (Anthropic) | GFM, nutzt häufig Blockquotes | selten; wenn, dann `$…$`/`$$…$$` | ja | `[text](url)`, nackte URLs |
-| **Gemini** (Google) | GFM | `\(…\)`/`\[…\]` und `$…$` gemischt | ja | Zitate teils als Marker (`[cite:…]`), Links teils über Redirect-Wrapper |
+| **Gemini** (Google) | GFM | `\(…\)`/`\[…\]` und `$…$` gemischt | ja | Zitate teils als Marker (`[cite:…]`); seit 2026: Zeitstempel-Zitate doppelt gewickelt (`[[00:05]([url&amp;…](url&…))]`) und jeder Link mit Tracking-IDs (`&ra=gemini&xstg=<~1 500 Zeichen>`) — wird bereinigt (§4) |
 | **DeepSeek** | GFM | `\(…\)`/`\[…\]` (Backslash-Delimiter) | ja | `[text](url)` |
 | **Perplexity** u. a. Such-KIs | GFM | `\(…\)`/`\[…\]` | ja | **Zitate als Redirect-Links** (z. B. `google.com/search?q=<kodiertes Ziel>`) und verschachtelte Artefakte wie `[text]([url](url))` |
 | **Mistral/Llama** (API-roh) | GFM-Basis | `$…$` | ja | `[text](url)` |
@@ -51,7 +51,9 @@ DeepSeek/Gemini in die Telegram-Dollar-Syntax übersetzen (seit v1.x
 implementiert, `convert_deepseek_latex_syntax`) — seit v2.10.0 inklusive
 Normalisierung der Rand-Whitespaces, die diese Modelle typischerweise setzen
 (siehe §5) und seit v2.7.0 die
-**Redirect-Wrapper der Such-KIs** auf ihre Ziel-URL entpacken.
+**Redirect-Wrapper der Such-KIs** auf ihre Ziel-URL entpacken. Seit v2.15.0
+werden zusätzlich Geminis Tracking-Tags (`ra=gemini`, `xstg=…`) und doppelte
+Zitat-Hüllen entfernt — übrig bleibt die reine URL (§4).
 
 ## 3. Gegenüberstellung: Feature × Telegram × LLM × Status
 
@@ -65,8 +67,8 @@ Legende: ✅ umgesetzt · 🟡 teilweise/Fallback · ❌ nicht umgesetzt
 | Durchgestrichen | `<s>`/`<strike>`/`<del>`; MDV2 `~x~` | `~~x~~` | ✅ | beide Pfade |
 | Inline-Code | `<code>`; MDV2 `` `x` `` | `` `x` `` | ✅ | Platzhalter-Schutz, Escaping |
 | Codeblock + Sprache | `<pre><code class="language-…">` | ` ```lang ` | ✅ | Sprache über Allowlist (Attribut-Injection-Schutz) |
-| Link | `<a href>`; MDV2 `[t](url)` | `[text](url)` | ✅ | **seit v2.7.0: Redirect-URLs werden auf die Ziel-URL entpackt** |
-| Nackte URL | automatische URL-Entität | nackte URLs | ✅ | 1:1 durchgereicht; Redirects werden entpackt (v2.7.0) |
+| Link | `<a href>`; MDV2 `[t](url)` | `[text](url)` | ✅ | **seit v2.7.0: Redirect-URLs werden auf die Ziel-URL entpackt**; **seit v2.15.0: Tracking-Parameter (Gemini `ra`/`xstg`, `utm_*`, Klick-IDs) werden entfernt** — nur die reine URL bleibt (§4) |
+| Nackte URL | automatische URL-Entität | nackte URLs | ✅ | Redirects werden entpackt (v2.7.0), Tracking-Parameter entfernt (v2.15.0) |
 | Überschriften | keine eigenen Entitäten | `#…######` | 🟡 | Regular: Fett + Emoji-Marker (🚀 📍 🔹 🔸); Rich: natives `#` bleibt erhalten |
 | Listen | keine Entität (Text) | `- x`, `1. x` | ✅ | Einrückung bleibt erhalten; nummeriert → Bullet |
 | Blockquote | `<blockquote>`; MDV2 `>x` | `> x` | ✅ | Regular: zusammenhängende Zeilen → `<blockquote>`; Rich: natives GFM |
@@ -82,10 +84,13 @@ Legende: ✅ umgesetzt · 🟡 teilweise/Fallback · ❌ nicht umgesetzt
 | Escaping/Sicherheit | `< > & "` müssen entitisiert werden | beliebige Nutzereingabe | ✅ | volles Escaping + Attribut-Allowlist (Audit M-1); NUL-Filter |
 | Syntaxbewusstes Splitting | 4096/32768-Limits (Eingaben bis 64000 sinnvoll verteilt) | lange Antworten | ✅ | keine zerrissenen Tags/Formeln/Fences an Chunk-Grenzen; ```-Blöcke behalten Sprache je Chunk, **/~~/<u> werden balanciert; Leerzeilen bleiben erhalten (v2.11.0, Audit B-1); Limits in UTF-16-Units gemessen, ungeschlossene Fences laufen bis EOF und werden geschlossen geteilt (v2.11.1) |
 
-## 4. Redirect-URLs (v2.7.0)
+## 4. Redirect-URLs & reine URLs (v2.7.0, Gemini-Bereinigung v2.15.0)
 
 Such-KIs und Plattformen legen externe Ziele hinter Tracking-/Redirect-Adressen.
-`unwrap_redirect_url()` entpackt sie auf die Ziel-URL:
+`unwrap_redirect_url()` entpackt sie auf die Ziel-URL; `clean_url()` (seit
+v2.15.0) reduziert jede URL darüber hinaus auf ihre **reine** Form und
+`clean_gemini_links()` wendet die Bereinigung auf ganzen Markdown-Text an —
+die Konverter tun das automatisch (`_normalize_links`).
 
 | Dienst | Muster | Ziel-Parameter |
 |---|---|---|
@@ -113,6 +118,45 @@ Garantien:
 
 **Offline-Grenze:** Kurz-URL-Dienste (t.co, bit.ly, goo.gl, tinyurl, …)
 können ohne Netzwerkaufruf nicht aufgelöst werden und bleiben 1:1 stehen.
+
+### Tracking-Parameter & Gemini-Artefakte (v2.15.0)
+
+Gemini versieht zitierte Links mit Tracking-IDs und wickelt Zeitstempel-
+Zitate doppelt — aus einem Video-Zitat wird so ein ~3 200-Zeichen-Monster:
+
+```
+[[00:05]([https://www.youtube.com/watch?v=…&amp;ra=gemini&amp;xstg=<~1 500 Zeichen>&amp;t=5](https://www.youtube.com/watch?v=…&ra=gemini&xstg=<~1 500 Zeichen>&t=5))]
+```
+
+Der Formatter macht daraus `[00:05](https://www.youtube.com/watch?v=…&t=5)`:
+
+| Bereinigung | Vorher | Nachher |
+|---|---|---|
+| Doppelte Zitat-Hülle glätten | `[[00:05]([url](url))]` | `[00:05](url)` |
+| Duplizierten Link glätten | `[[url](w)](url](w))` | `[url](url)` (Wrapper `w` aufgelöst) |
+| HTML-Entität dekodieren | `?v=…&amp;t=5`, Prosa `&amp;` | `?v=…&t=5`, `&` |
+| Gemini-Tags entfernen | `&ra=gemini&xstg=<Token>` | — (entfällt) |
+| Weitere Tracking-Parameter | `utm_*`, `fbclid`, `gclid`, `dclid`, `gbraid`, `wbraid`, `msclkid`, `mc_cid`, `mc_eid`, `igshid` | — (entfallen) |
+
+Garantien und bewusste Grenzen:
+
+- **Funktionale Parameter bleiben** — `v`, `t`, `list`, `index`, `q`,
+  `search_query`, `id`, Seitenzahlen u. a. werden nie entfernt. Die
+  Query wird roh an `&` zerlegt: Reihenfolge, Percent-Kodierung und `+`
+  der übrigen Parameter bleiben byte-genau erhalten; ohne Treffer wird
+  die URL unverändert zurückgegeben (kein Re-Encoding).
+- **`ra` wird nur als `ra=gemini` entfernt.** Der Name ist generisch;
+  fremde Werte (`ra=partner`) bleiben stehen.
+- **Generische Namen wie `si` oder `ref` bleiben ebenfalls** — sie sind
+  zwar bei einzelnen Diensten Tracking, auf anderen Seiten aber
+  funktional. Lieber ein Parameter zu viel als ein kaputter Link.
+- Zeitstempel bleiben als klickbare Links erhalten (`[00:05](…&t=5)`) —
+  nur die Tags fallen weg, nicht die Zitate.
+- Unbekannte, anders deformierte Link-Gebilde werden **nicht** geraten
+  repariert oder gelöscht; geglättet werden nur die oben benannten,
+  belegten Artefakt-Formen (iterativ bis zum Fixpunkt).
+- Code (Fences/Inline) bleibt wie überall 1:1 geschützt — Tracking-Tokens
+  in Codebeispielen überleben absichtlich.
 
 ## 5. LaTeX-Normalisierung (v2.10.0)
 
