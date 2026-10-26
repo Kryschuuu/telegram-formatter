@@ -6,6 +6,34 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Syntax-Gate `scripts/check_syntax.py`** (Standardbibliothek, ~0,1 s, läuft
+  in der CI **vor** jedem `pip install`): parst jede versionierte `*.py`,
+  meldet Dekoratoren auf Modulebene, deren Name im Modul nicht gebunden ist
+  (fängt `@pytestfixture()` statt `@pytest.fixture()`), sucht committete
+  Konfliktmarker (`<<<<<<<`, `|||||||`, `>>>>>>>`) und prüft Textdateien auf
+  gültiges UTF-8 ohne BOM. Anlass: PR #30 („actions/setup-python 7.0.0 →
+  7.1.0“) scheiterte nicht an der Version, sondern an einem handgelösten
+  Merge — `@pytest.fixture()` wurde zu `@pytestfixture()` (`NameError`) und
+  `def test_…():` zu `def test_…:` (`SyntaxError`). Beides fiel erst nach dem
+  Installieren aller Abhängigkeiten auf, und das CI-Log zeigte auf die
+  Testdatei statt auf die Ursache. Neue Vertragstests:
+  `tests/test_syntax_gate.py` (16 Tests, inkl. der beiden historischen
+  Schäden als Regression).
+- CI-Schärfung: das Gate läuft in beiden Jobs (`code-quality` und
+  `bot-gate`); `ruff` prüft zusätzlich `scripts/` und `bots/`.
+
+### Geändert
+
+- `actions/setup-python` von 7.0.0 auf 7.1.0 (`6d4fd22b…`, Dependabot #30) —
+  übernommen, nachdem die Dependabot-Branche durch den Merge-Schaden
+  unbrauchbar war.
+- `CONTRIBUTING.md`: neuer Abschnitt „Merge-Konflikte“ — Konflikte werden
+  durch vollständiges Übernehmen einer Seite gelöst (`git checkout
+  --ours/--theirs`), nie durch Abtippen; das Syntax-Gate steht in der
+  Kommando-Tabelle und im PR-Template.
+
 ## [2.15.1] - 2026-10-26
 
 Patch-Release: **Behebung des Klammer-Sturm-Follow-ups aus v2.15.0 (lineare
