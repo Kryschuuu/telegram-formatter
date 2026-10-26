@@ -97,7 +97,13 @@ Parameter ein. `utils.py` importiert weder `flask` noch `requests` noch
      Geminis `ra`/`xstg` entfernt) und Geminis doppelte/duplizierte
      Zitat-Hüllen werden bis zum Fixpunkt geglättet — nur reine URLs
      erreichen die Payloads. Code und Formeln sind dabei über
-     Platzhalter geschützt.
+     Platzhalter geschützt. Seit v2.15.1 nutzen `markdown_to_html`,
+     `markdown_to_rich_markdown` und `preview._render_inline` für die
+     abschließende Link-Ersetzung dasselbe längenbeschränkte Muster
+     `_LINK_RE` (`_LINK_LABEL_MAX_CHARS = 256`, einzeilig, `[` im Label
+     erlaubt) — das garantiert lineare Laufzeit O(n) auch bei
+     Klammer-Stürmen bis `MAX_INPUT_CHARS` (analog zu `_FENCE_BLOCK_RE`
+     seit v2.13.0).
 3. **Versand** (`telegram_formatter/sender.py::send_message`): wählt
    `sendRichMessage` bzw. `sendMessage` anhand von `message.kind`.
 

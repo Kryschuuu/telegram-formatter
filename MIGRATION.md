@@ -418,3 +418,23 @@ pytest tests/test_utils.py -k "CleanUrl or Gemini"
 python -c "from telegram_formatter import clean_url; print(clean_url('https://www.youtube.com/watch?v=abc&ra=gemini&xstg=TOKEN&t=5'))"
 # -> https://www.youtube.com/watch?v=abc&t=5
 ```
+
+---
+
+## Upgrade auf 2.15.1 — Lineare Link-Konvertierung & Vorschau-Härtung (2026-10)
+
+**Keine Aktion nötig, keine API-Brüche.** v2.15.1 löst das im v2.15.0-Review
+(`peer-review/2026-10_GEMINI-LINK-CLEANUP.md`, Abschnitt 5) dokumentierte
+Follow-up (quadratisches Backtracking in der Link-Konvertierung bei
+Klammer-Stürmen) sowie zwei verwandte Regex-Hotspots in der Tabellen-Erkennung.
+
+| Bereich | Alt (2.15.0) | Neu (2.15.1) |
+|---|---|---|
+| Link-Muster in `markdown_to_html` / `markdown_to_rich_markdown` / `preview` | drei getrennte Muster; `[^\]]+` unbeschränkt und mehrzeilig | gemeinsames vorkompiliertes `_LINK_RE = r"\[([^\]\n]{1,256})\]\((https?://[^)\s\[\]]+)\)"` (`_LINK_LABEL_MAX_CHARS = 256`) |
+| Klammer-Sturm `"[" * 50_000` | ~10,2 s in HTML-/Rich-Konverter, ~15,5 s in der Vorschau (O(n²)) | ~0,12 s in beiden Konvertern, ~0,10 s in der Vorschau (O(n), > 80× schneller) |
+| `[` im Link-Label (`[Intervall [0, 1)](url)`) | erlaubt | weiterhin erlaubt (bis 256 Zeichen, einzeilig) |
+| Verwaiste `[` vor Umbruch/Überschrift/Tabelle | konnte nachfolgende Zeilen bis zum nächsten Link verschlucken | `\n` im Label ausgeschlossen — Überschriften und Pipe-Tabellen bleiben intakt |
+| Tabellen-Erkennung in `preview._TABLE_RE` & `utils._tables_to_lines` | optionales `\|?` im Kopf bzw. gieriges `^.*\|` (~6,6 s bei 50k Fließtext) | Pflicht-`\|` im Tabellenkopf bzw. `_TABLE_FALLBACK_RE` (`^[^\n|]*\|.*$`, < 1 ms) |
+| `docker-compose.standalone.yml` Image-Tag | `telegram-formatter:2.15.0` | `telegram-formatter:2.15.1` |
+| Version | 2.15.0 | 2.15.1 |
+

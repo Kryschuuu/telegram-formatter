@@ -6,6 +6,94 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 
 ## [Unreleased]
 
+## [2.15.1] - 2026-10-26
+
+Patch-Release: **Behebung des Klammer-Sturm-Follow-ups aus v2.15.0 (lineare
+Laufzeit O(n) in der Link-Konvertierung und Vorschau)** sowie Bereinigung von
+Merge-Artefakten und totem Code in `preview.py`.
+
+### Security
+
+- **ReDoS-Härtung der Link-Konvertierung (`telegram_formatter/utils.py`,
+  `telegram_formatter/preview.py`):** Löst das in `v2.15.0` und
+  [`peer-review/2026-10_GEMINI-LINK-CLEANUP.md`](peer-review/2026-10_GEMINI-LINK-CLEANUP.md)
+  dokumentierte Follow-up. In `markdown_to_html` und
+  `markdown_to_rich_markdown` stand `r"\[([^\]]+)\]\((https?://[^)\s]+)\)"`,
+  in `preview.py` `r"\[([^\]\n]*)\]\((https?://[^)\s]+)\)"`: ohne
+  schließendes `]` im Text scannte jede `[`-Position bis zum Textende
+  (O(n²), gemessen ~10,2 s bei `"[" * 50_000` und ~41 s bei
+  `MAX_INPUT_CHARS = 100 000`; in `preview.render_rich_markdown` ~15,5 s).
+  Alle drei Stellen teilen jetzt dasselbe vorkompilierte Muster
+  `_LINK_RE = re.compile(r"\[([^\]\n]{1,256})\]\((https?://[^)\s\[\]]+)\)")`
+  (`_LINK_LABEL_MAX_CHARS = 256`, analog zu `_FENCE_BLOCK_RE` aus v2.13.0):
+  - **O(n) statt O(n²):** `"[" * 50_000` läuft in ~0,12 s durch
+    `markdown_to_html`/`markdown_to_rich_markdown` und in ~0,10 s durch
+    `render_rich_markdown` (> 80× bzw. > 150× schneller; bei 100 000
+    Klammern ~0,24 s statt ~41 s).
+  - **Ziel-Härtung (`[^)\s\[\]]+`):** Wiederholte ungeschlossene Link-Ziele
+    (`"[a](https://x" * 5_000`) stoppen am nächsten `[` statt über
+    Folgelinks hinweg bis zum Textende zu scannen (~0,04 s statt > 3 s).
+  - **`[` im Linktext bleibt erlaubt:** Mathematische und technische
+    Labels wie `[Intervall [0, 1)](https://example.com)` funktionieren
+    unverändert auf beiden Konverterpfaden und in der Vorschau.
+  - **Einzeilige Labels (`[^\]\n]`):** Eine verwaiste `[` in einem früheren
+    Absatz verschluckt keine nachfolgenden Überschriften oder Pipe-Tabellen
+    mehr in einen späteren Link.
+- **Lineare Tabellen-Regexes in Vorschau & Fallback:**
+  - `preview._TABLE_RE`: Das spaltentrennende `\|` in `head`
+    (`(?P<head>\|?[^\n|]+\|[^\n]*)\n`) ist nun Pflicht (wie in `sep`). Vorher
+    ließ das optionale `\|?` die Gruppen `[^\n|]+` und `[^\n]*` auf jeder
+    langen Zeile ohne Pipe an allen Teilungspunkten gegeneinander
+    backtracken (~6,65 s bei 50 000 Zeichen Fließtext → jetzt < 0,001 s).
+  - `utils._tables_to_lines`: Nutzt das vorkompilierte
+    `_TABLE_FALLBACK_RE = re.compile(r"(?m)(^[^\n|]*\|.*$\n?){2,}")` statt
+    eines gierigen `^.*\|.*$`, das bei einer Einzelzeile voller `|` über
+    alle Pipe-Positionen quadratisch backtrackte (~8 s bei 50 000 `|` →
+    jetzt ~0,02 s).
+
+### Fixed
+
+- **Merge-Artefakte aus `38ed826` behoben:**
+  - `tests/test_public_demo_chat.py`: `@pytestfixture()` → `@pytest.fixture()`
+    (behob `NameError` beim Test-Sammeln und `ruff` `F821`/`F401`).
+  - `tests/test_split_64000.py`: Fehlende Parameterklammer
+    `def test_rich_64000_many_chunks_are_all_rich():` ergänzt (`SyntaxError`),
+    Import-Sortierung (`ruff` `I001`) und Docstring-Tippfehler korrigiert.
+  - `README.md`: Doppelt stehengelassenes Zeilenfragment
+    `ON.md](MIGRATION.md).` am Dateiende entfernt und den Docker-Compose-Aufruf
+    in Abschnitt Deployment auf `docker compose -f docker-compose.standalone.yml`
+    vereinheitlicht.
+
+### Changed
+
+- Version `2.15.0` → **`2.15.1`** (`telegram_formatter/__init__.py`,
+  `docker-compose.standalone.yml`, `Dockerfile`, `README.md`, `MIGRATION.md`,
+  `docs/API.md`, `docs/DEPLOYMENT.md`, `docs/DOCKER.md`).
+- **Code-Bereinigung in `telegram_formatter/preview.py`:** Ungenutzte
+  Definitionen (`_TELEGRAM_SMILEY`, `_ULI_RE`, `_INLINE_ORDER`) entfernt,
+  `_LINK_RE` aus `telegram_formatter.utils` importiert und alle in
+  `_render_inline` verwendeten Inline-Regexes (`_DISPLAY_MATH_RE`,
+  `_INLINE_MATH_RE`, `_UNDERLINE_RE`, `_BOLD_RE`, `_ITALIC_STAR_RE`,
+  `_ITALIC_US_RE`, `_STRIKE_RE`) auf Modulebene vorkompiliert.
+
+### Tests
+
+- **24 neue Tests** (774 gesamt, vorher 750):
+  - `tests/test_utils.py::TestLinkRegexIsNotQuadratic` (+17): lineare
+    Skalierung (8k vs. 16k `[`), 50k- und 100k-Budgets für HTML- und
+    Rich-Konverter sowie `build_messages`, ungeschlossene Link-Ziele,
+    Pipe-Sturm im Tabellen-Fallback, gemeinsames `_LINK_RE`-Muster zwischen
+    `utils` und `preview`, parametrisierte Tests für `[` im Link-Label
+    (inkl. Formatierung und Gemini-Tracking-Bereinigung), Schutz gegen
+    zeilenübergreifendes Verschlucken von Überschriften/Tabellen sowie
+    exakte Prüfung an der 256-Zeichen-Grenze (`_LINK_LABEL_MAX_CHARS`).
+  - `tests/test_preview.py::TestPreviewPerformanceAndLinkParity` (+5):
+    gemeinsames `_LINK_RE`-Objekt, 50k-Klammer-Sturm in Regular- und
+    Rich-Vorschau, 50k-Fließtext ohne Pipes (`_TABLE_RE`), `[` im
+    Link-Label und verwaiste `[` auf der Vorzeile.
+  - `tests/test_app.py` (+2): End-to-End `POST /api/convert` für `"[" * 50_000`
+    und `[Intervall [0, 1)](https://example.com)`.
+
 ## [2.15.0] - 2026-10-25
 
 Minor-Release: **Gemini-Link-Bereinigung — nur noch reine URLs.** Gemini
@@ -132,12 +220,22 @@ von 5 007 auf 452 Zeichen; derselbe Text in voller Länge passt statt in
 - **Kein Raten bei unbekannten Deformationen:** Geglättet werden nur die
   belegten Artefakt-Formen; verwaiste `](url)`-Fragmente fremder Herkunft
   werden nicht gelöscht (kein stiller Textverlust).
-- **Follow-up (nicht in diesem Release):** Ein älterer, von dieser
+- **Follow-up (in v2.15.1 behoben):** Ein älterer, von dieser
   Änderung unberührter Befund wurde beim Messen sichtbar — 50 000
-  eckige Klammern kosten die Konverter ~10 s (vorher wie nachher
-  identisch; die neue Stufe selbst braucht 0,003 s). Ursache ist das
+  eckige Klammern kosteten die Konverter ~10 s (vorher wie nachher
+  identisch; die neue Stufe selbst braucht 0,003 s). Ursache war das
   unbeschränkte `[^\]]+` in den Link-Schritten von HTML-/Rich-Pfad;
-  Fundstelle und Reproduktion stehen im Peer-Review als Follow-up.
+  in **v2.15.1** über das gemeinsame längenbeschränkte Muster `_LINK_RE`
+  (`_LINK_LABEL_MAX_CHARS = 256`) behoben.
+- **Code-Review v2.15.0 (`peer-review/2026-09_CODE-REVIEW-V2.15.0.md`,
+  Befunde F1–F8 + Solo-Compose):** F1 `botkit` IPv4-mapped IPv6 und
+  Terado/6to4-Tunnel-Prüfung, F2 atomares `save_registry` mit `fsync`,
+  F3 `retry_after` auf `[1, 300]` gekappt, F4 `app.py` Env-Parser-Helfer
+  konsolidiert, F5 CLI-Exit-Codes `EX_DATAERR (65)` vs. `EX_TEMPFAIL (75)`
+  getrennt, F6/F7 Dev-Pins (`ruff==0.16.9`, `bandit==1.9.4`) und
+  Security-Header auf `/healthz`, F8 einzelnes Versions-Gate in
+  `test_public_demo_chat.py`, sowie Umbenennung `docker-compose.yml` →
+  `docker-compose.standalone.yml`.
 
 ## [2.14.1] - 2026-09-28
 

@@ -53,7 +53,7 @@ Billig (kein Template), nie ratenlimitiert, ohne Konfigurationsdetails:
 
 ```bash
 curl -k https://192.168.0.10/healthz
-# {"status":"ok","version":"2.15.0"}
+# {"status":"ok","version":"2.15.1"}
 ```
 
 ## POST /api/convert
@@ -87,8 +87,12 @@ Links in der Eingabe werden vor der Konvertierung bereinigt: Redirect-/
 Wrapper-Adressen werden auf ihr Ziel entpackt (seit v2.7.0), und seit
 v2.15.0 werden Geminis Tracking-Tags (`ra=gemini`, `xstg=…`) samt
 doppelter Zitat-Hüllen entfernt — in den Payloads (und damit in der
-Vorschau) stehen nur reine URLs. Regelwerk:
-[FORMATTING.md §4](FORMATTING.md).
+Vorschau) stehen nur reine URLs. Seit v2.15.1 nutzen beide Konverterpfade
+und die Vorschau ein gemeinsames, längenbeschränktes Link-Muster
+(`_LINK_RE`, max. 256 Zeichen Label, einzeilig), sodass auch pathologische
+Eingaben voller `[` (bis `MAX_INPUT_CHARS = 100 000`) in linearer Zeit
+verarbeitet werden und offene `[` im Linktext (z. B. `[Intervall [0, 1)](url)`)
+erhalten bleiben. Regelwerk: [FORMATTING.md §4](FORMATTING.md).
 
 ### Feld `preview` (seit v2.14.0)
 
@@ -330,3 +334,19 @@ curl -k -X POST https://192.168.0.10/api/byob/close \
 ```
 
 Fehler: `401` (Zugangsdaten ungültig), `400` (Handle-Format), `404` (BYOB aus).
+
+## Python-Bibliotheks-API (`telegram_formatter`)
+
+Alle öffentlichen Symbole sind direkt auf Paketebene re-exportiert
+(`telegram_formatter.__all__`):
+
+| Symbol | Beschreibung |
+|---|---|
+| `build_messages(text, chat_id)` | Erzeugt sendefertige `list[TelegramMessage]` (`kind="regular"` oder `"rich"`), inkl. Link-/Gemini-Bereinigung und syntaxbewusstem Chunking. |
+| `send_message(msg, bot_token)` | Sendet eine `TelegramMessage` über die Telegram-Bot-API (`SendError` bei HTTP-/API-Fehlern). |
+| `clean_url(url)` | Entpackt bekannte Redirect-URLs und entfernt Tracking-Parameter (`ra=gemini`, `xstg`, `utm_*`, `fbclid`, `gclid`, `si`, …). |
+| `clean_gemini_links(text)` | Bereinigt Gemini-/LLM-Link-Artefakte und Tracking-URLs im Markdown-Text ohne Telegram-Konvertierung (Codeblöcke bleiben geschützt). |
+| `TelegramMessage` | Unveränderliches Nachrichtenobjekt (`kind`, `payload`, `text`). |
+| `SendError` | Ausnahmetyp für fehlgeschlagene Telegram-API-Aufrufe. |
+| `__version__` | Aktuelle Paketversion (`"2.15.1"`). |
+

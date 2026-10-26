@@ -5,7 +5,7 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.15.0-blue)
+![Version](https://img.shields.io/badge/version-2.15.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
@@ -504,8 +504,8 @@ Zwei produktionsreife Wege — beide mit TLS und denselben Sicherheitsgrenzen:
 
 ```bash
 cp .env.example .env   # Pflichtwerte eintragen (Token, Chat-ID)
-docker compose up --build -d
-curl -k https://192.168.0.10/healthz   # {"status":"ok","version":"2.15.0"}
+docker compose -f docker-compose.standalone.yml up --build -d
+curl -k https://192.168.0.10/healthz   # {"status":"ok","version":"2.15.1"}
 ```
 
 Caddy terminiert TLS automatisch (interne CA, kein Certbot nötig) und lässt
@@ -565,7 +565,6 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.15.0** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.15.1** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).
-ON.md](MIGRATION.md).
