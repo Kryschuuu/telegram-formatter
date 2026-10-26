@@ -385,3 +385,36 @@ pytest tests/test_deployment.py
 Werte-Aufzählungen stehen in `tests/test_deployment.py`
 (`KNOWN_SERVICE_FIELDS`, `ALLOWED_*`). Ein Feld dort zu ergänzen, das die
 Render-Spec nicht kennt, ist die Art von Änderung, die dort verhindert wird.
+
+## 16. Nachzug: v2.15.0 — Gemini-Link-Bereinigung (reine URLs)
+
+**Keine Aktion nötig, keine API-Brüche.** Die Bereinigung läuft automatisch
+in beiden Konvertierungspfaden (Web-UI, `/api/convert`, `/api/send`,
+BYOB, CLI). Wer bisher Gemini-Texte vor dem Einfügen von Hand geputzt hat,
+kann damit aufhören.
+
+| Bereich | Alt (≤ 2.14.1) | Neu (2.15.0) |
+|---|---|---|
+| Gemini-Zitat `[[00:05]([u&amp;…](u&…))]` | Linkziel inkl. `&ra=gemini&xstg=<~1 500 Zeichen>` in der Payload | `[00:05](…&t=5)` — reine URL, Zeitstempel bleibt Link |
+| Duplizierte Link-Zeile `[[u](w)](u](w))` | sichtbarer Anhang `(u](u))` in der Nachricht | ein Link auf die reine URL |
+| `[text](…&amp;t=7)` | HTML: `href="…&amp;amp;t=7"` (`t` verloren); Rich: `&amp;` im Ziel | `&t=7` auf beiden Pfaden |
+| Tracking-Parameter allgemein | `utm_*`, `fbclid`, `gclid` u. a. blieben erhalten | werden entfernt; funktionale Parameter (`v`, `t`, `q`, …) byte-genau erhalten |
+| Python-API | `build_messages`, `send_message`, … | zusätzlich `clean_url(url)` und `clean_gemini_links(text)` (Paket-Root + `utils`) |
+| Version | 2.14.1 | 2.15.0 |
+
+**Worauf sich Bestandstexte verlassen können:** Normale Links, Such-URLs
+(`google.com/search?q=katze`) und URLs in Code bleiben unverändert;
+`ra` wird nur als `ra=gemini` entfernt, generische Parameter wie `si`/`ref`
+gar nicht. Einzig sichtbare Verhaltensänderung für Nicht-Gemini-Texte:
+`&amp;` in Prosa wird jetzt als `&` zugestellt (statt wörtlich „&amp;“)
+und Tracking-Parameter der obigen Liste fehlen in den Payloads. Regelwerk
+mit Garantien/Grenzen: `docs/FORMATTING.md` §4; Review:
+`peer-review/2026-10_GEMINI-LINK-CLEANUP.md`.
+
+Prüfen lässt sich das lokal, ohne Deploy:
+
+```bash
+pytest tests/test_utils.py -k "CleanUrl or Gemini"
+python -c "from telegram_formatter import clean_url; print(clean_url('https://www.youtube.com/watch?v=abc&ra=gemini&xstg=TOKEN&t=5'))"
+# -> https://www.youtube.com/watch?v=abc&t=5
+```

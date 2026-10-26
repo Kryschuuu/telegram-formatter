@@ -20,7 +20,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 RENDER_YAML = REPO_ROOT / "render.yaml"
 
 
-@pytest.fixture()
+@pytestfixture()
 def client(monkeypatch):
     """Isolierte App: Modulglobals zurückgesetzt, Limits aus, Rate-Buckets leer."""
     monkeypatch.setattr(app_module, "BOT_TOKEN", "")
@@ -37,7 +37,7 @@ def client(monkeypatch):
     app_module._RATE_HITS.clear()
 
 
-@pytest.fixture()
+@pytestfixture()
 def public_demo_client(monkeypatch):
     """Demo-Instanz: geteilter Bot + gepinnter Chat, Browser-Versand an."""
     monkeypatch.setattr(app_module, "BOT_TOKEN", "123456:secretsecretsecretsecretsecretsec")

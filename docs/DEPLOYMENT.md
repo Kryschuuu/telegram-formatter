@@ -292,7 +292,7 @@ PY
 # Build und Start exakt wie in render.yaml, in einem frischen venv
 python3 -m venv /tmp/sim && /tmp/sim/bin/pip install -q -r requirements.txt
 PORT=8899 /tmp/sim/bin/gunicorn "telegram_formatter.app:app" --bind 0.0.0.0:8899 --threads 8 &
-curl -s http://127.0.0.1:8899/healthz          # -> {"status":"ok","version":"2.14.1"}
+curl -s http://127.0.0.1:8899/healthz          # -> {"status":"ok","version":"2.15.0"}
 
 # Build-Selbsttest
 python scripts/check_build.py

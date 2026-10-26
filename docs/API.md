@@ -53,7 +53,7 @@ Billig (kein Template), nie ratenlimitiert, ohne Konfigurationsdetails:
 
 ```bash
 curl -k https://192.168.0.10/healthz
-# {"status":"ok","version":"2.14.1"}
+# {"status":"ok","version":"2.15.0"}
 ```
 
 ## POST /api/convert
@@ -82,6 +82,13 @@ curl -k -X POST https://192.168.0.10/api/convert \
 `regular` (→ `sendMessage` + `parse_mode="HTML"`, ≤ 4096 Zeichen). Lange
 Eingaben kommen als **mehrere** Nachrichten zurück (Aufteilung an Absatz-,
 Zeilen- und Wortgrenzen, Formatierungen bleiben je Chunk wohlgeformt).
+
+Links in der Eingabe werden vor der Konvertierung bereinigt: Redirect-/
+Wrapper-Adressen werden auf ihr Ziel entpackt (seit v2.7.0), und seit
+v2.15.0 werden Geminis Tracking-Tags (`ra=gemini`, `xstg=…`) samt
+doppelter Zitat-Hüllen entfernt — in den Payloads (und damit in der
+Vorschau) stehen nur reine URLs. Regelwerk:
+[FORMATTING.md §4](FORMATTING.md).
 
 ### Feld `preview` (seit v2.14.0)
 

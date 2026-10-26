@@ -136,6 +136,28 @@ class TestRegularPathParity:
         html = html_of("[T](https://t.me/x)")
         assert 'href="https://t.me/x"' in html
 
+    def test_gemini_citation_preview_shows_pure_url(self):
+        """v2.15.0: Die Vorschau zeigt die gereinigte Payload — Gemini-
+        Tracking (`ra`/`xstg`) und die doppelte Link-Hülle sind weg,
+        Zeitstempel und `t`-Parameter bleiben (Regular-Pfad)."""
+        xstg = "CAMSiA0VhArM" + "A" * 200
+        raw = f"https://www.youtube.com/watch?v=72P-zstEqps&ra=gemini&xstg={xstg}&t=5"
+        amp = raw.replace("&", "&amp;")
+        html = html_of(f"Fußbad [[00:05]([{amp}]({raw}))]")
+        assert 'href="https://www.youtube.com/watch?v=72P-zstEqps&amp;t=5"' in html
+        assert ">00:05</a>" in html
+        assert "xstg" not in html and "ra=" not in html
+
+    def test_gemini_citation_preview_rich_path(self):
+        """Wie oben, aber Rich-Pfad (Formel im Text erzwingt ihn) —
+        die Vorschau rendert denselben gereinigten Link."""
+        xstg = "CAMSiA0VhArM" + "A" * 200
+        raw = f"https://www.youtube.com/watch?v=72P-zstEqps&ra=gemini&xstg={xstg}&t=5"
+        amp = raw.replace("&", "&amp;")
+        html = html_of(f"$x^2$ [[00:05]([{amp}]({raw}))]")
+        assert 'href="https://www.youtube.com/watch?v=72P-zstEqps&amp;t=5"' in html
+        assert "xstg" not in html and "ra=" not in html
+
 
 # --------------------------------------------------------------------------- #
 # Rich-Pfad
