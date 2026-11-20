@@ -6,8 +6,11 @@ Alle relevanten Änderungen an diesem Projekt, formatiert nach
 
 ## [Unreleased]
 
+## [2.16.0] - 2026-11-20
+
 ### Hinzugefügt
 
+- Web-Editor: 3, 6 oder 9 Hashtags aus Themenwörtern des Textes anhängen.
 - **Syntax-Gate `scripts/check_syntax.py`** (Standardbibliothek, ~0,1 s, läuft
   in der CI **vor** jedem `pip install`): parst jede versionierte `*.py`,
   meldet Dekoratoren auf Modulebene, deren Name im Modul nicht gebunden ist

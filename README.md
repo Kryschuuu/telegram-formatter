@@ -5,12 +5,16 @@ Telegram-Nachrichten — mit korrektem LaTeX-Rendering, Telegram-Formatierung
 (Fett, Kursiv, Unterstrichen, Code, …) und automatischer Aufteilung langer
 Nachrichten.
 
-![Version](https://img.shields.io/badge/version-2.15.1-blue)
+![Version](https://img.shields.io/badge/version-2.16.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license/GPLv3-lightgrey)
 
 ## Funktionsübersicht
 
+- **Hashtags im Web-Editor** — Text einfügen und **3 Hashtags**, **6 Hashtags** oder
+  **9 Hashtags** wählen. Die Themenwörter stehen nach einer Leerzeile am Ende.
+  Ein weiterer Klick ändert die Anzahl, solange der Text nicht manuell bearbeitet wurde.
+  Fehlen geeignete Wörter, bleibt der Text unverändert.
 - **LaTeX-Konvertierung** — Unterstützt mehrere Delimiter-Syntaxe:
   - Klassisch: `$…$` (Inline) und `$$…$$` (Display)
   - DeepSeek/Gemini: `\(…\)` und `\[…\]` — werden automatisch in die
@@ -511,7 +515,7 @@ Zwei produktionsreife Wege — beide mit TLS und denselben Sicherheitsgrenzen:
 ```bash
 cp .env.example .env   # Pflichtwerte eintragen (Token, Chat-ID)
 docker compose -f docker-compose.standalone.yml up --build -d
-curl -k https://192.168.0.10/healthz   # {"status":"ok","version":"2.15.1"}
+curl -k https://192.168.0.10/healthz   # {"status":"ok","version":"2.16.0"}
 ```
 
 Caddy terminiert TLS automatisch (interne CA, kein Certbot nötig) und lässt
@@ -571,6 +575,6 @@ zusätzlich als Render-Blueprint in [`render.yaml`](render.yaml) deklariert und
 ## Versionierung
 
 Das Projekt folgt [Semantic Versioning](https://semver.org/)
-(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.15.1** — Änderungen je Version im
+(`MAJOR.MINOR.PATCH`). Aktuelle Version: **2.16.0** — Änderungen je Version im
 [CHANGELOG.md](CHANGELOG.md); die Struktur-Reorganisation (Importpfade/
 CLI-Aufrufe) aus 2.0.0 ist dokumentiert in [MIGRATION.md](MIGRATION.md).

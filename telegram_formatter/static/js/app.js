@@ -395,6 +395,8 @@
     // Setzt die komplette Arbeitsflaeche zurueck: Eingabe, Vorschau,
     // Payloads, Statusmeldung — und gibt den Fokus ans Eingabefeld zurueck.
     function resetAll() {
+        lastTagged = null;
+        hashtagStatus.textContent = "";
         clearTimeout(convertTimer);
         input.value = "";
         convertSeq += 1;
@@ -827,7 +829,58 @@
     // Dialog müssen den neuen Versandweg spiegeln.
     document.addEventListener("tf:botsessionchange", refreshSendPath);
 
+    // Nur Wörter aus dem Text verwenden; Häufigkeit und Überschriften gewichten.
+    var stopWords = new Set(("aber alle also auch auf aus bei das dem den der des die diese dieser dieses doch " +
+        "dort durch ein eine einem einen einer eines für hat haben hier ich ihr ihre ihrer ist kann man mit nach " +
+        "nicht noch nur oder ohne sehr sein sind sich sie über und uns unter vom von vor war was weil wenn werden " +
+        "wie wir wird zum zur sowie the and are but can for from had has have how into its not one our out she " +
+        "some than that their them then there these they this those was were what when which who will with you your " +
+        "avec dans des est les par pour que sur une con del las los para por que una").split(" "));
+
+    function topicTags(text, count) {
+        var topics = new Map();
+        var prose = text.normalize("NFC").replace(/```[\s\S]*?(?:```|$)|`[^`\n]+`|https?:\/\/[^\s)]+/gi, " ");
+        prose.split("\n").forEach(function (line) {
+            var weight = /^\s*#{1,6}\s/.test(line) ? 3 : 1;
+            (line.match(/[\p{L}][\p{L}\p{Nd}]*/gu) || []).forEach(function (word) {
+                var key = word.toLowerCase();
+                if ((word.length < 3 && !/^[A-Z]{2}$/.test(word)) || stopWords.has(key)) return;
+                if (!topics.has(key)) topics.set(key, {word: word, score: 0});
+                topics.get(key).score += weight;
+            });
+        });
+        return Array.from(topics.values()).sort(function (a, b) { return b.score - a.score; })
+            .slice(0, count).map(function (topic) { return "#" + topic.word; });
+    }
+
+    var hashtagStatus = document.getElementById("hashtagStatus");
+    var lastTagged = null;
+    var lastSource = "";
+    document.querySelectorAll("[data-hashtag-count]").forEach(function (button) {
+        button.addEventListener("click", function () {
+            var source = input.value === lastTagged ? lastSource : input.value;
+            var count = Number(button.dataset.hashtagCount);
+            var tags = topicTags(source, count);
+            if (tags.length < count) {
+                hashtagStatus.textContent = "Für " + count + " Hashtags fehlen unterschiedliche Themenwörter.";
+                return;
+            }
+            var separator = source.endsWith("\n\n") ? "" : source.endsWith("\n") ? "\n" : "\n\n";
+            var result = source + separator + tags.join(" ");
+            if (result.length > INPUT_LIMIT) {
+                hashtagStatus.textContent = "Mit Hashtags wäre die Eingabe zu lang.";
+                return;
+            }
+            input.value = result;
+            input.dispatchEvent(new Event("input", {bubbles: true}));
+            lastTagged = result;
+            lastSource = source;
+        });
+    });
+
     input.addEventListener("input", function () {
+        lastTagged = null;
+        hashtagStatus.textContent = "";
         // Kein clientseitiges Rendern mehr: die Vorschau wird aus der
         // Antwort von /api/convert befuellt (scheduleRefresh -> refreshPayloads).
         // Bis sie da ist, bleibt die letzte Vorschau stehen (gedimmt).

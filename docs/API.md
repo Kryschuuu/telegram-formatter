@@ -53,7 +53,7 @@ Billig (kein Template), nie ratenlimitiert, ohne Konfigurationsdetails:
 
 ```bash
 curl -k https://192.168.0.10/healthz
-# {"status":"ok","version":"2.15.1"}
+# {"status":"ok","version":"2.16.0"}
 ```
 
 ## POST /api/convert
@@ -348,5 +348,5 @@ Alle öffentlichen Symbole sind direkt auf Paketebene re-exportiert
 | `clean_gemini_links(text)` | Bereinigt Gemini-/LLM-Link-Artefakte und Tracking-URLs im Markdown-Text ohne Telegram-Konvertierung (Codeblöcke bleiben geschützt). |
 | `TelegramMessage` | Unveränderliches Nachrichtenobjekt (`kind`, `payload`, `text`). |
 | `SendError` | Ausnahmetyp für fehlgeschlagene Telegram-API-Aufrufe. |
-| `__version__` | Aktuelle Paketversion (`"2.15.1"`). |
+| `__version__` | Aktuelle Paketversion (`"2.16.0"`). |
 
