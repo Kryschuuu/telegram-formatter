@@ -478,6 +478,27 @@ async function main() {
         `send-calls=${calls.filter((c) => c.url.includes("api/send")).length}`);
 
 
+    const words = "Wärmepumpe Solarstrom Batteriespeicher Windkraft Geothermie Wasserkraft Fernwärme Netzausbau Klimaschutz";
+    for (const source of [words, ("und der die " + words + "\n").repeat(200)]) {
+        input.value = source;
+        for (const count of [3, 6, 9]) {
+            doc.querySelector(`[data-hashtag-count="${count}"]`).click();
+            const expected = words.split(" ").slice(0, count).map(word => "#" + word).join(" ");
+            check(`${count} Themen-Hashtags bei ${source.length} Zeichen`,
+                input.value === source + (source.endsWith("\n") ? "\n" : "\n\n") + expected);
+        }
+    }
+    const article = "The report from [London](https://example.org/tracking) covers glaciers.\n" +
+        "# Arctic warming\nGlaciers and warming";
+    input.value = article;
+    doc.querySelector('[data-hashtag-count="3"]').click();
+    check("Englische Überschrift und wiederkehrende Themen erhalten Vorrang",
+        input.value === article + "\n\n#warming #Arctic #glaciers");
+    input.value = "und Meer";
+    doc.querySelector('[data-hashtag-count="3"]').click();
+    check("Keine Füllwörter bei zu wenig Themen", input.value === "und Meer" &&
+        doc.getElementById("hashtagStatus").textContent.includes("fehlen"));
+
     /* Reset */
     doc.getElementById("resetBtn").click();
     check("Reset: Eingabe leer", input.value === "");

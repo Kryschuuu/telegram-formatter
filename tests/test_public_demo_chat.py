@@ -117,4 +117,4 @@ def test_version_matches_release():
     """Single Release-Gate: die Version muss mit dem Tag im Solo-Compose
     übereinstimmen (Vertragstest in test_deployment.py prüft die andere
     Richtung). Hartkodierte Versionen hier brechen bei jedem Bump."""
-    assert __version__ == "2.15.1"
+    assert __version__ == "2.16.0"

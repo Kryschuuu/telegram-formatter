@@ -252,6 +252,12 @@
             </h2>
             <textarea id="input" rows="16" class="tf-editor" spellcheck="false"
                       placeholder="**Fett**, *kursiv*, __unterstrichen__, `code` und $x^2 + y^2$ ..."></textarea>
+            <div class="tf-btn-row" role="group" aria-label="Hashtags hinzufügen">
+                {% for count in (3, 6, 9) %}
+                <button type="button" class="tf-btn tf-btn--ghost" data-hashtag-count="{{ count }}">{{ count }} Hashtags</button>
+                {% endfor %}
+            </div>
+            <span id="hashtagStatus" class="tf-editor-meta" role="status"></span>
             <div class="tf-card__foot">
                 <span id="charCount" class="tf-editor-meta" aria-live="off">0 Zeichen</span>
                 <p id="sendStatus" class="tf-send-status" role="status" aria-live="polite"></p>
